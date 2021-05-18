@@ -5,11 +5,9 @@ from collections import namedtuple
 
 import numpy as np
 
-from mozi.config import Config
-from mozi.utils import NetworkOutput
-
-Action = typing.NewType('Action', int)
-Player = typing.NewType('Player', int)
+from moozi import Action, Player, Node, ActionHistory
+from moozi.config import Config
+from moozi.utils import NetworkOutput
 
 KnownBounds = namedtuple('KnownBounds', ['min', 'max'])
 
@@ -28,52 +26,6 @@ class MinMaxStats(object):
             # We normalize only when we have set the maximum and minimum values.
             return (value - self.minimum) / (self.maximum - self.minimum)
         return value
-
-
-class Node(object):
-    def __init__(self, prior: float):
-        self.visit_count = 0
-        self.to_play = -1
-        self.prior = prior
-        self.value_sum = 0
-        self.children: typing.List[Node] = {}
-        self.hidden_state = None
-        self.reward = 0
-
-    def expanded(self) -> bool:
-        return len(self.children) > 0
-
-    @property
-    def value(self) -> float:
-        if self.visit_count == 0:
-            return 0
-        return self.value_sum / self.visit_count
-
-
-class ActionHistory(object):
-    """Simple history container used inside the search.
-
-    Only used to keep track of the actions executed.
-    """
-
-    def __init__(self, history: typing.List[Action], action_space_size: int):
-        self.history = list(history)
-        self.action_space_size = action_space_size
-
-    def clone(self):
-        return ActionHistory(self.history, self.action_space_size)
-
-    def add_action(self, action: Action):
-        self.history.append(action)
-
-    def last_action(self) -> Action:
-        return self.history[-1]
-
-    def action_space(self) -> typing.List[Action]:
-        return [Action(i) for i in range(self.action_space_size)]
-
-    def to_play(self) -> Player:
-        return Player()
 
 
 class Network(object):
@@ -153,8 +105,8 @@ def expand_node(
 def backpropagate(
     search_path: typing.List[Node],
     value: float,
-    discount: float,
     to_play: Player,
+    discount: float,
     min_max_stats: MinMaxStats
 ):
     for node in reversed(search_path):
@@ -183,32 +135,43 @@ def run_mcts(
     action_history: ActionHistory,
     network: Network
 ):
+    """
+    We need two things to keep track of MCTS search status:
+        - a game history that records all the actions have taken so far
+        - a search history that records all searched nodes
+    """
     min_max_stats = MinMaxStats()
 
     for _ in range(config.num_simulations):
-        history = action_history.clone()
-
+        action_history = action_history.clone()
         node = root
+        search_path = [node]
+
         while node.expanded():
-            action, child = node.select_child()
-            history.add_action(action)
-            node = child
+            action, node = select_child(config, node, min_max_stats)
+            action_history.add_action(action)
+            search_path.append(node)
 
-        add_exploration_noise(config, node)
-        action, child = select_child(config, node, min_max_stats)
-        network_output = network.recurrent_inference(node, action)
-        expand_node(node, history.to_play(), history.history, network_output)
-        backpropagate(history.history, network_output.value, config.discount,
-                      history.to_play(), min_max_stats)
-
-
-def main():
-    # node = Node(1)
-    # mcts = MonteCarloTreeSearch(config)
-    # print(mcts)
-    config = Config()
-    # select_child()
+        parent = search_path[-2]
+        network_output = network.recurrent_inference(
+            parent.hidden_state, action_history.last_action())
+        expand_node(node, action_history.to_play(),
+                    action_history.action_space(), network_output)
+        backpropagate(search_path, network_output.value,
+                      action_history.to_play(), config.discount, min_max_stats)
 
 
-if __name__ == '__main__':
-    main()
+class Game(object):
+    pass
+
+
+def play_game(config: Config, network: Network) -> Game:
+    Game()
+
+
+# def main():
+#     run_mcts(config)
+
+
+# if __name__ == '__main__':
+#     main()

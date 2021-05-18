@@ -8,7 +8,7 @@
             "name": "mcts.py",
             "type": "python",
             "request": "launch",
-            "program": "mozi/mcts.py",
+            "program": "moozi/mcts.py",
             "console": "integratedTerminal"
         },
         {

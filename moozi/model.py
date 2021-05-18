@@ -1,4 +1,6 @@
-from utils import NetworkOutput
+# from utils import NetworkOutput
+
+import haiku as hk
 
 
 class Model(hk.Module):

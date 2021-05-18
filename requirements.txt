@@ -1,0 +1,7 @@
+jax
+jaxlib
+optax
+dm-haiku
+tqdm
+trueskill
+rlax

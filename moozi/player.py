@@ -13,3 +13,11 @@ class Player(object):
 
     def __repr__(self):
         return f"Player<{self._val}>"
+
+    @property
+    def val(self):
+        return self._val
+
+# class Player(int):
+#     def __repr__(self):
+#         return f"Player<{int(self)}>"

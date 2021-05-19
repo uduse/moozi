@@ -1,21 +1,31 @@
 import typing
 import math
-from dataclasses import dataclass
 from collections import namedtuple
 
 import numpy as np
 
 from moozi import Action, Player, Node, ActionHistory
 from moozi.config import Config
-from moozi.utils import NetworkOutput
+from moozi.utils import NetworkOutput, Network
 
 KnownBounds = namedtuple('KnownBounds', ['min', 'max'])
 
 
 class MinMaxStats(object):
-    def __init__(self, known_bounds: typing.Optional[KnownBounds]):
+    """
+    This is used to compute the normalized Q value (\bar{Q}).
+
+    - A min_max_stats object is instantiated when a search starts.
+    - Updated by the backpropagation of each simulation.
+    - Affects the ordering of child values during PUCT selection.
+    """
+
+    def __init__(self, known_bounds: typing.Optional[KnownBounds] = None):
         self.maximum = known_bounds.max if known_bounds else float('-inf')
         self.minimum = known_bounds.min if known_bounds else float('inf')
+    # def __init__(self):
+    #     self.maximum = float('-inf')
+    #     self.minimum = float('inf')
 
     def update(self, value: float):
         self.maximum = max(self.maximum, value)
@@ -26,35 +36,6 @@ class MinMaxStats(object):
             # We normalize only when we have set the maximum and minimum values.
             return (value - self.minimum) / (self.maximum - self.minimum)
         return value
-
-
-class Network(object):
-
-    def initial_inference(self, image) -> NetworkOutput:
-        # representation + prediction function
-        return NetworkOutput(0, 0, {}, [])
-
-    def recurrent_inference(self, hidden_state, action) -> NetworkOutput:
-        # dynamics + prediction function
-        return NetworkOutput(0, 0, {}, [])
-
-    def get_weights(self):
-        # Returns the weights of this network.
-        return []
-
-    def training_steps(self) -> int:
-        # How many steps / batches the network has been trained for.
-        return 0
-
-
-def run_mcts(
-    config: Config,
-    root: Node,
-    action_history: ActionHistory,
-    network: Network
-):
-    for _ in range(config.num_simulations):
-        node = root
 
 
 def ucb_score(config: Config, parent: Node, child: Node, min_max_stats: MinMaxStats) -> float:
@@ -84,7 +65,6 @@ def select_child(
 
 
 def expand_node(
-    # config: Config,
     node: Node,
     to_play: Player,
     actions: typing.List[Action],
@@ -159,19 +139,3 @@ def run_mcts(
                     action_history.action_space(), network_output)
         backpropagate(search_path, network_output.value,
                       action_history.to_play(), config.discount, min_max_stats)
-
-
-class Game(object):
-    pass
-
-
-def play_game(config: Config, network: Network) -> Game:
-    Game()
-
-
-# def main():
-#     run_mcts(config)
-
-
-# if __name__ == '__main__':
-#     main()

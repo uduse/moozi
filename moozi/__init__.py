@@ -1,3 +1,4 @@
+from .config import Config
 from .player import Player
 from .action import Action
 from .action_history import ActionHistory

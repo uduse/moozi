@@ -61,7 +61,3 @@ class Network(object):
     def training_steps(self) -> int:
         # How many steps / batches the network has been trained for.
         return 0
-
-
-class Player(object):
-    pass

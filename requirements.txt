@@ -1,7 +1,11 @@
+absl-py
 jax
 jaxlib
 optax
 dm-haiku
+dm-acme
+dm-acme[reverb]
+dm-acme[launchpad]
 tqdm
 trueskill
 rlax

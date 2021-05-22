@@ -1,5 +1,7 @@
-
-Todo:
+Milestones:
+  A:
+    ☐ using a random policy, collect data in a simple OpenSpiel game catch, and train the representation + one-step prediction jointly (this process is called "initial inference" in the pseudocode)
+    
 
   MCTS Python Implementation:
     ☐ finish drafting python MCTS

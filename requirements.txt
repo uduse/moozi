@@ -1,11 +1,21 @@
+# packages that are easy to install 😂
 absl-py
 jax
-jaxlib
 optax
 dm-haiku
-dm-acme
-dm-acme[reverb]
-dm-acme[launchpad]
+dm-env
+pandas
 tqdm
 trueskill
 rlax
+nbconvert<6
+
+# jaxlib
+# tensorflow-gpu
+# dm-reverb
+# open-spiel
+# git+https://github.com/deepmind/acme.git
+# dm-acme
+# dm-acme[reverb]
+# dm-acme[envs]
+# dm-acme[launchpad]

@@ -158,4 +158,8 @@ cython_debug/
 # Local History for Visual Studio Code
 .history/
 
+################################################################
+# Other Personal Directories
+################################################################
 .Trash*/
+.jupyter/

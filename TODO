@@ -1,10 +1,16 @@
 Milestones:
-  A:
-    ☐ using a random policy, collect data in a simple OpenSpiel game catch, and train the representation + one-step prediction jointly (this process is called "initial inference" in the pseudocode)
+    ☐ using a random policy, collect data in a simple OpenSpiel game, and train the representation + one-step prediction jointly (this process is called "initial inference" in the pseudocode)
     
 
-  MCTS Python Implementation:
+MCTS:
+  Python:
     ☐ finish drafting python MCTS
     ☐ add python MCTS test
     ☐ add support to `known_bound` @low
+  C++:
+    ☐ set up a basic C++ PyBind santity check program
+
+MISC:
+  ☐ add batch dimension, similar to https://github.com/deepmind/acme/blob/a6b4162701542ed08b0b911ffac7c69fcb1bb3c7/acme/agents/jax/dqn/learning_lib.py#L120
+  ☐ add chex checking to sgd related code
 

@@ -1,3 +1,4 @@
+from . import loss
 from . import actor
 from . import learner
 from . import agent

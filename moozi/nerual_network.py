@@ -5,13 +5,20 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 
-from moozi import utils
+import moozi as mz
 
 
 class NeuralNetwork(typing.NamedTuple):
     init: typing.Callable
     initial_inference: typing.Callable
     recurrent_inference: typing.Callable
+
+
+class NeuralNetworkOutput(typing.NamedTuple):
+    value: float
+    reward: float
+    policy_logits: typing.Dict[mz.Action, float]
+    hidden_state: typing.List[float]
 
 
 class NeuralNetworkSpec(typing.NamedTuple):
@@ -71,7 +78,7 @@ class _NeuralNetworkHaiku(hk.Module):
         hidden_state = self.repr_net(image)
         reward = 0
         value, policy_logits = self.pred_net(hidden_state)
-        return utils.NetworkOutput(
+        return mz.utils.NetworkOutput(
             value=value,
             reward=reward,
             policy_logits=policy_logits,
@@ -81,7 +88,7 @@ class _NeuralNetworkHaiku(hk.Module):
     def recurrent_inference(self, hidden_state, action):
         hidden_state, reward = self.dyna_net(hidden_state, action)
         value, policy_logits = self.pred_net(hidden_state)
-        return utils.NetworkOutput(
+        return mz.utils.NetworkOutput(
             value=value,
             reward=reward,
             policy_logits=policy_logits,

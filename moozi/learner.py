@@ -2,9 +2,13 @@ import functools
 import typing
 
 import acme
-import jax
-import optax
+import acme.jax.utils
 import chex
+import jax
+import jax.numpy as jnp
+import optax
+
+import moozi as mz
 
 
 class TrainingState(typing.NamedTuple):
@@ -38,7 +42,7 @@ class MooZiLearner(acme.Learner):
 
         @jax.jit
         @chex.assert_max_traces(n=1)
-        def sgd_step(training_state: TrainingState, batch):
+        def _sgd_step_one_batch(training_state: TrainingState, batch):
             # key, new_key = jax.random.split(training_state.rng_key)  # curently not using the key
             new_key = training_state.rng_key  # curently not using the key
 
@@ -54,7 +58,12 @@ class MooZiLearner(acme.Learner):
             )
             return new_training_state, extra
 
-        self._sgd_step = sgd_step
+        def _postprocess_aux(extra: mz.loss.LossExtra):
+            return extra._replace(metrics=jax.tree_map(jnp.mean, extra.metrics))
+
+        self._sgd_step = acme.jax.utils.process_multiple_batches(
+            _sgd_step_one_batch, num_batches=1, postprocess_aux=_postprocess_aux
+        )
         self._data_iterator = acme.jax.utils.prefetch(data_iterator)
 
         key_params, key_state = jax.random.split(random_key, 2)

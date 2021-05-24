@@ -1,10 +1,12 @@
-from . import loss
+from .action import Action
+
+from . import utils
 from . import actor
 from . import learner
 from . import agent
 from . import nerual_network, nerual_network as nn  # alias
+from . import loss
 
-# from .action import Action
 # from .action_history import ActionHistory
 
 # from .config import Config

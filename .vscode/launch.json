@@ -5,6 +5,14 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "test_model_supervised.py",
+            "type": "python",
+            "request": "launch",
+            "program": "test_model_supervised.py",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
             "name": "mcts.py",
             "type": "python",
             "request": "launch",

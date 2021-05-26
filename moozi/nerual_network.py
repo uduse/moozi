@@ -29,12 +29,12 @@ class NeuralNetworkSpec(typing.NamedTuple):
 
 
 def get_network(spec: NeuralNetworkSpec):
-    nn_func = functools.partial(_NeuralNetworkHaiku, spec)
+    hk_module = functools.partial(_NeuralNetworkHaiku, spec)
     initial_inference = hk.without_apply_rng(
-        hk.transform(lambda image: nn_func().initial_inference(image))
+        hk.transform(lambda image: hk_module().initial_inference(image))
     )
     recurrent_inference = hk.without_apply_rng(
-        hk.transform(lambda h, a: nn_func().recurrent_inference(h, a))
+        hk.transform(lambda h, a: hk_module().recurrent_inference(h, a))
     )
 
     def init(random_key):
@@ -78,7 +78,7 @@ class _NeuralNetworkHaiku(hk.Module):
         hidden_state = self.repr_net(image)
         reward = 0
         value, policy_logits = self.pred_net(hidden_state)
-        return mz.utils.NetworkOutput(
+        return NeuralNetworkOutput(
             value=value,
             reward=reward,
             policy_logits=policy_logits,
@@ -88,7 +88,7 @@ class _NeuralNetworkHaiku(hk.Module):
     def recurrent_inference(self, hidden_state, action):
         hidden_state, reward = self.dyna_net(hidden_state, action)
         value, policy_logits = self.pred_net(hidden_state)
-        return mz.utils.NetworkOutput(
+        return NeuralNetworkOutput(
             value=value,
             reward=reward,
             policy_logits=policy_logits,

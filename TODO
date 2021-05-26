@@ -1,9 +1,12 @@
 Milestones:
-    ☐ using a random policy, collect data in a simple OpenSpiel game, and train the representation + one-step prediction jointly (this process is called "initial inference" in the pseudocode)
-      ☐ _observed_first set to True problem at https://github.com/deepmind/acme/blob/a6b4162701542ed08b0b911ffac7c69fcb1bb3c7/acme/environment_loops/open_spiel_environment_loop.py#L101
-      -> burn_in_length + sequence_length + 1
-      ☐ 
+  ☐ using a random policy, collect data in a simple OpenSpiel game, and train the representation + one-step prediction jointly (this process is called "initial inference" in the pseudocode)
+    ☐ _observed_first set to True problem at https://github.com/deepmind/acme/blob/a6b4162701542ed08b0b911ffac7c69fcb1bb3c7/acme/environment_loops/open_spiel_environment_loop.py#L101
+    -> burn_in_length + sequence_length + 1
+    ☐ 
 
+Replay Buffer:
+  ☐ episodic replay buffer for full-gradient
+  ☐ n-step replay buffer for semi-gradient
 
 MCTS:
   Python:

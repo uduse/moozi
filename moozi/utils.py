@@ -38,3 +38,17 @@ class ReplayBuffer(object):
 
     def __iter__(self):
         return iter(self._data)
+
+
+def print_traj_in_env(env):
+    timestep = env.reset()
+    while True:
+        print(env.environment.environment.get_state.observation_string(0))
+        actions = env.environment.get_state.legal_actions()
+        action = random.choice(actions)
+        print("a:", action, "\n")
+        timestep = env.step([action])
+        if timestep.last():
+            print(env.environment.environment.get_state.observation_string(0))
+            print("reward:", timestep.reward)
+            break

@@ -4,6 +4,9 @@ Milestones:
     -> burn_in_length + sequence_length + 1
     ☐ 
 
+Network:
+  ☐ target network and behavior network https://github.com/deepmind/acme/blob/926b17ad116578801a0fbbe73c4ddc276a28e23e/acme/agents/jax/dqn/learning_lib.py#L107
+
 Replay Buffer:
   ☐ episodic replay buffer for full-gradient
   ☐ n-step replay buffer for semi-gradient

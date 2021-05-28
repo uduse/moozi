@@ -1,6 +1,7 @@
 import functools
 import typing
 
+import chex
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -8,17 +9,19 @@ import jax.numpy as jnp
 import moozi as mz
 
 
-class NeuralNetwork(typing.NamedTuple):
-    init: typing.Callable
-    initial_inference: typing.Callable
-    recurrent_inference: typing.Callable
-
-
-class NeuralNetworkOutput(typing.NamedTuple):
+@chex.dataclass(frozen=True)
+class NeuralNetworkOutput:
     value: float
     reward: float
-    policy_logits: typing.Dict[mz.Action, float]
-    hidden_state: typing.List[float]
+    # policy_logits: typing.Dict[mz.Action, float]
+    policy_logits: chex.Array
+    hidden_state: chex.Array
+
+
+class NeuralNetwork(typing.NamedTuple):
+    init: typing.Callable
+    initial_inference: typing.Callable[..., NeuralNetworkOutput]
+    recurrent_inference: typing.Callable[..., NeuralNetworkOutput]
 
 
 class NeuralNetworkSpec(typing.NamedTuple):
@@ -29,6 +32,7 @@ class NeuralNetworkSpec(typing.NamedTuple):
 
 
 def get_network(spec: NeuralNetworkSpec):
+    # TODO: rename to build network
     hk_module = functools.partial(_NeuralNetworkHaiku, spec)
     initial_inference = hk.without_apply_rng(
         hk.transform(lambda image: hk_module().initial_inference(image))

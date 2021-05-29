@@ -19,20 +19,41 @@ class TrainingState(typing.NamedTuple):
 
 
 class LearnsNothingLearner(acme.Learner):
-    def __init__(self, *args, **kwargs):
-        pass
+    def __init__(self, params, *args, **kwargs):
+        self.params = params
 
     def step(self):
         pass
 
     def get_variables(self, names):
-        pass
+        return [self.params]
 
     def save(self):
-        pass
+        return self.params
 
     def restore(self, state):
-        pass
+        self.params = state
+
+
+class RandomNoiseLearner(acme.Learner):
+    def __init__(self, params, *args, **kwargs):
+        self.params = params
+        self.key = jax.random.PRNGKey(0)
+
+    def step(self):
+        self.key, new_key = jax.random.split(self.key)
+        self.params = jax.tree_map(
+            lambda x: x + jax.random.normal(new_key), self.params
+        )
+
+    def get_variables(self, names):
+        return [self.params]
+
+    def save(self):
+        return self.params
+
+    def restore(self, state):
+        self.params = state
 
 
 class MooZiLearner(acme.Learner):

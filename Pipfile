@@ -1,0 +1,21 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+absl-py = "*"
+jax = "*"
+optax = "*"
+dm-haiku = "*"
+dm-env = "*"
+pandas = "*"
+tqdm = "*"
+trueskill = "*"
+rlax = "*"
+nbconvert = "<6"
+
+[dev-packages]
+
+[requires]
+python_version = "3.8"

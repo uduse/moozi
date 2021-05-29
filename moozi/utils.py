@@ -1,3 +1,4 @@
+import acme.jax.variable_utils
 import typing
 import random
 

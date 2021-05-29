@@ -28,7 +28,13 @@ class NeuralNetworkSpec(typing.NamedTuple):
     dim_image: int
     dim_repr: int
     dim_action: int
-    # random_key: jax.random.PRNGKey
+    repr_net_sizes: tuple = (16, 16)
+    pred_net_sizes: list = (16, 16)
+    dyna_net_sizes: list = (16, 16)
+
+
+# def get_mini_nn_spec(dim_image):
+#     return NeuralNetworkSpec()
 
 
 def get_network(spec: NeuralNetworkSpec):
@@ -60,23 +66,32 @@ class _NeuralNetworkHaiku(hk.Module):
         self.spec = spec
 
     def repr_net(self, image):
-        net = hk.nets.MLP(output_sizes=[16, 16, self.spec.dim_repr], name="repr")
+        net = hk.nets.MLP(
+            output_sizes=[*self.spec.repr_net_sizes, self.spec.dim_repr], name="repr"
+        )
+        # NOTE: output is relu-ed, maybe it shouldn't be
         return net(image)
 
     def pred_net(self, hidden_state):
-        v_net = hk.nets.MLP(output_sizes=[16, 16, 1], name="pred_v")
-        p_net = hk.nets.MLP(output_sizes=[16, 16, self.spec.dim_action], name="pred_p")
-        return v_net(hidden_state), p_net(hidden_state)
+        pred_trunk = hk.nets.MLP(
+            output_sizes=self.spec.pred_net_sizes, name="pred_trunk"
+        )
+        v_branch = hk.Linear(output_size=1, name="pred_v")
+        p_branch = hk.Linear(output_size=self.spec.dim_action, name="pred_p")
+
+        pred_trunk_out = pred_trunk(hidden_state)
+        return v_branch(pred_trunk_out), p_branch(pred_trunk_out)
 
     def dyna_net(self, hidden_state, action):
+        dyna_trunk = hk.nets.MLP(
+            output_sizes=self.spec.dyna_net_sizes, name="dyna_trunk"
+        )
+        trans_branch = hk.Linear(output_size=self.spec.dim_repr, name="dyna_trans")
+        reward_branch = hk.Linear(output_size=1, name="dyna_reward")
+
         state_action_repr = jnp.concatenate((hidden_state, action), axis=-1)
-        transition_net = hk.nets.MLP(
-            output_sizes=[16, 16, self.spec.dim_repr], name="dyna_trans"
-        )
-        reward_net = hk.nets.MLP(
-            output_sizes=[16, 16, self.spec.dim_repr], name="dyna_reward"
-        )
-        return transition_net(state_action_repr), reward_net(state_action_repr)
+        dyna_trunk_out = dyna_trunk(state_action_repr)
+        return trans_branch(dyna_trunk_out), reward_branch(dyna_trunk_out)
 
     def initial_inference(self, image):
         hidden_state = self.repr_net(image)

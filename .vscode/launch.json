@@ -13,13 +13,6 @@
             "justMyCode": false
         },
         {
-            "name": "mcts.py",
-            "type": "python",
-            "request": "launch",
-            "program": "moozi/mcts.py",
-            "console": "integratedTerminal"
-        },
-        {
             "name": "(gdb) main.cpp",
             "type": "cppdbg",
             "request": "launch",
@@ -40,12 +33,5 @@
                 }
             ]
         },
-        {
-            "name": "app.py",
-            "type": "python",
-            "request": "launch",
-            "program": "app.py",
-            "console": "integratedTerminal"
-        }
     ]
 }

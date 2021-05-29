@@ -75,8 +75,8 @@ class PriorPolicyActor(acme.core.Actor):
             legal_actions_mask=observation.legal_actions,
             random_key=new_key,
         )
-        action = acme_utils.to_numpy(action).item()
-        chex.assert_scalar_non_negative(action)
+        # action = acme_utils.to_numpy(action).item()
+        # chex.assert_scalar_non_negative(action)
         return action
 
     def observe_first(self, timestep: dm_env.TimeStep):

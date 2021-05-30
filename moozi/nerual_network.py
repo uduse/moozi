@@ -49,10 +49,14 @@ def get_network(spec: NeuralNetworkSpec):
 
     def init(random_key):
         key_1, key_2 = jax.random.split(random_key)
+        batch_size = 1
         params = hk.data_structures.merge(
-            initial_inference.init(key_1, jnp.ones(spec.dim_image)),
+            initial_inference.init(key_1, jnp.ones((batch_size, spec.dim_image))),
             recurrent_inference.init(
-                key_2, jnp.ones(spec.dim_repr), jnp.ones(spec.dim_action)
+                key_2,
+                jnp.ones((batch_size, spec.dim_repr)),
+                # input actions will be scalar values and converted to one-hot ad-hoc
+                jnp.ones((batch_size,)),
             ),
         )
         return params
@@ -61,6 +65,10 @@ def get_network(spec: NeuralNetworkSpec):
 
 
 class _NeuralNetworkHaiku(hk.Module):
+    """
+    NOTE: input tensors are assumed to have batch dimensions
+    """
+
     def __init__(self, spec: NeuralNetworkSpec):
         super().__init__()
         self.spec = spec
@@ -80,7 +88,9 @@ class _NeuralNetworkHaiku(hk.Module):
         p_branch = hk.Linear(output_size=self.spec.dim_action, name="pred_p")
 
         pred_trunk_out = pred_trunk(hidden_state)
-        return v_branch(pred_trunk_out), p_branch(pred_trunk_out)
+        value = jnp.squeeze(v_branch(pred_trunk_out), axis=-1)
+        policy_logits = p_branch(pred_trunk_out)
+        return value, policy_logits
 
     def dyna_net(self, hidden_state, action):
         dyna_trunk = hk.nets.MLP(
@@ -89,14 +99,20 @@ class _NeuralNetworkHaiku(hk.Module):
         trans_branch = hk.Linear(output_size=self.spec.dim_repr, name="dyna_trans")
         reward_branch = hk.Linear(output_size=1, name="dyna_reward")
 
+        action = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
+        chex.assert_equal_rank([hidden_state, action])
         state_action_repr = jnp.concatenate((hidden_state, action), axis=-1)
         dyna_trunk_out = dyna_trunk(state_action_repr)
-        return trans_branch(dyna_trunk_out), reward_branch(dyna_trunk_out)
+        next_hidden_states = trans_branch(dyna_trunk_out)
+        next_rewards = jnp.squeeze(reward_branch(dyna_trunk_out), axis=-1)
+        return next_hidden_states, next_rewards
 
     def initial_inference(self, image):
+        chex.assert_rank(image, 2)
         hidden_state = self.repr_net(image)
-        reward = 0
         value, policy_logits = self.pred_net(hidden_state)
+        reward = jnp.zeros_like(value)
+        chex.assert_rank([value, reward, policy_logits, hidden_state], [1, 1, 2, 2])
         return NeuralNetworkOutput(
             value=value,
             reward=reward,
@@ -105,8 +121,10 @@ class _NeuralNetworkHaiku(hk.Module):
         )
 
     def recurrent_inference(self, hidden_state, action):
+        # TODO: a batch-jit that infers K times?
         hidden_state, reward = self.dyna_net(hidden_state, action)
         value, policy_logits = self.pred_net(hidden_state)
+        chex.assert_rank([value, reward, policy_logits, hidden_state], [1, 1, 2, 2])
         return NeuralNetworkOutput(
             value=value,
             reward=reward,

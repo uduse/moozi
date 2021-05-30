@@ -47,8 +47,12 @@ class PriorPolicyActor(acme.core.Actor):
         ):
             chex.assert_rank(image, 1)
             chex.assert_shape(legal_actions_mask, [self._env_spec.actions.num_values])
-            network_output = network.initial_inference(params, image)
-            action_logits = network_output.policy_logits
+
+            network_output = network.initial_inference(
+                params, acme_utils.add_batch_dim(image)
+            )
+            action_logits = acme_utils.squeeze_batch_dim(network_output.policy_logits)
+
             chex.assert_rank(action_logits, 1)
             # action_logits -= (1 - legal_actions_mask) * jnp.inf  # TODO: normalize softmax
             _sampler = rlax.epsilon_softmax(epsilon, temperature).sample

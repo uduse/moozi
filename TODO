@@ -1,8 +1,6 @@
 Milestones:
-  ☐ using a random policy, collect data in a simple OpenSpiel game, and train the representation + one-step prediction jointly (this process is called "initial inference" in the pseudocode)
-    ☐ _observed_first set to True problem at https://github.com/deepmind/acme/blob/a6b4162701542ed08b0b911ffac7c69fcb1bb3c7/acme/environment_loops/open_spiel_environment_loop.py#L101
-    -> burn_in_length + sequence_length + 1
-    ☐ 
+  ☐ vanilla policy gradient using two inferences
+  ☐ exhaustive search with depth of 1
 
 Network:
   ☐ target network and behavior network https://github.com/deepmind/acme/blob/926b17ad116578801a0fbbe73c4ddc276a28e23e/acme/agents/jax/dqn/learning_lib.py#L107
@@ -18,8 +16,3 @@ MCTS:
     ☐ add support to `known_bound` @low
   C++:
     ☐ set up a basic C++ PyBind santity check program
-
-MISC:
-  ✔ add batch dimension, similar to https://github.com/deepmind/acme/blob/a6b4162701542ed08b0b911ffac7c69fcb1bb3c7/acme/agents/jax/dqn/learning_lib.py#L120 @done(21-05-24 03:56)
-  ☐ add chex checking to sgd related code
-

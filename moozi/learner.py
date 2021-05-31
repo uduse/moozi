@@ -66,25 +66,33 @@ class MooZiLearner(acme.Learner):
         def _sgd_step_one_batch(training_state: TrainingState, batch):
             # key, new_key = jax.random.split(training_state.rng_key)  # curently not using the key
             new_key = training_state.rng_key  # curently not using the key
-
-            (loss, extra), grads = jax.value_and_grad(self._loss, has_aux=True)(
+            step_data = mz.logging.JAXBoardStepData(scalars={}, histograms={})
+            grads, extra = jax.grad(self._loss, has_aux=True)(
                 training_state.params, batch
             )
-            extra.metrics.update({"loss": loss})
+            step_data.update(extra)
             updates, new_opt_state = optimizer.update(grads, training_state.opt_state)
             new_params = optax.apply_updates(training_state.params, updates)
             steps = training_state.steps + 1
             new_training_state = TrainingState(
                 new_params, new_opt_state, steps, new_key
             )
-            return new_training_state, extra
+            step_data.add_hk_params(new_params)
+            step_data.histograms.update({'reward': batch.data.reward})
+            return new_training_state, step_data
 
-        def _postprocess_aux(extra: mz.loss.LossExtra):
-            return extra._replace(metrics=jax.tree_map(jnp.mean, extra.metrics))
+        num_batches = 1
+        if num_batches > 1:
+            # TODO: multiple SGDs per training step, not tested for now
+            def _postprocess_aux(extra: mz.logging.JAXBoardStepData):
+                return extra._replace(scalars=jax.tree_map(jnp.mean, extra.scalars))
 
-        self._sgd_step = acme.jax.utils.process_multiple_batches(
-            _sgd_step_one_batch, num_batches=1, postprocess_aux=_postprocess_aux
-        )
+            self._sgd_step = acme.jax.utils.process_multiple_batches(
+                _sgd_step_one_batch, num_batches=1, postprocess_aux=_postprocess_aux
+            )
+        else:
+            self._sgd_step = _sgd_step_one_batch
+
         self._data_iterator = acme.jax.utils.prefetch(data_iterator)
 
         key_params, key_state = jax.random.split(random_key, 2)
@@ -93,14 +101,18 @@ class MooZiLearner(acme.Learner):
             params=params, opt_state=optimizer.init(params), steps=0, rng_key=key_state
         )
         self._counter = acme.utils.counting.Counter()
-        self._logger = acme.utils.loggers.TerminalLogger(time_delta=1.0, print_fn=print)
+        self._terminal_logger = acme.utils.loggers.TerminalLogger(
+            time_delta=1.0, print_fn=print
+        )
+        self._jaxboard_logger = mz.logging.JAXBoardLogger()
 
     def step(self):
         batch = next(self._data_iterator)
         self._state, extra = self._sgd_step(self._state, batch)
         result = self._counter.increment(steps=1)
-        result.update(extra.metrics)
-        self._logger.write(result)
+        result.update(extra.scalars)
+        self._terminal_logger.write(result)
+        self._jaxboard_logger.write(extra)
 
     def get_variables(self, names):
         return [self._state.params]

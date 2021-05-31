@@ -1,10 +1,10 @@
-test_model_supervised:
-  notebook: test_model_supervised.ipynb
-  flags-import: all
-  sourcecode:
-    - '*.py'
-    - '*.yml'
-    - '*.ipynb'
-  output-scalars: 
-    - step: '^Loss = \value | Steps = (\step)$'
-    - loss: '^Loss = (\value) | Steps = \step$'
+# test_model_supervised:
+#   notebook: test_model_supervised.ipynb
+#   flags-import: all
+#   sourcecode:
+#     - '*.py'
+#     - '*.yml'
+#     - '*.ipynb'
+#   output-scalars: 
+#     - step: '^Loss = \value | Steps = (\step)$'
+#     - loss: '^Loss = (\value) | Steps = \step$'

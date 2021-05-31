@@ -7,8 +7,9 @@ import rlax
 import moozi as mz
 
 
-class LossExtra(typing.NamedTuple):
-    metrics: typing.Dict[str, jnp.DeviceArray]
+# class LossExtra(typing.NamedTuple):
+#     scalars: typing.Dict[str, jnp.DeviceArray]
+#     histograms: typing.Dict[str, jnp.DeviceArray]
 
 
 # TODO: add a TD version of `initial_inference_value_loss`
@@ -21,8 +22,7 @@ def initial_inference_value_loss(network: mz.nn.NeuralNetwork, params, batch):
     chex.assert_rank([pred_value, target_value], 1)  # shape: (batch_size,)
 
     loss_scalar = jnp.mean(jnp.square(pred_value - target_value))
-    extra = LossExtra({})
-    return loss_scalar, extra
+    return loss_scalar, None
 
 
 def n_step_prior_vanilla_policy_gradient_loss(
@@ -33,15 +33,17 @@ def n_step_prior_vanilla_policy_gradient_loss(
     """
     output_t = network.initial_inference(params, batch.data.observation.observation)
     action = batch.data.action
-    output_t_next = network.recurrent_inference(params, output_t.hidden_state, action)
     pg_loss = rlax.policy_gradient_loss(
-        logits_t=output_t_next.policy_logits,
+        logits_t=output_t.policy_logits,
         a_t=action,
         adv_t=batch.data.reward,  # use full return as the target
         w_t=jnp.ones_like(action, dtype=float),
     )
-    extra = LossExtra({})
-    return pg_loss, extra
+    entropy = rlax.softmax().entropy(logits=output_t.policy_logits)
+    return pg_loss, mz.logging.JAXBoardStepData(
+        scalars={"loss": pg_loss},
+        histograms={"entropy": entropy, "logits": output_t.policy_logits},
+    )
 
 
 def n_step_prior_adv_policy_gradient_loss(network: mz.nn.NeuralNetwork, params, batch):
@@ -64,5 +66,4 @@ def n_step_prior_adv_policy_gradient_loss(network: mz.nn.NeuralNetwork, params, 
         discount_t=batch.data.discount,
         v_t=output_t_next.value,
     )
-    extra = LossExtra({})
-    return jnp.mean(v_td_loss + pg_loss), extra
+    return jnp.mean(v_td_loss + pg_loss), None

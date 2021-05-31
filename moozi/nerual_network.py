@@ -5,6 +5,7 @@ import chex
 import haiku as hk
 import jax
 import jax.numpy as jnp
+from torch.nn.modules import activation
 
 import moozi as mz
 
@@ -39,7 +40,7 @@ class NeuralNetworkSpec(typing.NamedTuple):
 
 def get_network(spec: NeuralNetworkSpec):
     # TODO: rename to build network
-    hk_module = functools.partial(_NeuralNetworkHaiku, spec)
+    hk_module = functools.partial(_Simple, spec)
     initial_inference = hk.without_apply_rng(
         hk.transform(lambda image: hk_module().initial_inference(image))
     )
@@ -64,7 +65,7 @@ def get_network(spec: NeuralNetworkSpec):
     return NeuralNetwork(init, initial_inference.apply, recurrent_inference.apply)
 
 
-class _NeuralNetworkHaiku(hk.Module):
+class _Simple(hk.Module):
     """
     NOTE: input tensors are assumed to have batch dimensions
     """
@@ -82,7 +83,9 @@ class _NeuralNetworkHaiku(hk.Module):
 
     def pred_net(self, hidden_state):
         pred_trunk = hk.nets.MLP(
-            output_sizes=self.spec.pred_net_sizes, name="pred_trunk"
+            output_sizes=self.spec.pred_net_sizes,
+            name="pred_trunk",
+            activation=jax.nn.tanh,
         )
         v_branch = hk.Linear(output_size=1, name="pred_v")
         p_branch = hk.Linear(output_size=self.spec.dim_action, name="pred_p")

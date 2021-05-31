@@ -1,7 +1,7 @@
 import typing
 
 
-Action = typing.NewType("Action", int)
+# Action = typing.NewType("Action", int)
 
 
 # class Action(object):

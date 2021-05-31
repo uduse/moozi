@@ -10,15 +10,28 @@ import jaxboard
 
 import moozi as mz
 
+# TMP_LOG_DIR = None
 
-def get_log_dir():
-    guild_ai_run_dir_key = "RUN_DIR"
-    env_items = dict(os.environ.items())
-    if guild_ai_run_dir_key in env_items:
-        log_dir = env_items[guild_ai_run_dir_key]
-    else:
-        log_dir = "/tmp/moozi-log-" + str(uuid.uuid4())[:16]
-    return log_dir
+
+# def get_log_dir():
+#     global TMP_LOG_DIR
+#     guild_ai_run_dir_key = "RUN_DIR"
+#     env_items = dict(os.environ.items())
+#     if guild_ai_run_dir_key in env_items:
+#         return env_items[guild_ai_run_dir_key]
+#     elif TMP_LOG_DIR:
+#         return TMP_LOG_DIR
+#     else:
+#         TMP_LOG_DIR = "/tmp/moozi-log-" + str(uuid.uuid4())[:16]
+#         print(f"Using log directory {TMP_LOG_DIR}")
+#         return TMP_LOG_DIR
+
+
+def get_default_loggers(time_delta=10.0):
+    return [
+        acme.utils.loggers.TerminalLogger(time_delta=time_delta, print_fn=print),
+        JAXBoardLogger(time_delta=time_delta),
+    ]
 
 
 class JAXBoardStepData(typing.NamedTuple):
@@ -37,13 +50,21 @@ class JAXBoardStepData(typing.NamedTuple):
 
 
 class JAXBoardLogger(acme.utils.loggers.base.Logger):
-    def __init__(self):
+    def __init__(self, log_dir=None, time_delta: float = 0.0):
+        self._log_dir = log_dir or "./tb"
+        self._time_delta = time_delta
         self._time = time.time()
         self._steps = 0
-        self._log_dir = get_log_dir()
         self._writer = jaxboard.SummaryWriter(log_dir=self._log_dir)
 
     def write(self, data: JAXBoardStepData):
+        now = time.time()
+        if (now - self._time) > self._time_delta:
+            self._write_now(data)
+            self._time = now
+            self._steps += 1
+
+    def _write_now(self, data: JAXBoardStepData):
         for key in data.scalars:
             self._writer.scalar(key, data.scalars[key], step=self._steps)
         for key in data.histograms:
@@ -51,4 +72,3 @@ class JAXBoardLogger(acme.utils.loggers.base.Logger):
             self._writer.histogram(
                 key, data.histograms[key], num_bins, step=self._steps
             )
-        self._steps += 1

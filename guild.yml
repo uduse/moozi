@@ -5,6 +5,16 @@
 #     - '*.py'
 #     - '*.yml'
 #     - '*.ipynb'
-#   output-scalars: 
+#   output-scalars:
 #     - step: '^Loss = \value | Steps = (\step)$'
 #     - loss: '^Loss = (\value) | Steps = \step$'
+
+catch_vpg:
+  main: scripts.catch_vpg
+  flags:
+    jax_platform_name: gpu
+  flags-import: all
+  sourcecode:
+    - "*.py"
+    - "*.yml"
+    - "*.ipynb"

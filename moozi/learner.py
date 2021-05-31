@@ -56,8 +56,16 @@ class RandomNoiseLearner(acme.Learner):
         self.params = state
 
 
-class MooZiLearner(acme.Learner):
-    def __init__(self, network, loss_fn, optimizer, data_iterator, random_key):
+class SGDLearner(acme.Learner):
+    def __init__(
+        self,
+        network: mz.nn.NeuralNetwork,
+        loss_fn: mz.loss.LossFn,
+        optimizer: optax.GradientTransformation,
+        data_iterator,
+        random_key,
+        loggers: typing.Optional[typing.List] = None,
+    ):
         self.network = network
         self._loss = jax.jit(functools.partial(loss_fn, self.network))
 
@@ -78,7 +86,7 @@ class MooZiLearner(acme.Learner):
                 new_params, new_opt_state, steps, new_key
             )
             step_data.add_hk_params(new_params)
-            step_data.histograms.update({'reward': batch.data.reward})
+            step_data.histograms.update({"reward": batch.data.reward})
             return new_training_state, step_data
 
         num_batches = 1
@@ -101,18 +109,19 @@ class MooZiLearner(acme.Learner):
             params=params, opt_state=optimizer.init(params), steps=0, rng_key=key_state
         )
         self._counter = acme.utils.counting.Counter()
-        self._terminal_logger = acme.utils.loggers.TerminalLogger(
-            time_delta=1.0, print_fn=print
-        )
-        self._jaxboard_logger = mz.logging.JAXBoardLogger()
+        self._loggers = loggers or mz.logging.get_default_loggers()
 
     def step(self):
         batch = next(self._data_iterator)
         self._state, extra = self._sgd_step(self._state, batch)
         result = self._counter.increment(steps=1)
         result.update(extra.scalars)
-        self._terminal_logger.write(result)
-        self._jaxboard_logger.write(extra)
+
+        for logger in self._loggers:
+            if isinstance(logger, acme.utils.loggers.TerminalLogger):
+                logger.write(result)
+            elif isinstance(logger, mz.logging.JAXBoardLogger):
+                logger.write(extra)
 
     def get_variables(self, names):
         return [self._state.params]

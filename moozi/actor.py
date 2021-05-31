@@ -1,3 +1,4 @@
+import typing
 import acme
 import acme.jax.utils as acme_utils
 import acme.wrappers.open_spiel_wrapper
@@ -40,6 +41,8 @@ class PriorPolicyActor(acme.core.Actor):
         random_key,
         epsilon=0.1,
         temperature=1,
+        loggers: typing.Optional[typing.List] = None,
+        name: typing.Optional[str] = None
     ):
         @chex.assert_max_traces(n=1)
         def _policy_fn(
@@ -47,6 +50,7 @@ class PriorPolicyActor(acme.core.Actor):
         ):
             chex.assert_rank(image, 1)
             chex.assert_shape(legal_actions_mask, [self._env_spec.actions.num_values])
+
 
             network_output = network.initial_inference(
                 params, acme_utils.add_batch_dim(image)
@@ -57,13 +61,16 @@ class PriorPolicyActor(acme.core.Actor):
             # action_logits -= (1 - legal_actions_mask) * jnp.inf  # TODO: normalize softmax
             _sampler = rlax.epsilon_softmax(epsilon, temperature).sample
             action = _sampler(random_key, action_logits)
-            return action
+            step_data = mz.logging.JAXBoardStepData({}, {})
+            return action, step_data
 
+        self._name = name or self.__class__.__name__
         self._env_spec = environment_spec
         self._random_key = random_key
         self._adder = adder
         self._client = variable_client
         self._policy_fn = jax.jit(_policy_fn)
+        self._loggers = loggers or mz.logging.get_default_loggers()
 
         # NOTE: acme's actor's batching behavior is inconsistent
         # https://github.com/deepmind/acme/blob/aba3f195afd3e9774e2006ec9b32cb76048b7fe6/acme/agents/jax/actors.py#L82
@@ -73,7 +80,7 @@ class PriorPolicyActor(acme.core.Actor):
 
     def select_action(self, observation: acme.wrappers.open_spiel_wrapper.OLT) -> int:
         self._random_key, new_key = jax.random.split(self._random_key)
-        action = self._policy_fn(
+        action, step_data = self._policy_fn(
             self._client.params,
             image=observation.observation,
             legal_actions_mask=observation.legal_actions,
@@ -82,6 +89,10 @@ class PriorPolicyActor(acme.core.Actor):
         # action = acme_utils.to_numpy(action).item()
         # chex.assert_scalar_non_negative(action)
         return action
+
+    # def _log(self, data: mz.logging.JAXBoardStepData):
+    #     for logger in self._loggers:
+    #         if isinstance(logger, acme.utils.)
 
     def observe_first(self, timestep: dm_env.TimeStep):
         self._adder.add_first(timestep)

@@ -3,7 +3,6 @@ import typing
 import random
 
 
-Action = typing.NewType("Action", int)
 
 
 class ReplayBuffer(object):

@@ -12,8 +12,8 @@
 catch_vpg:
   main: scripts.catch_vpg
   flags:
-    jax_platform_name: gpu
-    # use_log: true
+    platform: gpu
+    use_log: true
   flags-import: all
   sourcecode:
     - "*.py"

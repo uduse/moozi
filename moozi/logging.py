@@ -48,7 +48,7 @@ class JAXBoardStepData(typing.NamedTuple):
 class JAXBoardLogger(acme.utils.loggers.base.Logger):
     def __init__(self, name, log_dir=None, time_delta: float = 0.0):
         self._name = name
-        self._log_dir = log_dir or "./tb"
+        self._log_dir = log_dir or get_log_dir()
         self._time_delta = time_delta
         self._time = time.time()
         self._steps = 0

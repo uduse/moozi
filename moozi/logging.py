@@ -1,4 +1,5 @@
 import os
+import datetime
 import time
 import typing
 import uuid
@@ -7,23 +8,26 @@ import acme
 import haiku as hk
 import jax.numpy as jnp
 import jaxboard
+import pytz
 
 import moozi as mz
 
+TIMEZONE = pytz.timezone("America/Edmonton")
+
 # https://github.com/guildai/guildai/issues/290
-# TMP_LOG_DIR = None
-# def get_log_dir():
-#     global TMP_LOG_DIR
-#     guild_ai_run_dir_key = "RUN_DIR"
-#     env_items = dict(os.environ.items())
-#     if guild_ai_run_dir_key in env_items:
-#         return env_items[guild_ai_run_dir_key]
-#     elif TMP_LOG_DIR:
-#         return TMP_LOG_DIR
-#     else:
-#         TMP_LOG_DIR = "/tmp/moozi-log-" + str(uuid.uuid4())[:16]
-#         print(f"Using log directory {TMP_LOG_DIR}")
-#         return TMP_LOG_DIR
+TMP_LOG_DIR = None
+def get_log_dir():
+    global TMP_LOG_DIR
+    guild_ai_run_dir_key = "RUN_DIR"
+    env_items = dict(os.environ.items())
+    if guild_ai_run_dir_key in env_items:
+        return env_items[guild_ai_run_dir_key]
+    elif TMP_LOG_DIR:
+        return TMP_LOG_DIR
+    else:
+        TMP_LOG_DIR = "/tmp/moozi-log-" + str(uuid.uuid4())[:16]
+        print(f"Using log directory {TMP_LOG_DIR}")
+        return TMP_LOG_DIR
 
 
 class JAXBoardStepData(typing.NamedTuple):
@@ -59,11 +63,15 @@ class JAXBoardLogger(acme.utils.loggers.base.Logger):
 
     def _write_now(self, data: JAXBoardStepData):
         for key in data.scalars:
-            key = self._name + ":" + key
-            self._writer.scalar(key, data.scalars[key], step=self._steps)
+            prefixed_key = self._name + ":" + key
+            self._writer.scalar(prefixed_key, data.scalars[key], step=self._steps)
+        # datetime_now_native = datetime.datetime.now()
+        # datetime_now_aware = TIMEZONE.localize(datetime_now_native)
+        # self._writer.scalar("time", datetime_now_aware.isoformat())
+        self._writer.scalar("time", time.time())
         for key in data.histograms:
-            key = self._name + ":" + key
+            prefixed_key = self._name + ":" + key
             num_bins = 50
             self._writer.histogram(
-                key, data.histograms[key], num_bins, step=self._steps
+                prefixed_key, data.histograms[key], num_bins, step=self._steps
             )

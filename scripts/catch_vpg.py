@@ -15,8 +15,8 @@ from acme.agents import replay as acme_replay
 
 
 # %%
-jax_platform_name = "cpu"
-jax.config.update("jax_platform_name", jax_platform_name)
+platform = "cpu"
+jax.config.update("jax_platform_name", platform)
 
 # In[2]:
 seed = 0
@@ -46,7 +46,7 @@ print(nn_spec)
 
 
 # In[5]:
-batch_size = 64
+batch_size = 32
 n_steps = 5
 reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
     env_spec, batch_size=batch_size, n_step=n_steps
@@ -90,18 +90,20 @@ actor = mz.actor.PriorPolicyActor(
 
 # %%
 agent = acme_agent.Agent(
-    actor=actor, learner=learner, min_observations=100, observations_per_step=1
+    actor=actor, learner=learner, min_observations=0, observations_per_step=1
 )
 
-
-# In[10]:
-loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
+# %%
+# loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
+loop = OpenSpielEnvironmentLoop(
+    environment=env, actors=[mz.actor.RandomActor(reverb_replay.adder)]
+)
 
 # %%
 loop.run_episode()
 
-# In[11]:
-num_steps = 100
+# %%
+num_steps = 1000
 loop.run(num_steps=num_steps)
 
 # %%

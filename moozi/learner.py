@@ -94,7 +94,7 @@ class SGDLearner(acme.Learner):
             # key, new_key = jax.random.split(training_state.rng_key)  # curently not using the key
             new_key = training_state.rng_key  # curently not using the key
             step_data = mz.logging.JAXBoardStepData(scalars={}, histograms={})
-            grads, extra = jax.grad(loss_fn, has_aux=True)(
+            grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
                 network, training_state.params, batch
             )
             step_data.update(extra)

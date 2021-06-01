@@ -84,7 +84,7 @@ class SGDLearner(acme.Learner):
     def _get_default_loggers(self):
         return [
             acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
-            # mz.logging.JAXBoardLogger(self._name, time_delta=5.0),
+            mz.logging.JAXBoardLogger(self._name, time_delta=5.0),
         ]
 
     def _make_sgd_step_fn(self, network, loss_fn, optimizer):
@@ -137,3 +137,9 @@ class SGDLearner(acme.Learner):
 
     def restore(self, state):
         self._state = state
+
+    def __del__(self):
+        for logger in self._loggers:
+            if isinstance(logger, mz.logging.JAXBoardLogger):
+                print(logger._name, 'closed')
+                logger.close()

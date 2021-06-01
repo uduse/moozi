@@ -1,5 +1,4 @@
 import os
-import datetime
 import time
 import typing
 import uuid
@@ -16,6 +15,8 @@ TIMEZONE = pytz.timezone("America/Edmonton")
 
 # https://github.com/guildai/guildai/issues/290
 TMP_LOG_DIR = None
+
+
 def get_log_dir():
     global TMP_LOG_DIR
     guild_ai_run_dir_key = "RUN_DIR"
@@ -48,11 +49,12 @@ class JAXBoardStepData(typing.NamedTuple):
 class JAXBoardLogger(acme.utils.loggers.base.Logger):
     def __init__(self, name, log_dir=None, time_delta: float = 0.0):
         self._name = name
-        self._log_dir = log_dir or get_log_dir()
+        self._log_dir = log_dir or "./tb"
         self._time_delta = time_delta
         self._time = time.time()
         self._steps = 0
         self._writer = jaxboard.SummaryWriter(log_dir=self._log_dir)
+        print(f"{self._name} is logging to {self._log_dir}")
 
     def write(self, data: JAXBoardStepData):
         now = time.time()
@@ -65,9 +67,6 @@ class JAXBoardLogger(acme.utils.loggers.base.Logger):
         for key in data.scalars:
             prefixed_key = self._name + ":" + key
             self._writer.scalar(prefixed_key, data.scalars[key], step=self._steps)
-        # datetime_now_native = datetime.datetime.now()
-        # datetime_now_aware = TIMEZONE.localize(datetime_now_native)
-        # self._writer.scalar("time", datetime_now_aware.isoformat())
         self._writer.scalar("time", time.time())
         for key in data.histograms:
             prefixed_key = self._name + ":" + key
@@ -75,3 +74,18 @@ class JAXBoardLogger(acme.utils.loggers.base.Logger):
             self._writer.histogram(
                 prefixed_key, data.histograms[key], num_bins, step=self._steps
             )
+
+    def close(self):
+        r"""
+        Always call this method the logging is finished.
+        Otherwise unexpected hangings may occur.
+        """
+        return self._writer.close()
+
+    def __del__(self):
+        try:
+            self.close()
+            del self._writer
+        except Exception as e:
+            print(e)
+            pass

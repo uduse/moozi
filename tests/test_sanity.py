@@ -1,4 +1,7 @@
 import acme.jax.variable_utils
+import sys
+import os
+import time
 import acme.wrappers.open_spiel_wrapper
 import jax
 import moozi as mz
@@ -7,6 +10,8 @@ import pytest
 from acme.agents import agent as acme_agent
 from acme.agents import replay as acme_replay
 from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironmentLoop
+import jaxboard
+from pytest_mock import MockerFixture
 
 
 # TODO: add as global test variants
@@ -15,7 +20,7 @@ def update_jax_config():
     jax.config.update("jax_platform_name", "cpu")
 
 
-update_jax_config()
+# update_jax_config()
 
 
 @pytest.fixture
@@ -104,3 +109,13 @@ def test_n_step_prior_policy_gradient_loss(
     loss = mz.loss.NStepPriorVanillaPolicyGradientLoss()
     result = loss(network, random_noise_learner.params, batch)
     assert result
+
+
+def test_logger(mocker: MockerFixture, tmp_path):
+    spy = mocker.spy(mz.logging.JAXBoardLogger, "_write_now")
+    logger = mz.logging.JAXBoardLogger("test", log_dir=tmp_path, time_delta=0.01)
+    time.sleep(0.1)
+    logger.write(mz.logging.JAXBoardStepData({}, {}))
+    logger.write(mz.logging.JAXBoardStepData({}, {}))
+    logger.close()
+    spy.assert_called_once()

@@ -18,6 +18,7 @@ from acme.agents import replay as acme_replay
 platform = "cpu"
 jax.config.update("jax_platform_name", platform)
 
+
 # In[2]:
 seed = 0
 key = jax.random.PRNGKey(seed)
@@ -46,27 +47,24 @@ print(nn_spec)
 
 
 # In[5]:
-batch_size = 32
 n_steps = 5
+batch_size = 32
 reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
     env_spec, batch_size=batch_size, n_step=n_steps
 )
 
 
 # In[6]:
-use_log = False
-loggers = [
-    acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
-]
-if use_log:
-    loggers.append(mz.logging.JAXBoardLogger("learner", time_delta=5.0))
 learner = mz.learner.SGDLearner(
     network=network,
     loss_fn=mz.loss.NStepPriorVanillaPolicyGradientLoss(),
     optimizer=optimizer,
     data_iterator=reverb_replay.data_iterator,
     random_key=jax.random.PRNGKey(996),
-    loggers=loggers,
+    loggers=[
+        acme.utils.loggers.TerminalLogger(time_delta=2.0, print_fn=print),
+        # mz.logging.JAXBoardLogger("learner", time_delta=2.0),
+    ],
 )
 
 
@@ -83,8 +81,12 @@ actor = mz.actor.PriorPolicyActor(
     adder=reverb_replay.adder,
     variable_client=variable_client,
     random_key=new_key,
-    #     epsilon=0.1,
-    #     temperature=1
+    loggers=[
+        acme.utils.loggers.TerminalLogger(time_delta=2.0, print_fn=print),
+        mz.logging.JAXBoardLogger("actor", time_delta=2.0),
+    ],
+    # epsilon=0.1,
+    # temperature=1,
 )
 
 
@@ -95,15 +97,13 @@ agent = acme_agent.Agent(
 
 # %%
 # loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
-loop = OpenSpielEnvironmentLoop(
-    environment=env, actors=[mz.actor.RandomActor(reverb_replay.adder)]
-)
+loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
 
 # %%
 loop.run_episode()
 
 # %%
-num_steps = 1000
+num_steps = 200
 loop.run(num_steps=num_steps)
 
 # %%

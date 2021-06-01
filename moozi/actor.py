@@ -86,6 +86,7 @@ class PriorPolicyActor(acme.core.Actor):
 
             step_data = mz.logging.JAXBoardStepData({}, {})
             step_data.histograms["action_entropy"] = action_entropy
+            # step_data.scalars["selected_action_entropy"] = action_entropy[action]
             return action, step_data
 
         return _policy_fn
@@ -114,3 +115,9 @@ class PriorPolicyActor(acme.core.Actor):
 
     def update(self, wait: bool = False):
         pass
+
+    def close(self):
+        for logger in self._loggers:
+            if isinstance(logger, mz.logging.JAXBoardLogger):
+                print(logger._name, "closed")
+                logger.close()

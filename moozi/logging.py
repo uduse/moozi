@@ -10,9 +10,8 @@ import jaxboard
 
 import moozi as mz
 
+# https://github.com/guildai/guildai/issues/290
 # TMP_LOG_DIR = None
-
-
 # def get_log_dir():
 #     global TMP_LOG_DIR
 #     guild_ai_run_dir_key = "RUN_DIR"
@@ -25,13 +24,6 @@ import moozi as mz
 #         TMP_LOG_DIR = "/tmp/moozi-log-" + str(uuid.uuid4())[:16]
 #         print(f"Using log directory {TMP_LOG_DIR}")
 #         return TMP_LOG_DIR
-
-
-def get_default_loggers(time_delta=10.0):
-    return [
-        acme.utils.loggers.TerminalLogger(time_delta=time_delta, print_fn=print),
-        JAXBoardLogger(time_delta=time_delta),
-    ]
 
 
 class JAXBoardStepData(typing.NamedTuple):
@@ -50,7 +42,8 @@ class JAXBoardStepData(typing.NamedTuple):
 
 
 class JAXBoardLogger(acme.utils.loggers.base.Logger):
-    def __init__(self, log_dir=None, time_delta: float = 0.0):
+    def __init__(self, name, log_dir=None, time_delta: float = 0.0):
+        self._name = name
         self._log_dir = log_dir or "./tb"
         self._time_delta = time_delta
         self._time = time.time()
@@ -66,8 +59,10 @@ class JAXBoardLogger(acme.utils.loggers.base.Logger):
 
     def _write_now(self, data: JAXBoardStepData):
         for key in data.scalars:
+            key = self._name + ":" + key
             self._writer.scalar(key, data.scalars[key], step=self._steps)
         for key in data.histograms:
+            key = self._name + ":" + key
             num_bins = 50
             self._writer.histogram(
                 key, data.histograms[key], num_bins, step=self._steps

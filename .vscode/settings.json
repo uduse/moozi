@@ -8,11 +8,11 @@
     "python.linting.enabled": true,
     "python.linting.flake8Enabled": false,
     "python.linting.pylintEnabled": true,
-    
     "python.testing.pytestArgs": [
         "--disable-pytest-warnings",
         "--durations=0",
         "--profile-svg",
+        "--cov=./",
         "tests",
     ],
     // disable native tests to avoid redundant CodeLens

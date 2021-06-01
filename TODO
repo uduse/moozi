@@ -16,3 +16,6 @@ MCTS:
     ☐ add support to `known_bound` @low
   C++:
     ☐ set up a basic C++ PyBind santity check program
+
+Utils:
+  ☐ coverage report

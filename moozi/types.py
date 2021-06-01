@@ -1,6 +1,12 @@
+r"""
+Type hints precedence:
+    - chex
+    - typing
+    - moozi
+    - python
+
+Avoid using acme.types, it's too complicated
+"""
 import typing
 
-from acme.types import NestedArray
-
 Action = typing.NewType("Action", int)
-NestedArray = typing.Any

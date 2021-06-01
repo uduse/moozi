@@ -14,6 +14,7 @@ def update_jax_config():
     jax.config.update("jax_disable_jit", True)
     jax.config.update("jax_platform_name", "cpu")
 
+
 update_jax_config()
 
 
@@ -100,7 +101,6 @@ def test_n_step_prior_policy_gradient_loss(
     loop = OpenSpielEnvironmentLoop(env, [random_actor])
     loop.run(num_episodes=2)
     batch = next(n_step_reverb_replay.data_iterator)
-    result = mz.loss.n_step_prior_adv_policy_gradient_loss(
-        network, random_noise_learner.params, batch
-    )
+    loss = mz.loss.NStepPriorVanillaPolicyGradientLoss()
+    result = loss(network, random_noise_learner.params, batch)
     assert result

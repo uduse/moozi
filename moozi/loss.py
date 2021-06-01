@@ -9,7 +9,7 @@ import moozi as mz
 
 class LossFn(typing.Protocol):
     def __call__(
-        self, network: mz.nn.NeuralNetwork, params: mz.types.NestedArray, batch
+        self, network: mz.nn.NeuralNetwork, params: chex.ArrayTree, batch
     ) -> typing.Any:
         r"""Loss function."""
 
@@ -29,7 +29,7 @@ class LossFn(typing.Protocol):
 
 class NStepPriorVanillaPolicyGradientLoss(LossFn):
     def __call__(
-        self, network: mz.nn.NeuralNetwork, params: mz.types.NestedArray, batch
+        self, network: mz.nn.NeuralNetwork, params: chex.ArrayTree, batch
     ) -> typing.Any:
         r"""
         Assume the batch data contains: (s_t, a_t, R_{t:t+n}, D_{t:t+n}, s_{t+N})

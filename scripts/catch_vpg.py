@@ -54,16 +54,19 @@ reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
 
 
 # In[6]:
+use_log = False
+loggers = [
+    acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
+]
+if use_log:
+    loggers.append(mz.logging.JAXBoardLogger("learner", time_delta=5.0))
 learner = mz.learner.SGDLearner(
     network=network,
     loss_fn=mz.loss.NStepPriorVanillaPolicyGradientLoss(),
     optimizer=optimizer,
     data_iterator=reverb_replay.data_iterator,
     random_key=jax.random.PRNGKey(996),
-    loggers=[
-        acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
-        mz.logging.JAXBoardLogger(time_delta=5.0),
-    ],
+    loggers=loggers,
 )
 
 

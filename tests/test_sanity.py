@@ -10,7 +10,6 @@ import pytest
 from acme.agents import agent as acme_agent
 from acme.agents import replay as acme_replay
 from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironmentLoop
-import jaxboard
 from pytest_mock import MockerFixture
 
 
@@ -20,7 +19,7 @@ def update_jax_config():
     jax.config.update("jax_platform_name", "cpu")
 
 
-# update_jax_config()
+update_jax_config()
 
 
 @pytest.fixture

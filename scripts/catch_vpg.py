@@ -41,29 +41,31 @@ nn_spec = mz.nn.NeuralNetworkSpec(
     dim_image=dim_image, dim_repr=dim_repr, dim_action=dim_action
 )
 network = mz.nn.get_network(nn_spec)
-learning_rate = 1e-3
+learning_rate = 1e-5
 optimizer = optax.adam(learning_rate)
 print(nn_spec)
 
 
-# In[5]:
+# %%
 n_steps = 5
-batch_size = 32
+batch_size = 128
 reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
-    env_spec, batch_size=batch_size, n_step=n_steps
+    env_spec, batch_size=batch_size, n_step=n_steps, max_replay_size=2000, discount=0.9
 )
 
 
-# In[6]:
+# %%
+time_delta = 1.0
+key, new_key = jax.random.split(key)
 learner = mz.learner.SGDLearner(
     network=network,
     loss_fn=mz.loss.NStepPriorVanillaPolicyGradientLoss(),
     optimizer=optimizer,
     data_iterator=reverb_replay.data_iterator,
-    random_key=jax.random.PRNGKey(996),
+    random_key=new_key,
     loggers=[
-        acme.utils.loggers.TerminalLogger(time_delta=2.0, print_fn=print),
-        mz.logging.JAXBoardLogger("learner", time_delta=2.0),
+        acme.utils.loggers.TerminalLogger(time_delta=time_delta, print_fn=print),
+        mz.logging.JAXBoardLogger("learner", time_delta=time_delta),
     ],
 )
 
@@ -82,17 +84,16 @@ actor = mz.actor.PriorPolicyActor(
     variable_client=variable_client,
     random_key=new_key,
     loggers=[
-        acme.utils.loggers.TerminalLogger(time_delta=2.0, print_fn=print),
-        mz.logging.JAXBoardLogger("actor", time_delta=2.0),
+        acme.utils.loggers.TerminalLogger(time_delta=time_delta, print_fn=print),
+        mz.logging.JAXBoardLogger("actor", time_delta=time_delta),
     ],
     # epsilon=0.1,
     # temperature=1,
 )
 
-
 # %%
 agent = acme_agent.Agent(
-    actor=actor, learner=learner, min_observations=0, observations_per_step=1
+    actor=actor, learner=learner, min_observations=100, observations_per_step=100
 )
 
 # %%
@@ -103,7 +104,7 @@ loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
 loop.run_episode()
 
 # %%
-num_steps = 1000
+num_steps = 10000
 loop.run(num_steps=num_steps)
 
 # %%

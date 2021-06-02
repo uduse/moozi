@@ -95,7 +95,7 @@ class SGDLearner(acme.Learner):
         @chex.assert_max_traces(n=1)
         def _sgd_step(training_state: TrainingState, batch):
             # computation
-            new_key = training_state.rng_key  # curently not using the key
+            _, new_key = jax.random.split(training_state.rng_key)
             grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
                 network, training_state.params, batch
             )
@@ -121,7 +121,7 @@ class SGDLearner(acme.Learner):
             step_data.scalars["action_entropy"] = extra["action_entropy"]
             step_data.scalars["prior_kl"] = prior_kl
             step_data.histograms["logits"] = extra["logits"]
-            step_data.histograms["reward"] = batch.data.reward
+            step_data.histograms["reward"] = jnp.mean(batch.data.reward)
             step_data.add_hk_params(new_params)
 
             return new_training_state, step_data

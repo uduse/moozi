@@ -86,6 +86,7 @@ class PriorPolicyActor(acme.core.Actor):
             action = _sampler(random_key, action_logits)
 
             step_data = mz.logging.JAXBoardStepData({}, {})
+            step_data.add_hk_params(params)
             step_data.histograms["action_logits"] = action_logits
             step_data.histograms["action_entropy"] = action_entropy
             return action, step_data
@@ -115,7 +116,7 @@ class PriorPolicyActor(acme.core.Actor):
         self._adder.add(action, next_timestep)
 
     def update(self, wait: bool = False):
-        pass
+        self._client.update(wait)
 
     def close(self):
         for logger in self._loggers:

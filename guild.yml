@@ -1,16 +1,6 @@
-# test_model_supervised:
-#   notebook: test_model_supervised.ipynb
-#   flags-import: all
-#   sourcecode:
-#     - '*.py'
-#     - '*.yml'
-#     - '*.ipynb'
-#   output-scalars:
-#     - step: '^Loss = \value | Steps = (\step)$'
-#     - loss: '^Loss = (\value) | Steps = \step$'
-
 catch_vpg:
   main: scripts.catch_vpg
+  output-scalars: off
   flags:
     platform: gpu
     use_log: true

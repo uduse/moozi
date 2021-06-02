@@ -61,6 +61,7 @@ class PriorPolicyActor(acme.core.Actor):
         self._client = variable_client
         self._policy_fn = self._make_policy_fn(network, epsilon, temperature)
         self._loggers = loggers or self._get_default_loggers()
+        self._last_reward = 0
 
     def _get_default_loggers(self):
         # return [mz.logging.JAXBoardLogger(self._name, time_delta=5.0)]
@@ -107,12 +108,14 @@ class PriorPolicyActor(acme.core.Actor):
     def _log(self, data: mz.logging.JAXBoardStepData):
         for logger in self._loggers:
             if isinstance(logger, mz.logging.JAXBoardLogger):
+                data.scalars["last_reward"] = self._last_reward
                 logger.write(data)
 
     def observe_first(self, timestep: dm_env.TimeStep):
         self._adder.add_first(timestep)
 
     def observe(self, action: chex.Array, next_timestep: dm_env.TimeStep):
+        self._last_reward = next_timestep.reward
         self._adder.add(action, next_timestep)
 
     def update(self, wait: bool = False):

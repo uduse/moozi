@@ -94,7 +94,7 @@ class SGDLearner(acme.Learner):
         @jax.jit
         @chex.assert_max_traces(n=1)
         def _sgd_step(training_state: TrainingState, batch):
-            # computation
+            # gradient descend
             _, new_key = jax.random.split(training_state.rng_key)
             grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
                 network, training_state.params, batch

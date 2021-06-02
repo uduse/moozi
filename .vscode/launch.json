@@ -5,6 +5,14 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Python: minimum.py",
+            "type": "python",
+            "cwd": "${workspaceFolder}",
+            "request": "launch",
+            "program": "scripts/minimum.py",
+            "console": "integratedTerminal"
+        },
+        {
             "name": "Python: Current File",
             "type": "python",
             "request": "launch",

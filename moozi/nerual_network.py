@@ -76,7 +76,9 @@ class MLPNet(hk.Module):
 
     def repr_net(self, image):
         net = hk.nets.MLP(
-            output_sizes=[*self.spec.repr_net_sizes, self.spec.dim_repr], name="repr"
+            output_sizes=[*self.spec.repr_net_sizes, self.spec.dim_repr],
+            name="repr",
+            activation=jax.nn.tanh,
         )
         # NOTE: output is relu-ed, maybe it shouldn't be
         return net(image)

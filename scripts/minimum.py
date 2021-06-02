@@ -26,38 +26,43 @@ jax.config.update("jax_platform_name", platform)
 seed = 0
 key = jax.random.PRNGKey(seed)
 
-# In[3]:
-raw_env = open_spiel.python.rl_environment.Environment("catch(columns=7,rows=5)")
+# %%
+raw_env = open_spiel.python.rl_environment.Environment("catch(columns=3,rows=5)")
 env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
 env = acme.wrappers.SinglePrecisionWrapper(env)
 env_spec = acme.specs.make_environment_spec(env)
 max_game_length = env.environment.environment.game.max_game_length()
 dim_action = env_spec.actions.num_values
 dim_image = env_spec.observations.observation.shape[0]
-dim_repr = 3
+dim_repr = 2
 print(env_spec)
 
 
 # In[4]:
 nn_spec = mz.nn.NeuralNetworkSpec(
-    dim_image=dim_image, dim_repr=dim_repr, dim_action=dim_action
+    dim_image=dim_image,
+    dim_repr=dim_repr,
+    dim_action=dim_action,
+    repr_net_sizes=(2, 2),
+    pred_net_sizes=(2, 2),
+    dyna_net_sizes=(2, 2),
 )
 network = mz.nn.get_network(nn_spec)
-learning_rate = 1e-5
+learning_rate = 1e-2
 optimizer = optax.adam(learning_rate)
 print(nn_spec)
 
 
 # %%
 n_steps = 5
-batch_size = 128
+batch_size = 3
 reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
-    env_spec, batch_size=batch_size, n_step=n_steps, max_replay_size=2000, discount=0.9
+    env_spec, batch_size=batch_size, n_step=n_steps, max_replay_size=1000, discount=1
 )
 
 
 # %%
-time_delta = 1.0
+time_delta = 0.0
 key, new_key = jax.random.split(key)
 learner = mz.learner.SGDLearner(
     network=network,
@@ -95,7 +100,7 @@ actor = mz.actor.PriorPolicyActor(
 
 # %%
 agent = acme_agent.Agent(
-    actor=actor, learner=learner, min_observations=100, observations_per_step=100
+    actor=actor, learner=learner, min_observations=10, observations_per_step=1
 )
 
 # %%
@@ -103,10 +108,7 @@ agent = acme_agent.Agent(
 loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
 
 # %%
-loop.run_episode()
-
-# %%
-num_steps = 2000
+num_steps = 20
 loop.run(num_steps=num_steps)
 
 # %%

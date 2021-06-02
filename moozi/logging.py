@@ -10,7 +10,7 @@ import pytz
 
 import moozi as mz
 
-TIMEZONE = pytz.timezone("America/Edmonton")
+# TIMEZONE = pytz.timezone("America/Edmonton")
 
 # https://github.com/guildai/guildai/issues/290
 # TMP_LOG_DIR = None
@@ -58,18 +58,25 @@ class JAXBoardLogger(acme.utils.loggers.base.Logger):
         if (now - self._time) > self._time_delta:
             self._write_now(data)
             self._time = now
-            self._steps += 1
+        self._steps += 1
 
     def _write_now(self, data: JAXBoardStepData):
         for key in data.scalars:
             prefixed_key = self._name + ":" + key
-            self._writer.scalar(prefixed_key, data.scalars[key], step=self._steps)
-        self._writer.scalar("time", time.time())
+            self._writer.scalar(
+                tag=prefixed_key,
+                value=data.scalars[key],
+                step=self._steps,
+            )
+        # self._writer.scalar("time", time.time())
         for key in data.histograms:
             prefixed_key = self._name + ":" + key
             num_bins = 50
             self._writer.histogram(
-                prefixed_key, data.histograms[key], num_bins, step=self._steps
+                tag=prefixed_key,
+                values=data.histograms[key].block_until_ready(),
+                bins=num_bins,
+                step=self._steps,
             )
 
     def close(self):

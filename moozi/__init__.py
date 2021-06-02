@@ -6,6 +6,7 @@ from . import types
 from . import utils
 from . import nerual_network, nerual_network as nn  # alias
 from . import loss
+from . import jaxboard
 from . import logging
 from . import actor
 from . import learner

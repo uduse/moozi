@@ -63,7 +63,7 @@ learner = mz.learner.SGDLearner(
     random_key=jax.random.PRNGKey(996),
     loggers=[
         acme.utils.loggers.TerminalLogger(time_delta=2.0, print_fn=print),
-        # mz.logging.JAXBoardLogger("learner", time_delta=2.0),
+        mz.logging.JAXBoardLogger("learner", time_delta=2.0),
     ],
 )
 
@@ -103,7 +103,9 @@ loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
 loop.run_episode()
 
 # %%
-num_steps = 200
+num_steps = 1000
 loop.run(num_steps=num_steps)
 
 # %%
+actor.close()
+learner.close()

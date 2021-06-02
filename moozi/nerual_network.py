@@ -40,7 +40,7 @@ class NeuralNetworkSpec(typing.NamedTuple):
 
 def get_network(spec: NeuralNetworkSpec):
     # TODO: rename to build network
-    hk_module = functools.partial(_Simple, spec)
+    hk_module = functools.partial(MLPNet, spec)
     initial_inference = hk.without_apply_rng(
         hk.transform(lambda image: hk_module().initial_inference(image))
     )
@@ -65,7 +65,7 @@ def get_network(spec: NeuralNetworkSpec):
     return NeuralNetwork(init, initial_inference.apply, recurrent_inference.apply)
 
 
-class _Simple(hk.Module):
+class MLPNet(hk.Module):
     """
     NOTE: input tensors are assumed to have batch dimensions
     """

@@ -42,11 +42,21 @@ class NStepPriorVanillaPolicyGradientLoss(LossFn):
             adv_t=batch.data.reward,  # use full return as the target
             w_t=jnp.ones_like(action, dtype=float),
         )
-        entropy = rlax.softmax().entropy(logits=output_t.policy_logits)
-        return pg_loss, mz.logging.JAXBoardStepData(
-            scalars={"loss": pg_loss},
-            histograms={"entropy": entropy, "logits": output_t.policy_logits},
-        )
+        action_entropy = jnp.mean(rlax.softmax().entropy(logits=output_t.policy_logits))
+        chex.assert_rank(action_entropy, 0)
+        return pg_loss, {
+            "loss": pg_loss,
+            "logits": output_t.policy_logits,
+            "action_entropy": action_entropy,
+        }
+
+        # mz.logging.JAXBoardStepData(
+        #     scalars={"loss": pg_loss},
+        #     histograms={
+        #         "output_logits": output_t.policy_logits,
+        #         "action_entropy": action_entropy,
+        #     },
+        # )
 
 
 # def n_step_prior_adv_policy_gradient_loss(network: mz.nn.NeuralNetwork, params, batch):

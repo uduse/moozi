@@ -6,6 +6,7 @@ import chex
 import jax
 import jax.numpy as jnp
 import optax
+import rlax
 
 import moozi as mz
 import chex
@@ -87,25 +88,42 @@ class SGDLearner(acme.Learner):
             mz.logging.JAXBoardLogger(self._name, time_delta=5.0),
         ]
 
-    def _make_sgd_step_fn(self, network, loss_fn, optimizer):
+    def _make_sgd_step_fn(
+        self, network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, optimizer
+    ):
         @jax.jit
         @chex.assert_max_traces(n=1)
         def _sgd_step(training_state: TrainingState, batch):
-            # key, new_key = jax.random.split(training_state.rng_key)  # curently not using the key
+            # computation
             new_key = training_state.rng_key  # curently not using the key
-            step_data = mz.logging.JAXBoardStepData(scalars={}, histograms={})
             grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
                 network, training_state.params, batch
             )
-            step_data.update(extra)
             updates, new_opt_state = optimizer.update(grads, training_state.opt_state)
             new_params = optax.apply_updates(training_state.params, updates)
             steps = training_state.steps + 1
             new_training_state = TrainingState(
                 new_params, new_opt_state, steps, new_key
             )
+
+            # KL calculation
+            orig_logits = network.initial_inference(
+                training_state.params, batch.data.observation.observation
+            ).policy_logits
+            new_logits = network.initial_inference(
+                new_params, batch.data.observation.observation
+            ).policy_logits
+            prior_kl = jnp.mean(rlax.categorical_kl_divergence(orig_logits, new_logits))
+
+            # store data to log
+            step_data = mz.logging.JAXBoardStepData(scalars={}, histograms={})
+            step_data.scalars["loss"] = extra["loss"]
+            step_data.scalars["action_entropy"] = extra["action_entropy"]
+            step_data.scalars["prior_kl"] = prior_kl
+            step_data.histograms["logits"] = extra["logits"]
+            step_data.histograms["reward"] = batch.data.reward
             step_data.add_hk_params(new_params)
-            step_data.histograms.update({"reward": batch.data.reward})
+
             return new_training_state, step_data
 
         # TODO: multiple SGDs per training step, not tested for now
@@ -138,8 +156,11 @@ class SGDLearner(acme.Learner):
     def restore(self, state):
         self._state = state
 
-    def __del__(self):
+    def close(self):
         for logger in self._loggers:
             if isinstance(logger, mz.logging.JAXBoardLogger):
-                print(logger._name, 'closed')
+                print(logger._name, "closed")
                 logger.close()
+
+    def __del__(self):
+        self.close()

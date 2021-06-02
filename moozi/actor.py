@@ -81,12 +81,13 @@ class PriorPolicyActor(acme.core.Actor):
             action_logits = acme_utils.squeeze_batch_dim(network_output.policy_logits)
             chex.assert_rank(action_logits, 1)
             action_entropy = rlax.softmax().entropy(action_logits)
+            chex.assert_rank(action_entropy, 0)
             _sampler = rlax.epsilon_softmax(epsilon, temperature).sample
             action = _sampler(random_key, action_logits)
 
             step_data = mz.logging.JAXBoardStepData({}, {})
+            step_data.histograms["action_logits"] = action_logits
             step_data.histograms["action_entropy"] = action_entropy
-            # step_data.scalars["selected_action_entropy"] = action_entropy[action]
             return action, step_data
 
         return _policy_fn
@@ -121,3 +122,6 @@ class PriorPolicyActor(acme.core.Actor):
             if isinstance(logger, mz.logging.JAXBoardLogger):
                 print(logger._name, "closed")
                 logger.close()
+
+    def __del__(self):
+        self.close()

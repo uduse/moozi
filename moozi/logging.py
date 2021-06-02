@@ -6,7 +6,6 @@ import uuid
 import acme
 import haiku as hk
 import jax.numpy as jnp
-import jaxboard
 import pytz
 
 import moozi as mz
@@ -14,21 +13,19 @@ import moozi as mz
 TIMEZONE = pytz.timezone("America/Edmonton")
 
 # https://github.com/guildai/guildai/issues/290
-TMP_LOG_DIR = None
-
-
-def get_log_dir():
-    global TMP_LOG_DIR
-    guild_ai_run_dir_key = "RUN_DIR"
-    env_items = dict(os.environ.items())
-    if guild_ai_run_dir_key in env_items:
-        return env_items[guild_ai_run_dir_key]
-    elif TMP_LOG_DIR:
-        return TMP_LOG_DIR
-    else:
-        TMP_LOG_DIR = "/tmp/moozi-log-" + str(uuid.uuid4())[:16]
-        print(f"Using log directory {TMP_LOG_DIR}")
-        return TMP_LOG_DIR
+# TMP_LOG_DIR = None
+# def get_log_dir():
+#     global TMP_LOG_DIR
+#     guild_ai_run_dir_key = "RUN_DIR"
+#     env_items = dict(os.environ.items())
+#     if guild_ai_run_dir_key in env_items:
+#         return env_items[guild_ai_run_dir_key]
+#     elif TMP_LOG_DIR:
+#         return TMP_LOG_DIR
+#     else:
+#         TMP_LOG_DIR = "/tmp/moozi-log-" + str(uuid.uuid4())[:16]
+#         print(f"Using log directory {TMP_LOG_DIR}")
+#         return TMP_LOG_DIR
 
 
 class JAXBoardStepData(typing.NamedTuple):
@@ -49,11 +46,11 @@ class JAXBoardStepData(typing.NamedTuple):
 class JAXBoardLogger(acme.utils.loggers.base.Logger):
     def __init__(self, name, log_dir=None, time_delta: float = 0.0):
         self._name = name
-        self._log_dir = log_dir or "./tb"
+        self._log_dir = log_dir or "./tensorboard_log/"
         self._time_delta = time_delta
         self._time = time.time()
         self._steps = 0
-        self._writer = jaxboard.SummaryWriter(log_dir=self._log_dir)
+        self._writer = mz.jaxboard.SummaryWriter(name, log_dir=self._log_dir)
         print(f"{self._name} is logging to {self._log_dir}")
 
     def write(self, data: JAXBoardStepData):
@@ -81,11 +78,3 @@ class JAXBoardLogger(acme.utils.loggers.base.Logger):
         Otherwise unexpected hangings may occur.
         """
         return self._writer.close()
-
-    def __del__(self):
-        try:
-            self.close()
-            del self._writer
-        except Exception as e:
-            print(e)
-            pass

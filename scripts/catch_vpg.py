@@ -14,9 +14,9 @@ from acme.agents import agent as acme_agent
 from acme.agents import replay as acme_replay
 
 # %%
-debug = True
-if debug:
-    jax.config.update("jax_disable_jit", True)
+use_jit = True
+if use_jit:
+    jax.config.update("jax_disable_jit", not use_jit)
 
 # %%
 platform = "cpu"
@@ -34,7 +34,7 @@ env_spec = acme.specs.make_environment_spec(env)
 max_game_length = env.environment.environment.game.max_game_length()
 dim_action = env_spec.actions.num_values
 dim_image = env_spec.observations.observation.shape[0]
-dim_repr = 3
+dim_repr = 1
 print(env_spec)
 
 
@@ -43,7 +43,7 @@ nn_spec = mz.nn.NeuralNetworkSpec(
     dim_image=dim_image, dim_repr=dim_repr, dim_action=dim_action
 )
 network = mz.nn.get_network(nn_spec)
-learning_rate = 1e-5
+learning_rate = 5e-3
 optimizer = optax.adam(learning_rate)
 print(nn_spec)
 
@@ -52,7 +52,7 @@ print(nn_spec)
 n_steps = 5
 batch_size = 128
 reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
-    env_spec, batch_size=batch_size, n_step=n_steps, max_replay_size=2000, discount=0.9
+    env_spec, batch_size=batch_size, n_step=n_steps, max_replay_size=2000, discount=1.0
 )
 
 

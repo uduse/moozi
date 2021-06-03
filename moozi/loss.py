@@ -44,8 +44,10 @@ class NStepPriorVanillaPolicyGradientLoss(LossFn):
         )
         action_entropy = jnp.mean(rlax.softmax().entropy(logits=output_t.policy_logits))
         chex.assert_rank(action_entropy, 0)
-        return pg_loss, {
-            "loss": pg_loss,
+        l2_loss = rlax.l2_loss(params)
+        loss = pg_loss + l2_loss
+        return loss, {
+            "loss": loss,
             "logits": output_t.policy_logits,
             "action_entropy": action_entropy,
         }

@@ -1,5 +1,6 @@
 Milestones:
-  ☐ vanilla policy gradient using two inferences
+  ✘ vanilla policy gradient using two inferences @cancelled(21-06-06 15:57)
+  ☐ policy gradient method with advantage
   ☐ exhaustive search with depth of 1
 
 Network:
@@ -19,3 +20,8 @@ MCTS:
 
 Utils:
   ☐ coverage report
+  ☐ profiling https://jax.readthedocs.io/en/latest/profiling.html
+  ☐ hyper-parameters tuning https://my.guild.ai/t/hyperparameter-optimization/161
+
+MISCs:
+  ☐ decode guild.yaml flag types, e.g., loguniform to integer

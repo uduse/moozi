@@ -117,11 +117,9 @@ class SGDLearner(acme.Learner):
 
             # store data to log
             step_data = mz.logging.JAXBoardStepData(scalars={}, histograms={})
-            step_data.scalars["loss"] = extra["loss"]
-            step_data.scalars["action_entropy"] = extra["action_entropy"]
+            step_data.update(extra)
             step_data.scalars["prior_kl"] = prior_kl
-            step_data.histograms["logits"] = extra["logits"]
-            step_data.histograms["reward"] = jnp.mean(batch.data.reward)
+            step_data.histograms["reward"] = batch.data.reward
             step_data.add_hk_params(new_params)
 
             return new_training_state, step_data

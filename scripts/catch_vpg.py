@@ -22,11 +22,11 @@ if use_jit:
 platform = "cpu"
 jax.config.update("jax_platform_name", platform)
 
-# In[2]:
+# %%
 seed = 0
 key = jax.random.PRNGKey(seed)
 
-# In[3]:
+# %%
 raw_env = open_spiel.python.rl_environment.Environment("catch(columns=7,rows=5)")
 env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
 env = acme.wrappers.SinglePrecisionWrapper(env)
@@ -34,34 +34,45 @@ env_spec = acme.specs.make_environment_spec(env)
 max_game_length = env.environment.environment.game.max_game_length()
 dim_action = env_spec.actions.num_values
 dim_image = env_spec.observations.observation.shape[0]
-dim_repr = 1
+dim_repr = 2
 print(env_spec)
 
 
-# In[4]:
+# %%
 nn_spec = mz.nn.NeuralNetworkSpec(
-    dim_image=dim_image, dim_repr=dim_repr, dim_action=dim_action
+    dim_image=dim_image,
+    dim_repr=dim_repr,
+    dim_action=dim_action,
+    repr_net_sizes=(2,),
+    pred_net_sizes=(2,),
+    dyna_net_sizes=(2,),
 )
 network = mz.nn.get_network(nn_spec)
-learning_rate = 5e-3
-optimizer = optax.adam(learning_rate)
+lr = 1e-4
+optimizer = optax.adam(lr)
 print(nn_spec)
 
 
 # %%
-n_steps = 5
-batch_size = 128
+
+batch_size = 100
+max_replay_size = 10000
 reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
-    env_spec, batch_size=batch_size, n_step=n_steps, max_replay_size=2000, discount=1.0
+    env_spec,
+    batch_size=batch_size,
+    n_step=5,
+    max_replay_size=int(max_replay_size),
+    discount=1.0,
 )
 
 
 # %%
-time_delta = 1.0
+time_delta = 10.0
+weight_decay = 1e-4
 key, new_key = jax.random.split(key)
 learner = mz.learner.SGDLearner(
     network=network,
-    loss_fn=mz.loss.NStepPriorVanillaPolicyGradientLoss(),
+    loss_fn=mz.loss.OneStepAdvantagePolicyGradientLoss(weight_decay=weight_decay),
     optimizer=optimizer,
     data_iterator=reverb_replay.data_iterator,
     random_key=new_key,
@@ -72,12 +83,12 @@ learner = mz.learner.SGDLearner(
 )
 
 
-# In[7]:
+# %%
 key, new_key = jax.random.split(key)
 variable_client = acme.jax.variable_utils.VariableClient(learner, "")
 
 
-# In[8]:
+# %%
 key, new_key = jax.random.split(key)
 actor = mz.actor.PriorPolicyActor(
     environment_spec=env_spec,
@@ -94,21 +105,23 @@ actor = mz.actor.PriorPolicyActor(
 )
 
 # %%
+obs_ratio = 10
+min_observations = 1000
 agent = acme_agent.Agent(
-    actor=actor, learner=learner, min_observations=100, observations_per_step=100
+    actor=actor,
+    learner=learner,
+    min_observations=min_observations,
+    observations_per_step=int(obs_ratio),
 )
 
 # %%
-# loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
 loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
 
 # %%
-loop.run_episode()
-
-# %%
-num_steps = 2000
+num_steps = max_replay_size
 loop.run(num_steps=num_steps)
 
 # %%
+# manually close the loggers to avoid writing problems
 actor.close()
 learner.close()

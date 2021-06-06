@@ -3,6 +3,7 @@ import sys
 import os
 import time
 import acme.wrappers.open_spiel_wrapper
+import dm_env
 import jax
 import moozi as mz
 import open_spiel.python.rl_environment
@@ -118,3 +119,25 @@ def test_logger(mocker: MockerFixture, tmp_path):
     logger.write(mz.logging.JAXBoardStepData({}, {}))
     logger.close()
     spy.assert_called_once()
+
+
+def test_add_search_stats():
+    start = mz.utils.make_moozi_observation(
+        env_timestep=dm_env.restart(0), root_value=-10, child_visits=[1, 2]
+    )
+    mid = mz.utils.make_moozi_observation(
+        env_timestep=dm_env.transition(
+            reward=1, observation={"action": 0, "image": [0, 1]}, discount=0.5
+        ),
+        root_value=30,
+        child_visits=[10, 20],
+    )
+    end = mz.utils.make_moozi_observation(
+        env_timestep=dm_env.termination(
+            reward=3, observation={"action": 0, "image": [3, 4]}
+        ),
+        root_value=40,
+        child_visits=[100, 200],
+    )
+    print(start)
+    # mz.utils.make_moozi_observation(end, end_search)

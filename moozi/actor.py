@@ -61,10 +61,10 @@ class PriorPolicyActor(acme.core.Actor):
         self._client = variable_client
         self._policy_fn = self._make_policy_fn(network, epsilon, temperature)
         self._loggers = loggers or self._get_default_loggers()
-        self._last_reward = 0
+        self._last_rewards = []
+        self._last_actions = []
 
     def _get_default_loggers(self):
-        # return [mz.logging.JAXBoardLogger(self._name, time_delta=5.0)]
         return []
 
     def _make_policy_fn(self, network, epsilon, temperature):
@@ -88,8 +88,8 @@ class PriorPolicyActor(acme.core.Actor):
 
             step_data = mz.logging.JAXBoardStepData({}, {})
             step_data.add_hk_params(params)
+            step_data.scalars["action_entropy"] = action_entropy
             step_data.histograms["action_logits"] = action_logits
-            step_data.histograms["action_entropy"] = action_entropy
             return action, step_data
 
         return _policy_fn
@@ -103,19 +103,27 @@ class PriorPolicyActor(acme.core.Actor):
             random_key=new_key,
         )
         self._log(step_data)
+        self._last_actions.append(action)
+        self._last_actions = self._last_actions[-1000:]
         return action
 
     def _log(self, data: mz.logging.JAXBoardStepData):
         for logger in self._loggers:
             if isinstance(logger, mz.logging.JAXBoardLogger):
-                data.scalars["last_reward"] = self._last_reward
+                data.scalars["rolling_reward"] = np.mean(self._last_rewards)
+                data.histograms["last_rewards"] = self._last_rewards
+                data.histograms["last_actions"] = self._last_actions
                 logger.write(data)
 
     def observe_first(self, timestep: dm_env.TimeStep):
+        # timestep.observation = {"env": timestep.observation, "search": None}
         self._adder.add_first(timestep)
 
     def observe(self, action: chex.Array, next_timestep: dm_env.TimeStep):
-        self._last_reward = next_timestep.reward
+        if next_timestep.last():
+            self._last_rewards.append(next_timestep.reward)
+            self._last_rewards = self._last_rewards[-1000:]
+        # next_timestep.observation = {"env": next_timestep.observation, "search": None}
         self._adder.add(action, next_timestep)
 
     def update(self, wait: bool = False):

@@ -1,11 +1,33 @@
-catch_vpg:
-  main: scripts.catch_vpg
-  output-scalars: off
-  flags:
-    platform: gpu
-    use_log: true
-  flags-import: all
-  sourcecode:
-    - "*.py"
-    - "*.yml"
-    - "*.ipynb"
+- model: pg
+  descript: Policy Gradient method on the game of Catch
+  operations:
+    run:
+      main: scripts.catch_vpg
+      output-scalars: off
+      flags-import: all
+      plugins: all
+    sanity:
+      description: sanity check
+      steps:
+        - run: run
+          flags:
+            batch_size: 10
+            min_observations: 10
+            num_steps: 100
+            platform: cpu
+            use_log: false
+    tune:
+      description: tune PG
+      steps:
+        - run: run
+          maximize: "actor:rolling_reward"
+          max-trials: 50
+          optimizer: gbrt
+          flags:
+            batch_size: 2048
+            dim_repr: [1, 2, 3]
+            lr: loguniform[1e-2:5e-1]
+            max_replay_size: loguniform[1e3:1e7]
+            num_steps: 50000
+            obs_ratio: loguniform[1e1:1e7]
+            weight_decay: loguniform[1e-4:1e-3]

@@ -74,7 +74,7 @@ class JAXBoardLogger(acme.utils.loggers.base.Logger):
             num_bins = 50
             self._writer.histogram(
                 tag=prefixed_key,
-                values=data.histograms[key].block_until_ready(),
+                values=data.histograms[key],
                 bins=num_bins,
                 step=self._steps,
             )

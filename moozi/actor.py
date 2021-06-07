@@ -110,9 +110,10 @@ class PriorPolicyActor(acme.core.Actor):
     def _log(self, data: mz.logging.JAXBoardStepData):
         for logger in self._loggers:
             if isinstance(logger, mz.logging.JAXBoardLogger):
-                data.scalars["rolling_reward"] = np.mean(self._last_rewards)
-                data.histograms["last_rewards"] = self._last_rewards
-                data.histograms["last_actions"] = self._last_actions
+                if len(self._last_rewards) >= 1000:
+                    data.scalars["rolling_reward"] = np.mean(self._last_rewards)
+                    data.histograms["last_rewards"] = self._last_rewards
+                    data.histograms["last_actions"] = self._last_actions
                 logger.write(data)
 
     def observe_first(self, timestep: dm_env.TimeStep):

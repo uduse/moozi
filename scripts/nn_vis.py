@@ -12,12 +12,17 @@ vis_dir = project_root_dir / "vis"
 
 # %%
 dim_batch = 32
-dim_image = 10
+dim_image = 35
 dim_repr = 2
-dim_action = 5
+dim_action = 3
 network = mz.nn.get_network(
     mz.nn.NeuralNetworkSpec(
-        dim_image=dim_image, dim_repr=dim_repr, dim_action=dim_action
+        dim_image=dim_image,
+        dim_repr=dim_repr,
+        dim_action=dim_action,
+        repr_net_sizes=(2,),
+        pred_net_sizes=(2,),
+        dyna_net_sizes=(2,),
     )
 )
 key = jax.random.PRNGKey(0)

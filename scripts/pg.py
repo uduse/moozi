@@ -34,7 +34,7 @@ env_spec = acme.specs.make_environment_spec(env)
 max_game_length = env.environment.environment.game.max_game_length()
 dim_action = env_spec.actions.num_values
 dim_image = env_spec.observations.observation.shape[0]
-dim_repr = 2
+dim_repr = 8
 print(env_spec)
 
 
@@ -43,20 +43,20 @@ nn_spec = mz.nn.NeuralNetworkSpec(
     dim_image=dim_image,
     dim_repr=dim_repr,
     dim_action=dim_action,
-    repr_net_sizes=(2,),
-    pred_net_sizes=(2,),
-    dyna_net_sizes=(2,),
+    repr_net_sizes=(32, 32),
+    pred_net_sizes=(32, 32),
+    dyna_net_sizes=(32, 32),
 )
 network = mz.nn.get_network(nn_spec)
-lr = 1e-4
+lr = 1e-1
 optimizer = optax.adam(lr)
 print(nn_spec)
 
 
 # %%
 
-batch_size = 100
-max_replay_size = 10000
+batch_size = 2048
+max_replay_size = 100_000
 reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
     env_spec,
     batch_size=batch_size,
@@ -105,8 +105,8 @@ actor = mz.actor.PriorPolicyActor(
 )
 
 # %%
-obs_ratio = 10
-min_observations = 1000
+obs_ratio = 10000
+min_observations = 50000
 agent = acme_agent.Agent(
     actor=actor,
     learner=learner,

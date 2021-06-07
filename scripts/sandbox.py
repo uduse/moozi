@@ -27,69 +27,21 @@ use_jit = True
 if use_jit:
     jax.config.update("jax_disable_jit", not use_jit)
 
+platform = "cpu"
+jax.config.update("jax_platform_name", platform)
+
 # %%
-class MuZeroTrainTarget(typing.NamedTuple):
-    value: float
-    reward: float
-    child_visits: typing.List[int]
+raw_env = open_spiel.python.rl_environment.Environment("catch(columns=7,rows=5)")
+env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
+env = acme.wrappers.SinglePrecisionWrapper(env)
+env_spec = acme.specs.make_environment_spec(env)
+replay = acme_replay.make_reverb_prioritized_nstep_replay(env_spec)
+
+# %%
+replay.adder.signature(env_spec)
 
 
-class MuZeroAdder(ReverbAdder):
-    def __init__(
-        self,
-        client: reverb.Client,
-        num_unroll_steps: int,
-        # td_steps: int,
-        discount: float,
-    ):
-        self._num_unroll_steps = num_unroll_steps
-        self._discount = tree.map_structure(np.float32, discount)
+# %%
 
-        # according to the pseudocode, 500 is roughly enough for board games
-        max_sequence_length = 500
-        # use full monte-carlo return for board games
-        self._td_steps = max_sequence_length
-        super().__init__(
-            client=client,
-            max_sequence_length=max_sequence_length,
-            max_in_flight_items=1,
-        )
-
-    def _write(self):
-        # This adder only writes at the end of the episode, see _write_last()
-        pass
-
-    def _write_last(self):
-        trajectory = tree.map_structure(lambda x: x[:], self._writer.history)
-        
-
-        self._writer.create_item()
-
-# # %%
-# TEST_CASES = [
-#     dict(
-#         testcase_name="OneStepFinalReward",
-#         n_step=1,
-#         additional_discount=1.0,
-#         first=dm_env.restart(1),
-#         steps=(
-#             (0, dm_env.transition(reward=0.0, observation=2)),
-#             (0, dm_env.transition(reward=0.0, observation=3)),
-#             (0, dm_env.termination(reward=1.0, observation=4)),
-#         ),
-#         expected_transitions=(
-#             (1, 0, 0.0, 1.0, 2),
-#             (2, 0, 0.0, 1.0, 3),
-#             (3, 0, 1.0, 0.0, 4),
-#         ),
-#     ),
-# ]
-
-
-# num_unroll_steps = 3
-# discount = 1.0
-
-
-# # %%
-# # need: root_values, discount, rewards, child_visits
-# def make_target(num_unroll_steps, td_steps):
+mz_adder = MooZiAdder(None)
+mz_adder.signature(env_spec)

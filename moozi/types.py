@@ -5,7 +5,8 @@ Type hints precedence:
     - moozi
     - python
 
-Avoid using acme.types, it's too complicated
+Avoid using acme.types, it's too complicated (really? need to reconsider)
+Maybe we should put all custom types here.
 """
 import typing
 

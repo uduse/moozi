@@ -5,11 +5,22 @@ import dm_env
 import typing
 import random
 
-# need: root_values, discount, rewards, child_visits
+
 class MooZiObservation(typing.NamedTuple):
     env: dm_env.TimeStep
     root_value: float
     child_visits: chex.ArrayDevice
+
+
+class MooZiTrainTarget(typing.NamedTuple):
+    # to unroll
+    images: chex.ArrayDevice
+    actions: chex.ArrayDevice
+
+    # to compute losses
+    child_visits: chex.ArrayDevice
+    last_rewards: chex.ArrayDevice
+    values: chex.ArrayDevice
 
 
 def make_moozi_observation(env_timestep: dm_env.TimeStep, root_value, child_visits):

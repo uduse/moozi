@@ -14,7 +14,7 @@ class MooZiObservation(typing.NamedTuple):
 
 class MooZiTrainTarget(typing.NamedTuple):
     # to unroll
-    images: chex.ArrayDevice
+    observations: chex.ArrayDevice
     actions: chex.ArrayDevice
 
     # to compute losses

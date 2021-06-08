@@ -86,10 +86,8 @@ class MLPNet(hk.Module):
             activation=jnp.tanh,
             activate_final=True,
         )
-        v_branch = hk.nets.MLP(output_sizes=[1], name="pred_v", activate_final=True)
-        p_branch = hk.nets.MLP(
-            output_sizes=[self.spec.dim_action], name="pred_p", activate_final=True
-        )
+        v_branch = hk.Linear(output_size=1, name="pred_v")
+        p_branch = hk.Linear(output_size=self.spec.dim_action, name="pred_p")
 
         pred_trunk_out = pred_trunk(hidden_state)
         value = jnp.squeeze(v_branch(pred_trunk_out), axis=-1)

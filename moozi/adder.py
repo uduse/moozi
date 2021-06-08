@@ -6,6 +6,7 @@ import numpy as np
 import reverb
 import tree
 from acme import specs as acme_specs
+from acme import types as acme_types
 from acme.adders import reverb as acme_reverb
 from acme.adders.reverb import base
 from acme.adders.reverb import utils as acme_reverb_utils
@@ -22,6 +23,7 @@ class MooZiAdder(acme_reverb.ReverbAdder):
         num_td_steps: int = 1000,
         discount: float = 1,
     ):
+
         self._client = client
         self._num_unroll_steps = num_unroll_steps
         self._num_td_steps = num_td_steps
@@ -46,26 +48,31 @@ class MooZiAdder(acme_reverb.ReverbAdder):
         print(trajectory)
         self._writer.create_item(acme_reverb.DEFAULT_PRIORITY_TABLE, 1, trajectory)
 
-    def signature(self, env_spec):
-        rewards_spec, step_discounts_spec = acme_tree_utils.broadcast_structures(
-            env_spec.rewards, env_spec.discounts
+    def signature(self, env_spec: acme_specs.EnvironmentSpec):
+        orig_obs_spec = env_spec.observations.observation
+        stacked_frames_shape = (self._num_stacked_images,) + orig_obs_spec.shape
+        observations_spec = env_spec.observations._replace(
+            observation=orig_obs_spec.replace(shape=stacked_frames_shape)
         )
-        rewards_spec = tree.map_structure(
-            _broadcast_specs, rewards_spec, step_discounts_spec
+        rewards_spec = tree.map_structure(_broadcast_specs, env_spec.rewards)
+        child_visits_spec = acme_specs.Array(
+            shape=(env_spec.actions.num_values,), dtype=int
         )
-        step_discounts_spec = tree.map_structure(copy.deepcopy, step_discounts_spec)
 
-        transition_spec = types.Transition(
-            env_spec.observations,
-            env_spec.actions,
-            rewards_spec,
-            step_discounts_spec,
-            env_spec.observations,  # next_observation
-            extras_spec,
+        transition_spec = mz.utils.MooZiTrainTarget(
+            observations=observations_spec,
+            actions=env_spec.actions,
+            child_visits=child_visits_spec,
+            last_rewards=rewards_spec,
+            values=(),
         )
 
         return tree.map_structure_with_path(
             base.spec_like_to_tensor_spec, transition_spec
         )
-        # print('hello')
-        # acme_tree_utils.broadcast_structures()
+
+
+def _broadcast_specs(*args: acme_specs.Array) -> acme_specs.Array:
+    bc_info = np.broadcast(*tuple(a.generate_value() for a in args))
+    dtype = np.result_type(*tuple(a.dtype for a in args))
+    return acme_specs.Array(shape=bc_info.shape, dtype=dtype)

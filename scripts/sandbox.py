@@ -40,8 +40,9 @@ replay = acme_replay.make_reverb_prioritized_nstep_replay(env_spec)
 # %%
 replay.adder.signature(env_spec)
 
-
 # %%
 
-mz_adder = MooZiAdder(None)
+mz_adder = mz.adder.MooZiAdder(
+    None, num_unroll_steps=5, num_stacked_images=8, num_td_steps=10, discount=0.9
+)
 mz_adder.signature(env_spec)

@@ -164,4 +164,4 @@ cython_debug/
 .Trash*/
 .jupyter/
 prof/
-tensorboard-log/
+tensorboard_log/

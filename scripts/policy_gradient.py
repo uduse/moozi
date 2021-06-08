@@ -55,8 +55,8 @@ print(nn_spec)
 
 # %%
 
-batch_size = 2048
-max_replay_size = 100_000
+batch_size = 2000
+max_replay_size = 50_000
 reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
     env_spec,
     batch_size=batch_size,
@@ -69,10 +69,13 @@ reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
 # %%
 time_delta = 10.0
 weight_decay = 1e-4
+entropy_reg = 2
 key, new_key = jax.random.split(key)
 learner = mz.learner.SGDLearner(
     network=network,
-    loss_fn=mz.loss.OneStepAdvantagePolicyGradientLoss(weight_decay=weight_decay),
+    loss_fn=mz.loss.OneStepAdvantagePolicyGradientLoss(
+        weight_decay=weight_decay, entropy_reg=entropy_reg
+    ),
     optimizer=optimizer,
     data_iterator=reverb_replay.data_iterator,
     random_key=new_key,
@@ -105,8 +108,8 @@ actor = mz.actor.PriorPolicyActor(
 )
 
 # %%
-obs_ratio = 10000
-min_observations = 50000
+obs_ratio = 100
+min_observations = 1000
 agent = acme_agent.Agent(
     actor=actor,
     learner=learner,
@@ -118,7 +121,7 @@ agent = acme_agent.Agent(
 loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
 
 # %%
-num_steps = max_replay_size
+num_steps = 1_000_000
 loop.run(num_steps=num_steps)
 
 # %%

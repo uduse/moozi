@@ -33,60 +33,60 @@ def params_l2_loss(params):
     return 0.5 * sum(jnp.sum(jnp.square(p)) for p in jax.tree_leaves(params))
 
 
-class NStepPriorVanillaPolicyGradientLoss(LossFn):
-    def __init__(self, weight_decay: float = 1e-4, entropy_loss: float = 1e-4):
-        self._weight_decay = weight_decay
-        self._entropy_loss = entropy_loss
+# class NStepPriorVanillaPolicyGradientLoss(LossFn):
+#     def __init__(self, weight_decay: float = 1e-4, entropy_loss: float = 1e-1):
+#         self._weight_decay = weight_decay
+#         self._entropy_loss = entropy_loss
 
-    def __call__(
-        self,
-        network: mz.nn.NeuralNetwork,
-        params: chex.ArrayTree,
-        batch,
-    ) -> typing.Any:
-        r"""
-        Assume the batch data contains: (s_t, a_t, R_{t:t+n}, D_{t:t+n}, s_{t+N})
-        """
-        output_t = network.initial_inference(params, batch.data.observation.observation)
-        action = batch.data.action
-        pg_loss = rlax.policy_gradient_loss(
-            logits_t=output_t.policy_logits,
-            a_t=action,
-            adv_t=batch.data.reward,  # use full return as the target
-            w_t=jnp.ones_like(action, dtype=float),
-        )
-        action_entropy = jnp.mean(rlax.softmax().entropy(logits=output_t.policy_logits))
-        chex.assert_rank(action_entropy, 0)
-        weight_loss = params_l2_loss(params) * self._weight_decay
-        entropy_loss = (
-            rlax.entropy_loss(
-                output_t.policy_logits, jnp.ones_like(action, dtype=float)
-            )
-            * self._entropy_loss
-        )
-        loss = pg_loss + weight_loss + entropy_loss
-        return loss, {
-            "loss": loss,
-            "pg_loss": pg_loss,
-            "weight_loss": weight_loss,
-            "entropy_loss": entropy_loss,
-            "logits": output_t.policy_logits,
-            "action_entropy": action_entropy,
-        }
+#     def __call__(
+#         self,
+#         network: mz.nn.NeuralNetwork,
+#         params: chex.ArrayTree,
+#         batch,
+#     ) -> typing.Any:
+#         r"""
+#         Assume the batch data contains: (s_t, a_t, R_{t:t+n}, D_{t:t+n}, s_{t+N})
+#         """
+#         output_t = network.initial_inference(params, batch.data.observation.observation)
+#         action = batch.data.action
+#         pg_loss = rlax.policy_gradient_loss(
+#             logits_t=output_t.policy_logits,
+#             a_t=action,
+#             adv_t=batch.data.reward,  # use full return as the target
+#             w_t=jnp.ones_like(action, dtype=float),
+#         )
+#         action_entropy = jnp.mean(rlax.softmax().entropy(logits=output_t.policy_logits))
+#         chex.assert_rank(action_entropy, 0)
+#         weight_loss = params_l2_loss(params) * self._weight_decay
+#         entropy_loss = (
+#             rlax.entropy_loss(
+#                 output_t.policy_logits, jnp.ones_like(action, dtype=float)
+#             )
+#             * self._entropy_loss
+#         )
+#         loss = pg_loss + weight_loss + entropy_loss
+#         return loss, {
+#             "loss": loss,
+#             "pg_loss": pg_loss,
+#             "weight_loss": weight_loss,
+#             "entropy_loss": entropy_loss,
+#             "logits": output_t.policy_logits,
+#             "action_entropy": action_entropy,
+#         }
 
-        # mz.logging.JAXBoardStepData(
-        #     scalars={"loss": pg_loss},
-        #     histograms={
-        #         "output_logits": output_t.policy_logits,
-        #         "action_entropy": action_entropy,
-        #     },
-        # )
+#         # mz.logging.JAXBoardStepData(
+#         #     scalars={"loss": pg_loss},
+#         #     histograms={
+#         #         "output_logits": output_t.policy_logits,
+#         #         "action_entropy": action_entropy,
+#         #     },
+#         # )
 
 
 class OneStepAdvantagePolicyGradientLoss(LossFn):
-    def __init__(self, weight_decay: float = 1e-4, entropy_loss: float = 1e-4):
+    def __init__(self, weight_decay: float = 1e-4, entropy_reg: float = 1e-1):
         self._weight_decay = weight_decay
-        # self._entropy_loss = entropy_loss
+        self._entropy_reg = entropy_reg
 
     def __call__(
         self,
@@ -118,12 +118,11 @@ class OneStepAdvantagePolicyGradientLoss(LossFn):
             w_t=jnp.ones_like(action, dtype=float),
         )
         l2_loss = params_l2_loss(params) * self._weight_decay
-        loss = pg_loss + l2_loss + v_loss + q_loss
-        chex.assert_rank([pg_loss, l2_loss, v_loss, q_loss, loss], 0)
+        raw_entropy = rlax.softmax().entropy(logits=output_t.policy_logits)
+        entropy_loss = -jnp.mean(raw_entropy) * self._entropy_reg
+        loss = pg_loss + l2_loss + v_loss + q_loss + entropy_loss
+        chex.assert_rank([loss, pg_loss, l2_loss, v_loss, q_loss, entropy_loss], 0)
 
-        # compute other info
-        action_entropy = jnp.mean(rlax.softmax().entropy(logits=output_t.policy_logits))
-        chex.assert_rank(action_entropy, 0)
         return loss, JAXBoardStepData(
             scalars={
                 "loss": loss,
@@ -131,7 +130,7 @@ class OneStepAdvantagePolicyGradientLoss(LossFn):
                 "q_loss": q_loss,
                 "pg_loss": pg_loss,
                 "l2_loss": l2_loss,
-                "action_entropy": action_entropy,
+                "entropy_loss": entropy_loss,
             },
             histograms={
                 "v": output_t.value,

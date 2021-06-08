@@ -2,10 +2,11 @@
   descript: Policy Gradient method on the game of Catch
   operations:
     run:
-      main: scripts.catch_vpg
+      default: true
+      main: scripts.policy_gradient
       output-scalars: off
       flags-import: all
-      plugins: all
+      # plugins: all
     sanity:
       description: sanity check
       steps:
@@ -20,14 +21,16 @@
       description: tune PG
       steps:
         - run: run
+          tag: tune
           maximize: "actor:rolling_reward"
           max-trials: 50
           optimizer: gbrt
           flags:
             batch_size: 2048
-            dim_repr: 10
-            lr: loguniform[1e-2:5e-1]
+            dim_repr: [2, 5, 10]
+            lr: loguniform[1e-3:5e-1]
             max_replay_size: loguniform[1e3:1e7]
-            num_steps: 50000
-            obs_ratio: loguniform[1e1:1e7]
+            num_steps: 500_000
+            obs_ratio: loguniform[1:1e5]
             weight_decay: loguniform[1e-4:1e-3]
+            entropy_reg: loguniform[5e-2:2]

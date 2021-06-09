@@ -9,9 +9,10 @@ import moozi as mz
 import numpy as np
 import open_spiel
 import optax
-from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironmentLoop
 from acme.agents import agent as acme_agent
 from acme.agents import replay as acme_replay
+from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironmentLoop
+from acme.utils.loggers import NoOpLogger
 
 # %%
 use_jit = True
@@ -27,7 +28,7 @@ seed = 0
 key = jax.random.PRNGKey(seed)
 
 # %%
-raw_env = open_spiel.python.rl_environment.Environment("catch(columns=7,rows=5)")
+raw_env = open_spiel.python.rl_environment.Environment("catch(columns=5,rows=5)")
 env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
 env = acme.wrappers.SinglePrecisionWrapper(env)
 env_spec = acme.specs.make_environment_spec(env)
@@ -43,12 +44,12 @@ nn_spec = mz.nn.NeuralNetworkSpec(
     dim_image=dim_image,
     dim_repr=dim_repr,
     dim_action=dim_action,
-    repr_net_sizes=(32, 32),
-    pred_net_sizes=(32, 32),
-    dyna_net_sizes=(32, 32),
+    repr_net_sizes=(256, 256),
+    pred_net_sizes=(256, 256),
+    dyna_net_sizes=(256, 256),
 )
 network = mz.nn.get_network(nn_spec)
-lr = 1e-1
+lr = 5e-4
 optimizer = optax.adam(lr)
 print(nn_spec)
 
@@ -56,7 +57,7 @@ print(nn_spec)
 # %%
 
 batch_size = 2000
-max_replay_size = 50_000
+max_replay_size = 100_000
 reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
     env_spec,
     batch_size=batch_size,
@@ -69,7 +70,7 @@ reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
 # %%
 time_delta = 10.0
 weight_decay = 1e-4
-entropy_reg = 2
+entropy_reg = 7e-1
 key, new_key = jax.random.split(key)
 learner = mz.learner.SGDLearner(
     network=network,
@@ -108,7 +109,7 @@ actor = mz.actor.PriorPolicyActor(
 )
 
 # %%
-obs_ratio = 100
+obs_ratio = 500
 min_observations = 1000
 agent = acme_agent.Agent(
     actor=actor,
@@ -118,10 +119,10 @@ agent = acme_agent.Agent(
 )
 
 # %%
-loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent])
+loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent], logger=NoOpLogger())
 
 # %%
-num_steps = 1_000_000
+num_steps = 500_000
 loop.run(num_steps=num_steps)
 
 # %%

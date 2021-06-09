@@ -5,10 +5,17 @@ import dm_env
 import typing
 import random
 
+DEFAULT_REPLAY_TABLE_NAME = "moozi_default_replay_table_name"
 
 class MooZiObservation(typing.NamedTuple):
-    env: dm_env.TimeStep
-    root_value: float
+    # environment
+    frame: chex.ArrayDevice
+    legal_actions: chex.ArrayDevice
+    terminal: chex.ArrayDevice
+    last_reward: chex.ArrayDevice
+    action: chex.ArrayDevice
+    # sentience
+    root_value: chex.ArrayDevice
     child_visits: chex.ArrayDevice
 
 

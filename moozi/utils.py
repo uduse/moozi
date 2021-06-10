@@ -5,7 +5,6 @@ import dm_env
 import typing
 import random
 
-DEFAULT_REPLAY_TABLE_NAME = "moozi_default_replay_table_name"
 
 class MooZiObservation(typing.NamedTuple):
     # environment

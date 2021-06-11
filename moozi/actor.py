@@ -1,8 +1,10 @@
 import typing
+from collections import defaultdict
+
 import acme
 import acme.jax.utils as acme_utils
-import acme.wrappers.open_spiel_wrapper
 import acme.jax.variable_utils
+import acme.wrappers.open_spiel_wrapper
 import chex
 import dm_env
 import jax
@@ -125,6 +127,119 @@ class PriorPolicyActor(acme.core.Actor):
             self._last_rewards.append(next_timestep.reward)
             self._last_rewards = self._last_rewards[-1000:]
         # next_timestep.observation = {"env": next_timestep.observation, "search": None}
+        self._adder.add(action, next_timestep)
+
+    def update(self, wait: bool = False):
+        self._client.update(wait)
+
+    def close(self):
+        for logger in self._loggers:
+            if isinstance(logger, mz.logging.JAXBoardLogger):
+                print(logger._name, "closed")
+                logger.close()
+
+    def __del__(self):
+        self.close()
+
+
+class MultiQueue(object):
+    def __init__(self, size=1000) -> None:
+        super().__init__()
+        self._size = size
+        self._data = defaultdict(list)
+
+    def add(self, key, value):
+        self._data[key].append(value)
+        self._data[key] = self._data[key][-self._size :]
+
+    def get(self, key):
+        assert key in self._data
+        return self._data[key]
+
+
+class FullActor(acme.core.Actor):
+    def __init__(
+        self,
+        environment_spec: acme.specs.EnvironmentSpec,
+        network: mz.nn.NeuralNetwork,
+        adder,
+        variable_client: acme.jax.variable_utils.VariableClient,
+        random_key,
+        epsilon=0.1,
+        temperature=1,
+        loggers: typing.Optional[typing.List] = None,
+        name: typing.Optional[str] = None,
+    ):
+        self._name = name or self.__class__.__name__
+        self._env_spec = environment_spec
+        self._random_key = random_key
+        self._adder = adder
+        self._client = variable_client
+        self._policy_fn = self._make_policy_fn(network, epsilon, temperature)
+        self._loggers = loggers or []
+        # TODO: replace these with multiqueue
+        self._last_rewards = []
+        self._last_actions = []
+
+    def _make_policy_fn(self, network, epsilon, temperature):
+        @jax.jit
+        @chex.assert_max_traces(n=1)
+        def _policy_fn(
+            params, image: chex.Array, legal_actions_mask: chex.Array, random_key
+        ) -> typing.Tuple[chex.Array, mz.logging.JAXBoardStepData]:
+            chex.assert_rank(image, 1)
+            chex.assert_shape(legal_actions_mask, [self._env_spec.actions.num_values])
+
+            network_output = network.initial_inference(
+                params, acme_utils.add_batch_dim(image)
+            )
+            action_logits = acme_utils.squeeze_batch_dim(network_output.policy_logits)
+            chex.assert_rank(action_logits, 1)
+            action_entropy = rlax.softmax().entropy(action_logits)
+            chex.assert_rank(action_entropy, 0)
+            _sampler = rlax.epsilon_softmax(epsilon, temperature).sample
+            action = _sampler(random_key, action_logits)
+
+            step_data = mz.logging.JAXBoardStepData({}, {})
+            step_data.add_hk_params(params)
+            step_data.scalars["action_entropy"] = action_entropy
+            step_data.histograms["action_logits"] = action_logits
+            return action, step_data
+
+        return _policy_fn
+
+    def select_action(self, observation: acme.wrappers.open_spiel_wrapper.OLT) -> int:
+        self._random_key, new_key = jax.random.split(self._random_key)
+        action, step_data = self._policy_fn(
+            self._client.params,
+            image=observation.observation,
+            legal_actions_mask=observation.legal_actions,
+            random_key=new_key,
+        )
+        self._log(step_data)
+        self._last_actions.append(action)
+        self._last_actions = self._last_actions[-1000:]
+        return action
+
+    def _log(self, data: mz.logging.JAXBoardStepData):
+        for logger in self._loggers:
+            if isinstance(logger, mz.logging.JAXBoardLogger):
+                if len(self._last_rewards) >= 1000:
+                    data.scalars["rolling_reward"] = np.mean(self._last_rewards)
+                    data.histograms["last_rewards"] = self._last_rewards
+                    data.histograms["last_actions"] = self._last_actions
+                logger.write(data)
+
+    def observe_first(self, timestep: dm_env.TimeStep):
+        self._adder.add_first(timestep)
+
+    def observe(self, action: chex.Array, next_timestep: dm_env.TimeStep):
+        if next_timestep.last():
+            self._last_rewards.append(next_timestep.reward)
+            self._last_rewards = self._last_rewards[-1000:]
+        # next_timestep.observation = {"env": next_timestep.observation, "search": None}
+
+
         self._adder.add(action, next_timestep)
 
     def update(self, wait: bool = False):

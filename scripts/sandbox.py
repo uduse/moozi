@@ -1,5 +1,7 @@
 # %%
+import random
 import typing
+from typing import Optional
 
 import acme
 import acme.jax.utils
@@ -16,10 +18,10 @@ import optax
 import reverb
 import tree
 from absl.testing import absltest, parameterized
-from acme import specs as acme_specs
 from acme import datasets as acme_datasets
+from acme import specs as acme_specs
+from acme.adders.reverb import DEFAULT_PRIORITY_TABLE, EpisodeAdder
 from acme.adders.reverb import test_utils as acme_test_utils
-from acme.adders.reverb import EpisodeAdder, DEFAULT_PRIORITY_TABLE
 from acme.adders.reverb.base import ReverbAdder, Trajectory
 from acme.agents import agent as acme_agent
 from acme.agents import replay as acme_replay
@@ -43,61 +45,7 @@ env_spec = acme.specs.make_environment_spec(env)
 replay = acme_replay.make_reverb_prioritized_nstep_replay(env_spec)
 
 # %%
-from typing import Optional
 
-
-# def make_replay(
-#     env_spec: acme.specs.EnvironmentSpec,
-#     replay_table_name: str = ,
-#     port: Optional[str] = None,
-#     max_replay_size: int = 10000,
-#     num_unroll_steps: int = 5,
-#     num_stacked_frames: int = 8,
-#     num_td_steps: int = 20,
-#     discount: int = 1,
-#     batch_size: int = 2048,
-#     prefetch_size: int = 4,
-# ):
-#     signature = mz.adder.make_signature(
-#         env_spec=env_spec,
-#         num_unroll_steps=num_unroll_steps,
-#         num_stacked_frames=num_stacked_frames,
-#     )
-#     replay_table = reverb.Table(
-#         name=replay_table_name,
-#         sampler=reverb.selectors.Uniform(),
-#         remover=reverb.selectors.Fifo(),
-#         max_size=max_replay_size,
-#         rate_limiter=reverb.rate_limiters.MinSize(1),
-#         signature=signature,
-#     )
-#     server = reverb.Server([replay_table], port=port)
-
-#     # The adder is used to insert observations into replay.
-#     address = f"localhost:{server.port}"
-#     client = reverb.Client(address)
-#     adder = mz.adder.MooZiAdder(
-#         client,
-#         num_unroll_steps=num_unroll_steps,
-#         num_stacked_frames=num_stacked_frames,
-#         num_td_steps=num_td_steps,
-#         discount=discount,
-#     )
-
-#     # The dataset provides an interface to sample from replay.
-#     data_iterator = acme_datasets.make_reverb_dataset(
-#         table=replay_table_name,
-#         server_address=address,
-#         batch_size=batch_size,
-#         prefetch_size=prefetch_size,
-#     ).as_numpy_iterator()
-#     return acme_replay.ReverbReplay(server, adder, data_iterator, client=client)
-
-
-# %%
-class MooZiAdderExtra(typing.NamedTuple):
-    root_value: float
-    child_visits: chex.ArrayDevice
 
 
 # %%
@@ -119,9 +67,7 @@ def make_episodic_replay(
             shape=(env_spec.actions.num_values,), dtype=float, minimum=0, maximum=1
         ),
     )
-    signature = EpisodeAdder.signature(
-        env_spec, sequence_length=1000, extras_spec=extras_spec
-    )
+    signature = EpisodeAdder.signature(env_spec, extras_spec=extras_spec)
     print(signature)
     replay_table = reverb.Table(
         name=replay_table_name,
@@ -157,27 +103,12 @@ server = replay.server
 adder = replay.adder
 
 # %%
-adder.add_first(dm_env.restart(0))
-adder.add(0, dm_env.transition(0, 0), extras=MooZiAdderExtra(root_value=0, child_visits=[0.1, 0.3, 0.6]))
-adder.add(0, dm_env.termination(0, 0), extras=MooZiAdderExtra(root_value=0, child_visits=[0.1, 0.3, 0.6]))
 
-# %%
-traj = tree.map_structure(lambda x: x[:], history)
-tree.map_structure(lambda x: x.numpy(), traj)
-
-# %%
-traj = Trajectory(**traj)
-adder._writer.create_item(mz.utils.DEFAULT_REPLAY_TABLE_NAME, 1, traj)
-
-
-# %%
-# replay.adder.write()
-
-# %%
-# for x in replay.client.sample(mz.utils.DEFAULT_REPLAY_TABLE_NAME):
-#     print(x)
-#     break
-
-# %%
-
-# %%
+timestep = env.reset()
+adder.add_first(timestep)
+print(timestep)
+while not timestep.last():
+    action = random.randrange(0, env_spec.actions.num_values)
+    timestep = env.step([action])
+    adder.add(action, timestep, MooZiAdderExtra(0, [0, 1, 0]))
+    print(timestep)

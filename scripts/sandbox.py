@@ -11,7 +11,6 @@ import chex
 import dm_env
 import jax
 import jax.numpy as jnp
-import moozi as mz
 import numpy as np
 import open_spiel
 import optax
@@ -26,8 +25,8 @@ from acme.adders.reverb.base import ReverbAdder, Trajectory
 from acme.agents import agent as acme_agent
 from acme.agents import replay as acme_replay
 from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironmentLoop
-from pandas.core.computation.ops import Op
 from reverb import rate_limiters
+import moozi as mz
 
 # %%
 use_jit = True
@@ -45,8 +44,51 @@ env_spec = acme.specs.make_environment_spec(env)
 replay = acme_replay.make_reverb_prioritized_nstep_replay(env_spec)
 
 # %%
+max_replay_size = 1000
+signature = mz.replay.make_signature(env_spec)
+signature
 
+# %%
+replay_table = reverb.Table(
+    name=DEFAULT_PRIORITY_TABLE,
+    sampler=reverb.selectors.Fifo(),
+    remover=reverb.selectors.Fifo(),
+    max_size=max_replay_size,
+    rate_limiter=reverb.rate_limiters.MinSize(1),
+    signature=signature,
+)
+server = reverb.Server([replay_table], port=None)
+address = f"localhost:{server.port}"
+client = reverb.Client(address)
 
+# %%
+adder = mz.replay.MooZiAdder(client)
+
+# %% 
+timestep = env.reset()
+obs = mz.replay.Observation.from_env_timestep(timestep)
+adder.add_first(obs)
+while not timestep.last():
+    action = random.choice(list(range(env.action_spec().num_values)))
+    timestep = env.step([action])
+    obs = mz.replay.Observation.from_env_timestep(timestep)
+    ref = tree.map_structure(
+        lambda x: x.generate_value(), mz.replay.Reflection.signature(env_spec)
+    )
+    if random.random() > 0.5 and not timestep.last():
+        adder.add(ref, obs)
+    adder.add(ref, obs)
+
+# %%
+data_iterator = acme_datasets.make_reverb_dataset(
+    table=DEFAULT_PRIORITY_TABLE,
+    server_address=address,
+    batch_size=1,
+    prefetch_size=1,
+).as_numpy_iterator()
+
+# %%
+tree.map_structure(lambda x: x.shape, next(data_iterator).data)
 
 # %%
 def make_episodic_replay(

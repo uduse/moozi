@@ -1,13 +1,15 @@
-import acme.jax.variable_utils
-import sys
 import os
+import sys
 import time
+
+import acme.jax.variable_utils
 import acme.wrappers.open_spiel_wrapper
 import dm_env
 import jax
 import moozi as mz
 import open_spiel.python.rl_environment
 import pytest
+import reverb
 from acme.agents import agent as acme_agent
 from acme.agents import replay as acme_replay
 from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironmentLoop
@@ -121,23 +123,45 @@ def test_logger(mocker: MockerFixture, tmp_path):
     spy.assert_called_once()
 
 
-def test_add_search_stats():
-    start = mz.utils.make_moozi_observation(
-        env_timestep=dm_env.restart(0), root_value=-10, child_visits=[1, 2]
+def test_replay(env, env_spec):
+    max_replay_size = 1000
+    signature = mz.replay.make_signature(env_spec)
+    replay_table = reverb.Table(
+        name="test",
+        sampler=reverb.selectors.Fifo(),
+        remover=reverb.selectors.Fifo(),
+        max_size=max_replay_size,
+        rate_limiter=reverb.rate_limiters.MinSize(1),
+        signature=signature,
     )
-    mid = mz.utils.make_moozi_observation(
-        env_timestep=dm_env.transition(
-            reward=1, observation={"action": 0, "image": [0, 1]}, discount=0.5
-        ),
-        root_value=30,
-        child_visits=[10, 20],
-    )
-    end = mz.utils.make_moozi_observation(
-        env_timestep=dm_env.termination(
-            reward=3, observation={"action": 0, "image": [3, 4]}
-        ),
-        root_value=40,
-        child_visits=[100, 200],
-    )
-    print(start)
-    # mz.utils.make_moozi_observation(end, end_search)
+    server = reverb.Server([replay_table], port=None)
+    address = f"localhost:{server.port}"
+    client = reverb.Client(address)
+    adder = mz.replay.MooZiAdder(client)
+
+
+
+    
+    
+
+
+# def test_add_search_stats():
+#     start = mz.utils.make_moozi_observation(
+#         env_timestep=dm_env.restart(0), root_value=-10, child_visits=[1, 2]
+#     )
+#     mid = mz.utils.make_moozi_observation(
+#         env_timestep=dm_env.transition(
+#             reward=1, observation={"action": 0, "image": [0, 1]}, discount=0.5
+#         ),
+#         root_value=30,
+#         child_visits=[10, 20],
+#     )
+#     end = mz.utils.make_moozi_observation(
+#         env_timestep=dm_env.termination(
+#             reward=3, observation={"action": 0, "image": [3, 4]}
+#         ),
+#         root_value=40,
+#         child_visits=[100, 200],
+#     )
+#     print(start)
+#     # mz.utils.make_moozi_observation(end, end_search)

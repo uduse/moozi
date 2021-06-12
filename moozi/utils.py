@@ -6,38 +6,27 @@ import typing
 import random
 
 
-class MooZiObservation(typing.NamedTuple):
-    # environment
-    frame: chex.ArrayDevice
-    legal_actions: chex.ArrayDevice
-    terminal: chex.ArrayDevice
-    last_reward: chex.ArrayDevice
-    action: chex.ArrayDevice
-    # sentience
-    root_value: chex.ArrayDevice
-    child_visits: chex.ArrayDevice
+# class MooZiObservation(typing.NamedTuple):
+#     # environment
+#     frame: chex.ArrayDevice
+#     legal_actions: chex.ArrayDevice
+#     terminal: chex.ArrayDevice
+#     last_reward: chex.ArrayDevice
+#     action: chex.ArrayDevice
+#     # sentience
+#     root_value: chex.ArrayDevice
+#     child_visits: chex.ArrayDevice
 
 
-class MooZiTrainTarget(typing.NamedTuple):
-    # to unroll
-    observations: chex.ArrayDevice
-    actions: chex.ArrayDevice
+# class MooZiTrainTarget(typing.NamedTuple):
+#     # to unroll
+#     observations: chex.ArrayDevice
+#     actions: chex.ArrayDevice
 
-    # to compute losses
-    child_visits: chex.ArrayDevice
-    last_rewards: chex.ArrayDevice
-    values: chex.ArrayDevice
-
-
-def make_moozi_observation(env_timestep: dm_env.TimeStep, root_value, child_visits):
-    return dm_env.TimeStep(
-        step_type=env_timestep.step_type,
-        reward=env_timestep.reward,
-        discount=env_timestep.discount,
-        observation=MooZiObservation(
-            env=env_timestep, root_value=root_value, child_visits=child_visits
-        ),
-    )
+#     # to compute losses
+#     child_visits: chex.ArrayDevice
+#     last_rewards: chex.ArrayDevice
+#     values: chex.ArrayDevice
 
 
 def print_traj_in_env(env):

@@ -149,5 +149,4 @@ class MooZiAdder(ReverbAdder):
 
     def _write_last(self):
         trajectory = tree.map_structure(lambda x: x[:], self._writer.history)
-        # trajectory = base.Trajectory(**trajectory)
         self._writer.create_item(DEFAULT_PRIORITY_TABLE, 1, trajectory)

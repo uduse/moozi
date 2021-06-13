@@ -64,11 +64,14 @@ client = reverb.Client(address)
 # %%
 adder = mz.replay.MooZiAdder(client)
 
-# %% 
+# %%
+import copy
+
 timestep = env.reset()
 obs = mz.replay.Observation.from_env_timestep(timestep)
 adder.add_first(obs)
 while not timestep.last():
+    print(len(adder._writer.history['reward']))
     action = random.choice(list(range(env.action_spec().num_values)))
     timestep = env.step([action])
     obs = mz.replay.Observation.from_env_timestep(timestep)
@@ -76,19 +79,23 @@ while not timestep.last():
         lambda x: x.generate_value(), mz.replay.Reflection.signature(env_spec)
     )
     if random.random() > 0.5 and not timestep.last():
-        adder.add(ref, obs)
+        print('here')
+        adder.add(copy.deepcopy(ref), copy.deepcopy(obs))
+        adder.add(copy.deepcopy(ref), copy.deepcopy(obs))
+        adder.add(copy.deepcopy(ref), copy.deepcopy(obs))
     adder.add(ref, obs)
 
 # %%
 data_iterator = acme_datasets.make_reverb_dataset(
     table=DEFAULT_PRIORITY_TABLE,
     server_address=address,
-    batch_size=1,
+    batch_size=10,
     prefetch_size=1,
 ).as_numpy_iterator()
 
 # %%
-tree.map_structure(lambda x: x.shape, next(data_iterator).data)
+print(next(data_iterator).data)
+# tree.map_structure(lambda x: x.shape, next(data_iterator).data)
 
 # %%
 def make_episodic_replay(

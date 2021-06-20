@@ -1,15 +1,17 @@
-from jax.config import config
+from jax.config import config as jax_config
 
-config.update("jax_debug_nans", True)
+jax_config.update("jax_debug_nans", True)
 
+from .config import Config
 from . import types
 from . import utils
 from . import nerual_network, nerual_network as nn  # alias
+from . import policies
 from . import replay
 from . import loss
 from . import jaxboard
 from . import logging
-from . import actor
+# from . import actor
 from . import learner
 from . import agent
 

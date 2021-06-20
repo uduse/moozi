@@ -7,14 +7,16 @@
     "python.formatting.provider": "black",
     "python.linting.enabled": true,
     "python.linting.flake8Enabled": false,
-    "python.linting.pylintEnabled": true,
+    "python.linting.pylintEnabled": false,
     "python.testing.pytestArgs": [
-        // "--disable-pytest-warnings",
-        // "--durations=0",
+        "--disable-pytest-warnings",
+        "--durations=0",
         // "--profile-svg",
         // "-o faulthandler_timeout=20",
         // "--fulltrace",
-        // "--cov=./",
+        "--cov=.",
+        "--cov-report=xml",
+        "--cov-report=html",
         "tests",
     ],
     // disable native tests to avoid redundant CodeLens
@@ -24,5 +26,6 @@
     "python.testing.pytestEnabled": false,
     "testExplorer.gutterDecoration": true,
     // "python.testing.autoTestDiscoverOnSaveEnabled": true,
-    "pythonTestExplorer.testFramework": "pytest"
+    "pythonTestExplorer.testFramework": "pytest",
+    "python.linting.mypyEnabled": true
 }

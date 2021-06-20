@@ -1,54 +1,44 @@
-class Config(object):
-    def __init__(
-            self,
-            action_space_size: int,
-            max_moves: int,
-            discount: float,
-            dirichlet_alpha: float,
-            num_simulations: int,
-            batch_size: int,
-            td_steps: int,
-            num_actors: int,
-            lr_init: float,
-            lr_decay_steps: float,
-            visit_softmax_temperature_fn,
-            # known_bounds: typing.Optional[KnownBounds] = None
-    ):
-        # Self-Play
-        self.action_space_size = action_space_size
-        self.num_actors = num_actors
+# from typing import Callable, NamedTuple
+# from acme import specs
 
-        self.visit_softmax_temperature_fn = visit_softmax_temperature_fn
-        self.max_moves = max_moves
-        self.num_simulations = num_simulations
-        self.discount = discount
 
-        # Root prior exploration noise.
-        self.root_dirichlet_alpha = dirichlet_alpha
-        self.root_exploration_fraction = 0.25
+# class Config(NamedTuple):
+#     # environment
+#     action_space_size: int
+#     max_moves: int
+#     discount: float
 
-        # UCB formula
-        self.pb_c_base = 19652
-        self.pb_c_init = 1.25
+#     # Root prior exploration noise.
+#     root_dirichlet_alpha: float
+#     root_exploration_fraction: float = 0.25
 
-        # If we already have some information about which values occur in the
-        # environment, we can use them to initialize the rescaling.
-        # This is not strictly necessary, but establishes identical behaviour to
-        # AlphaZero in board games.
-        # self.known_bounds = known_bounds
+#     # UCB formula
+#     pb_c_base: int = 19652
+#     pb_c_init: float = 1.25
 
-        # Training
-        self.training_steps = int(1000e3)
-        self.checkpoint_interval = int(1e3)
-        self.window_size = int(1e6)
-        self.batch_size = batch_size
-        self.num_unroll_steps = 5
-        self.td_steps = td_steps
+#     # If we already have some information about which values occur in the
+#     # environment, we can use them to initialize the rescaling.
+#     # This is not strictly necessary, but establishes identical behaviour to
+#     # AlphaZero in board games.
+#     # known_bounds = known_bounds
 
-        self.weight_decay = 1e-4
-        self.momentum = 0.9
+#     # Training
+#     training_steps: int = int(1000e3)
+#     checkpoint_interval: int = int(1e3)
+#     batch_size: int = 32
+#     num_unroll_steps: int = 5
+#     td_steps: int = 10
 
-        # Exponential learning rate schedule
-        self.lr_init = lr_init
-        self.lr_decay_rate = 0.1
-        self.lr_decay_steps = lr_decay_steps
+#     weight_decay: float = 1e-4
+
+#     # Exponential learning rate schedule
+#     lr: float = 1e-3
+#     # lr_decay_rate = 0.1
+#     # lr_decay_steps = lr_decay_steps
+
+
+# class ConfigFactory(object):
+#     def make_board_game_config(self, env_spec: specs.EnvironmentSpec):
+#         action_space_size = env_spec.actions.num_values
+#         frame_shape = env_spec.observations.observation.shape
+#         return Config(action_space_size=action_space_size, )

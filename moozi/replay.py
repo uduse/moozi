@@ -1,6 +1,6 @@
 import copy
 from os import stat
-from typing import Iterable, List, NamedTuple
+from typing import Iterable, List, NamedTuple, Optional
 
 import chex
 from nptyping import NDArray
@@ -9,13 +9,13 @@ import numpy as np
 import reverb
 import tensorflow as tf
 import tree
+
 from acme import specs
-from acme import types as acme_types
-from acme.adders.reverb import DEFAULT_PRIORITY_TABLE, ReverbAdder, base
-from acme.adders.reverb import utils as acme_reverb_utils
+from acme import types
+from acme.agents.replay import ReverbReplay
+from acme.adders.reverb import DEFAULT_PRIORITY_TABLE, ReverbAdder
 from acme.utils import tree_utils
 from acme.wrappers import open_spiel_wrapper
-from reverb.trajectory_writer import TrajectoryColumn
 
 import moozi as mz
 
@@ -82,25 +82,25 @@ class MooZiAdder(ReverbAdder):
     def __init__(
         self,
         client: reverb.Client,
-        num_unroll_steps: int = 5,
-        num_stacked_frames: int = 1,
-        num_td_steps: int = 1000,
-        # according to the pseudocode, 500 is roughly enough for board games
-        max_episode_length: int = 500,
+        # num_unroll_steps: int = 5,
+        # num_stacked_frames: int = 1,
+        # num_td_steps: int = 1000,
         # discount: float = 1,
         delta_encoded: bool = False,
+        # according to the pseudocode, 500 is roughly enough for board games
+        max_episode_length: int = 500,
         max_inflight_items: int = 1,
     ):
 
         self._client = client
-        self._num_unroll_steps = num_unroll_steps
-        self._num_td_steps = num_td_steps
-        self._num_stacked_frames = num_stacked_frames
-        self._max_episode_length = max_episode_length
+        # self._num_unroll_steps = num_unroll_steps
+        # self._num_td_steps = num_td_steps
+        # self._num_stacked_frames = num_stacked_frames
+        # self._max_episode_length = max_episode_length
 
         super().__init__(
             client=client,
-            max_sequence_length=self._max_episode_length,
+            max_sequence_length=max_episode_length,
             max_in_flight_items=max_inflight_items,
             delta_encoded=delta_encoded,
         )
@@ -194,39 +194,110 @@ def make_target(
     assert len(sample.reward.shape) == 1
 
     last_step_idx = sample.is_last.argmax()
-    collected = []
+
+    # unroll
+    unrolled_data = []
     for curr_idx in range(start_idx, start_idx + num_unroll_steps + 1):
-        bootstrap_idx = curr_idx + num_td_steps
-        if bootstrap_idx <= last_step_idx:
-            value = sample.root_value[bootstrap_idx] * discount ** num_td_steps
-        else:
-            value = 0
+        value = _get_value(sample, curr_idx, last_step_idx, num_td_steps, discount)
+        last_reward = _get_last_reward(sample, start_idx, curr_idx, last_step_idx)
+        child_visits = _get_child_visits(sample, curr_idx, last_step_idx)
+        unrolled_data.append((value, last_reward, child_visits))
 
-        for i, reward in enumerate(sample.reward[curr_idx + 1 : bootstrap_idx + 1]):
-            value += reward * discount ** i
+    unrolled_data_stacked = tree_utils.stack_sequence_fields(unrolled_data)
 
-        if curr_idx <= last_step_idx:
-            last_reward = sample.reward[curr_idx]
-        else:
-            last_reward = 0
-
-        frame_idx_lower = max(curr_idx - num_stacked_frames, 0)
-        frame = sample.frame[frame_idx_lower : curr_idx + 1]
-        num_frames_to_pad = num_stacked_frames - frame.shape[0]
-        if num_frames_to_pad > 0:
-            padding_shape = (num_frames_to_pad,) + frame.shape[1:]
-            frame = np.concatenate((np.zeros(shape=padding_shape), frame))
-
-        collected.append((frame, value, last_reward))
-
-    collected_stacked = tree_utils.stack_sequence_fields(collected)
-    action = sample.action[start_idx : start_idx + num_unroll_steps]
-    child_visits = sample.child_visits[start_idx : start_idx + num_unroll_steps + 1]
+    frame = _get_frame(sample, start_idx, num_stacked_frames)
+    action = _get_action(sample, start_idx, num_unroll_steps)
 
     return TrainTarget(
-        frame=collected_stacked[0],
+        frame=frame,
         action=action,
-        value=collected_stacked[1],
-        last_reward=collected_stacked[2],
-        child_visits=child_visits,
+        value=unrolled_data_stacked[0],
+        last_reward=unrolled_data_stacked[1],
+        child_visits=unrolled_data_stacked[2],
     )
+
+
+def _get_action(sample, start_idx, num_unroll_steps):
+    action = sample.action[start_idx : start_idx + num_unroll_steps]
+    num_actions_to_pad = num_unroll_steps - action.size
+    if num_actions_to_pad > 0:
+        action = np.concatenate((action, np.full(num_actions_to_pad, -1)))
+    return action
+
+
+def _get_frame(sample, start_idx, num_stacked_frames):
+    frame_idx_lower = max(start_idx - num_stacked_frames + 1, 0)
+    frame = sample.frame[frame_idx_lower : start_idx + 1]
+    num_frames_to_pad = num_stacked_frames - frame.shape[0]
+    if num_frames_to_pad > 0:
+        padding_shape = (num_frames_to_pad,) + frame.shape[1:]
+        frame = np.concatenate((np.zeros(shape=padding_shape), frame))
+    return frame
+
+
+def _get_value(sample, curr_idx, last_step_idx, num_td_steps, discount):
+    bootstrap_idx = curr_idx + num_td_steps
+    if bootstrap_idx <= last_step_idx:
+        value = sample.root_value[bootstrap_idx] * discount ** num_td_steps
+    else:
+        value = 0
+
+    for i, reward in enumerate(sample.reward[curr_idx + 1 : bootstrap_idx + 1]):
+        value += reward * discount ** i
+    return value
+
+
+def _get_last_reward(sample, start_idx, curr_idx, last_step_idx):
+    if curr_idx == start_idx:
+        return 0
+    elif curr_idx <= last_step_idx:
+        return sample.reward[curr_idx]
+    else:
+        return 0
+
+
+def _get_child_visits(sample, curr_idx, last_step_idx):
+    if curr_idx <= last_step_idx:
+        return sample.child_visits[curr_idx]
+    else:
+        return np.zeros_like(sample.child_visits[0])
+
+
+def make_replay(
+    env_spec: specs.EnvironmentSpec,
+    max_episode_length: int,
+    num_td_steps,
+    num_stacked_frames,
+    batch_size: int = 32,
+    max_replay_size: int = 100_000,
+    min_replay_size: int = 1,
+    prefetch_size: int = 4,
+    replay_table_name: str = DEFAULT_PRIORITY_TABLE,
+) -> ReverbReplay:
+
+    signature = mz.replay.make_signature(env_spec, max_episode_length)
+
+    sampler = reverb.selectors.Uniform()
+    replay_table = reverb.Table(
+        name=replay_table_name,
+        sampler=sampler,
+        remover=reverb.selectors.Fifo(),
+        max_size=max_replay_size,
+        rate_limiter=reverb.rate_limiters.MinSize(min_replay_size),
+        signature=signature
+    )
+    server = reverb.Server([replay_table], port=None)
+
+    # The adder is used to insert observations into replay.
+    address = f"localhost:{server.port}"
+    client = reverb.Client(address)
+    adder = MooZiAdder(client, num_stacked_frames=)
+
+    # The dataset provides an interface to sample from replay.
+    data_iterator = datasets.make_reverb_dataset(
+        table=replay_table_name,
+        server_address=address,
+        batch_size=batch_size,
+        prefetch_size=prefetch_size,
+    ).as_numpy_iterator()
+    return ReverbReplay(server, adder, data_iterator, client=client)

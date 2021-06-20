@@ -1,0 +1,2 @@
+class BreathFirstSearch(object):
+    pass

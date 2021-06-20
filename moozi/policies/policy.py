@@ -18,7 +18,6 @@ from nptyping import NDArray
 
 
 class PolicyFeed(NamedTuple):
-    params: chex.ArrayTree
     stacked_frames: chex.ArrayDevice
     legal_actions_mask: types.NestedTensor
     random_key: types.NestedTensor
@@ -29,40 +28,55 @@ class PolicyResult(NamedTuple):
     extras: Dict[str, chex.ArrayDevice]
 
 
-class PolicyFn(object):
-    def run(self, feed: PolicyFeed):
+class Policy(object):
+    def run(self, feed: PolicyFeed) -> PolicyResult:
         raise NotImplementedError
 
+    def update(self, wait: bool = False) -> None:
+        pass
 
-class PriorPolicy(PolicyFn):
+
+class PriorPolicy(Policy):
     def __init__(
-        self, network: mz.nn.NeuralNetwork, epsilon: float, temperature: float
+        self,
+        network: mz.nn.NeuralNetwork,
+        variable_client: VariableClient,
+        epsilon: float,
+        temperature: float,
     ) -> None:
         self._network = network
+        self._variable_client = variable_client
         self._epsilon = epsilon
         self._temperature = temperature
 
-    @partial(jax.jit, static_argnums=(0,))
-    @chex.assert_max_traces(n=1)
     def run(self, feed: PolicyFeed) -> PolicyResult:
-        network_output = self._network.initial_inference(
-            feed.params, add_batch_dim(feed.stacked_frames)
-        )
-        action_logits = squeeze_batch_dim(network_output.policy_logits)
-        chex.assert_rank(action_logits, 1)
-        action_entropy = rlax.softmax().entropy(action_logits)
-        chex.assert_rank(action_entropy, 0)
-        sampler = rlax.epsilon_softmax(self._epsilon, self._temperature).sample
-        action = sampler(feed.random_key, action_logits)
+        @jax.jit
+        @chex.assert_max_traces(n=1)
+        def _prior_policy(params, stacked_frames, random_key):
+            network_output = self._network.initial_inference(
+                params, add_batch_dim(stacked_frames)
+            )
+            action_logits = squeeze_batch_dim(network_output.policy_logits)
+            chex.assert_rank(action_logits, 1)
+            sampler = rlax.epsilon_softmax(self._epsilon, self._temperature).sample
+            action = sampler(random_key, action_logits)
 
-        # step_data = mz.logging.JAXBoardStepData({}, {})
-        # step_data.add_hk_params(feed.params)
-        # step_data.scalars["action_entropy"] = action_entropy
-        # step_data.histograms["action_logits"] = action_logits
-        return PolicyResult(action=action, extras={})
+            # action_entropy = rlax.softmax().entropy(action_logits)
+            # chex.assert_rank(action_entropy, 0)
+            # step_data = mz.logging.JAXBoardStepData({}, {})
+            # step_data.add_hk_params(feed.params)
+            # step_data.scalars["action_entropy"] = action_entropy
+            # step_data.histograms["action_logits"] = action_logits
+            return PolicyResult(action=action, extras={})
+
+        params = self._variable_client.params
+        return _prior_policy(params, feed.stacked_frames, feed.random_key)
+
+    def update(self, wait: bool) -> None:
+        self._variable_client.update(wait=wait)
 
 
-class RandomPolicy(PolicyFn):
+class RandomPolicy(Policy):
     @partial(jax.jit, static_argnums=(0,))
     @chex.assert_max_traces(n=1)
     def run(self, feed: PolicyFeed) -> PolicyResult:

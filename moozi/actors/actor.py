@@ -10,12 +10,12 @@ import numpy as np
 import rlax
 import tree
 from acme import specs, types
-from acme.core import Actor
+from acme.core import Actor as BaseActor
 from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 from acme.jax.variable_utils import VariableClient
 from acme.utils import tree_utils
 from acme.wrappers.open_spiel_wrapper import OLT
-from moozi.policies import PolicyFeed, PolicyFn
+from moozi.policies import PolicyFeed, Policy
 from nptyping import NDArray
 
 
@@ -35,7 +35,7 @@ class SimpleQueue(object):
         return self._list
 
 
-class MooZiActor(Actor):
+class Actor(BaseActor):
     r"""
 
     # NOTE: acme's actor's batching behavior is inconsistent
@@ -48,24 +48,26 @@ class MooZiActor(Actor):
 
     def __init__(
         self,
-        environment_spec: specs.EnvironmentSpec,
-        network: mz.nn.NeuralNetwork,
-        adder,
-        variable_client: VariableClient,
+        env_spec: specs.EnvironmentSpec,
+        policy: Policy,
+        adder: mz.replay.MooZiAdder,
         random_key,
-        policy_fn: PolicyFn,
         loggers: Optional[List] = None,
         name: Optional[str] = None,
     ):
-        self._name = name or self.__class__.__name__
-        self._env_spec = environment_spec
-        self._random_key = random_key
+        self._env_spec = env_spec
+        self._policy = policy
         self._adder = adder
-        self._client = variable_client
-        self._loggers = loggers
-        self._policy_fn = policy_fn
+        self._loggers = loggers or []
+        self._name = name or self.__class__.__name__
+        self._policy = policy
+        self._random_key = random_key
 
-        self._memory = {"last_frames": SimpleQueue(5), "random_key": random_key}
+        self._memory = {
+            "last_frames": SimpleQueue(5),
+            "random_key": random_key,
+            "policy_extras": SimpleQueue(5),
+        }
 
     def select_action(self, observation: OLT) -> int:
         if isinstance(observation, OLT):
@@ -73,13 +75,15 @@ class MooZiActor(Actor):
 
         stacked_frames = jnp.array(self._memory["last_frames"].get())
 
+        key, new_key = jax.random.split(self._memory["random_key"])
+        self._memory["random_key"] = key
         policy_feed = PolicyFeed(
-            params=self._client.params,
             stacked_frames=stacked_frames,
             legal_actions_mask=jnp.array(observation.legal_actions),
-            random_key=self._memory["random_key"],
+            random_key=new_key,
         )
-        result = self._policy_fn.run(policy_feed)
+        result = self._policy.run(policy_feed)
+        self._memory["policy_extras"].put(result.extras)
         return result.action
 
         # self._random_key, new_key = jax.random.split(self._random_key)
@@ -101,21 +105,28 @@ class MooZiActor(Actor):
     #                 data.scalars["rolling_reward"] = np.mean(self._last_rewards)
     #                 data.histograms["last_rewards"] = self._last_rewards
     #                 data.histograms["last_actions"] = self._last_actions
-    #             logger.write(data)
+    #             logger.write(data
 
     def observe_first(self, timestep: dm_env.TimeStep):
         observation = mz.replay.Observation.from_env_timestep(timestep)
         self._adder.add_first(observation)
 
     def observe(self, action: chex.Array, next_timestep: dm_env.TimeStep):
-        assert self._cache.get_last("action") == action
-        root_value = self._cache.get_last("root_value")
-        child_visits = self._cache.get_last("child_visits")
-        last_timestep_info = mz.replay.Reflection(action, root_value, child_visits)
-        self._adder.add(last_timestep_info, next_timestep)
+        root_value, child_visits = self._get_last_search_stats()
+        last_reflection = mz.replay.Reflection(action, root_value, child_visits)
+        next_observation = mz.replay.Observation.from_env_timestep(next_timestep)
+        self._adder.add(last_reflection, next_observation)
+
+    def _get_last_search_stats(self):
+        action_space_size = self._env_spec.actions.num_values
+        latest_policy_extras = self._memory["policy_extras"].get()[-1]
+        root_value = latest_policy_extras.get("root_value", np.float32(0))
+        dummy_child_visits = np.zeros(action_space_size, dtype=np.float32)
+        child_visits = latest_policy_extras.get("child_visits", dummy_child_visits)
+        return root_value, child_visits
 
     def update(self, wait: bool = False):
-        self._client.update(wait)
+        self._policy.update(wait)
 
     def close(self):
         for logger in self._loggers:

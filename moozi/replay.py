@@ -1,21 +1,18 @@
 import copy
-from os import stat
 from typing import Iterable, List, NamedTuple, Optional
 
 import chex
-from nptyping import NDArray
 import dm_env
 import numpy as np
 import reverb
 import tensorflow as tf
 import tree
-
-from acme import specs
-from acme import types
-from acme.agents.replay import ReverbReplay
+from acme import datasets, specs, types
 from acme.adders.reverb import DEFAULT_PRIORITY_TABLE, ReverbAdder
+from acme.agents.replay import ReverbReplay
 from acme.utils import tree_utils
 from acme.wrappers import open_spiel_wrapper
+from nptyping import NDArray
 
 import moozi as mz
 
@@ -29,8 +26,8 @@ class Observation(NamedTuple):
 
     @staticmethod
     def from_env_timestep(timestep: dm_env.TimeStep):
-        if isinstance(timestep.observation[0], open_spiel_wrapper.OLT):
-            frame = timestep.observation[0].observation.astype(np.float32)
+        if isinstance(timestep.observation, open_spiel_wrapper.OLT):
+            frame = timestep.observation.observation.astype(np.float32)
             if timestep.reward is None:
                 reward = np.float32(0)
             else:
@@ -265,9 +262,9 @@ def _get_child_visits(sample, curr_idx, last_step_idx):
 
 def make_replay(
     env_spec: specs.EnvironmentSpec,
-    max_episode_length: int,
-    num_td_steps,
-    num_stacked_frames,
+    max_episode_length: int = 500,
+    # num_td_steps: int = 10,
+    # num_stacked_frames: int = 8,
     batch_size: int = 32,
     max_replay_size: int = 100_000,
     min_replay_size: int = 1,
@@ -284,14 +281,16 @@ def make_replay(
         remover=reverb.selectors.Fifo(),
         max_size=max_replay_size,
         rate_limiter=reverb.rate_limiters.MinSize(min_replay_size),
-        signature=signature
+        signature=signature,
     )
     server = reverb.Server([replay_table], port=None)
 
     # The adder is used to insert observations into replay.
     address = f"localhost:{server.port}"
     client = reverb.Client(address)
-    adder = MooZiAdder(client, num_stacked_frames=)
+    adder = MooZiAdder(
+        client, max_episode_length=max_episode_length, delta_encoded=True
+    )
 
     # The dataset provides an interface to sample from replay.
     data_iterator = datasets.make_reverb_dataset(

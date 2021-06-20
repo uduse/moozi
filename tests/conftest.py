@@ -1,8 +1,12 @@
+from typing import List, Sequence
+from acme.core import VariableSource
+from acme.jax.variable_utils import VariableClient
 import jax
 import pytest
 import open_spiel
 import acme
 
+from acme import types
 import moozi as mz
 
 
@@ -44,5 +48,23 @@ def network(env_spec):
 
 
 @pytest.fixture
-def params(network: mz.nn.NeuralNetwork):
-    return network.init(jax.random.PRNGKey(0))
+def random_key():
+    return jax.random.PRNGKey(0)
+
+
+@pytest.fixture
+def params(network: mz.nn.NeuralNetwork, random_key):
+    return network.init(random_key)
+
+
+class DummyVariableSource(VariableSource):
+    def __init__(self, params) -> None:
+        self._params = params
+
+    def get_variables(self, names: Sequence[str]) -> List[types.NestedArray]:
+        return [self._params]
+
+
+@pytest.fixture
+def variable_client(params):
+    return VariableClient(DummyVariableSource(params=params), None)

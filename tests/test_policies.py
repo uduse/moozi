@@ -8,15 +8,17 @@ from moozi.nerual_network import NeuralNetwork
 
 
 @pytest.fixture
-def policy_feed(env, random_key) -> PolicyFeed:
+def policy_feed(env, num_stacked_frames, random_key) -> PolicyFeed:
     legal_actions_mask = np.zeros(10)
     legal_actions_indices = [1, 2, 3]
     legal_actions_mask[legal_actions_indices] = 1
     legal_actions_mask = jnp.array(legal_actions_mask)
     timestep = env.reset()
     frame = timestep.observation[0].observation
+    stacked_frames = jnp.stack([frame.copy() for _ in range(num_stacked_frames)])
+
     return PolicyFeed(
-        stacked_frames=frame,
+        stacked_frames=stacked_frames,
         legal_actions_mask=legal_actions_mask,
         random_key=random_key,
     )

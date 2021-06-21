@@ -44,21 +44,20 @@ class PriorPolicy(Policy):
         epsilon: float = 0.05,
         temperature: float = 1.0,
     ) -> None:
-        self._network = network
-        self._variable_client = variable_client
-        self._epsilon = epsilon
-        self._temperature = temperature
+        # self._epsilon = epsilon
+        # self._network = network
+        # self._temperature = temperature
+        # self._policy_fn = self._make_policy_fn()
 
-    def run(self, feed: PolicyFeed) -> PolicyResult:
         @jax.jit
         @chex.assert_max_traces(n=1)
-        def _prior_policy(params, stacked_frames, random_key):
-            network_output = self._network.initial_inference(
+        def _policy_fn(params, stacked_frames, random_key):
+            network_output = network.initial_inference(
                 params, add_batch_dim(stacked_frames)
             )
             action_logits = squeeze_batch_dim(network_output.policy_logits)
             chex.assert_rank(action_logits, 1)
-            sampler = rlax.epsilon_softmax(self._epsilon, self._temperature).sample
+            sampler = rlax.epsilon_softmax(epsilon, temperature).sample
             action = sampler(random_key, action_logits)
 
             # action_entropy = rlax.softmax().entropy(action_logits)
@@ -69,8 +68,12 @@ class PriorPolicy(Policy):
             # step_data.histograms["action_logits"] = action_logits
             return PolicyResult(action=action, extras={})
 
+        self._policy_fn = _policy_fn
+        self._variable_client = variable_client
+
+    def run(self, feed: PolicyFeed) -> PolicyResult:
         params = self._variable_client.params
-        return _prior_policy(params, feed.stacked_frames, feed.random_key)
+        return self._policy_fn(params, feed.stacked_frames, feed.random_key)
 
     def update(self, wait: bool = False) -> None:
         self._variable_client.update(wait=wait)

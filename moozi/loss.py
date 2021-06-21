@@ -31,11 +31,12 @@ class OneStepAdvantagePolicyGradientLoss(LossFn):
         params: chex.ArrayTree,
         batch: mz.replay.TrainTarget,
     ) -> typing.Any:
-        value = batch.value[0]
-        action = batch.action[0]
+        value = jnp.take(batch.value, 0, axis=-1)
+        action = jnp.take(batch.action, 0, axis=-1)
         stacked_frames = batch.stacked_frames
 
         chex.assert_rank([value, stacked_frames, action], [1, 3, 1])
+        chex.assert_equal_shape_prefix([value, stacked_frames, action], 1)
 
         output_t = network.initial_inference(params, stacked_frames)
         output_tp1 = network.recurrent_inference(params, output_t.hidden_state, action)

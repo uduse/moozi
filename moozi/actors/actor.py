@@ -107,14 +107,10 @@ class Actor(BaseActor):
         # self._last_actions = self._last_actions[-1000:]
         # return action
 
-    # def _log(self, data: mz.logging.JAXBoardStepData):
-    #     for logger in self._loggers:
-    #         if isinstance(logger, mz.logging.JAXBoardLogger):
-    #             if len(self._last_rewards) >= 1000:
-    #                 data.scalars["rolling_reward"] = np.mean(self._last_rewards)
-    #                 data.histograms["last_rewards"] = self._last_rewards
-    #                 data.histograms["last_actions"] = self._last_actions
-    #             logger.write(data
+    def _log(self, data: mz.logging.JAXBoardStepData):
+        for logger in self._loggers:
+            if isinstance(logger, mz.logging.JAXBoardLogger):
+                logger.write(data)
 
     def observe_first(self, timestep: dm_env.TimeStep):
         observation = mz.replay.Observation.from_env_timestep(timestep)
@@ -124,7 +120,12 @@ class Actor(BaseActor):
         root_value, child_visits = self._get_last_search_stats()
         last_reflection = mz.replay.Reflection(action, root_value, child_visits)
         next_observation = mz.replay.Observation.from_env_timestep(next_timestep)
-        self._memory["last_rewards"] = next_observation.reward
+        self._memory["last_rewards"].put(next_observation.reward)
+        rolling_reward = np.mean(self._memory["last_rewards"].get())
+        data = mz.logging.JAXBoardStepData(
+            scalars={"rolling_reward": rolling_reward}, histograms={}
+        )
+        self._log(data)
         self._adder.add(last_reflection, next_observation)
 
     def _get_last_search_stats(self):

@@ -132,15 +132,15 @@ class SGDLearner(acme.Learner):
 
     def step(self):
         batch = next(self._data_iterator)
-        self._state, extra = self._sgd_step_fn(self._state, batch)
+        self._state, step_data = self._sgd_step_fn(self._state, batch)
         result = self._counter.increment(steps=1)
-        result.update(extra.scalars)
+        result.update(step_data.scalars)
 
         for logger in self._loggers:
             if isinstance(logger, acme.utils.loggers.TerminalLogger):
                 logger.write(result)
             elif isinstance(logger, mz.logging.JAXBoardLogger):
-                logger.write(extra)
+                logger.write(step_data)
 
     def get_variables(self, names):
         return [self._state.params]

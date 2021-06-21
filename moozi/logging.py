@@ -2,11 +2,11 @@ import os
 import time
 import typing
 import uuid
+from pathlib import Path
 
 import acme
 import haiku as hk
 import jax.numpy as jnp
-import pytz
 
 import moozi as mz
 
@@ -47,11 +47,12 @@ class JAXBoardLogger(acme.utils.loggers.base.Logger):
     def __init__(self, name, log_dir=None, time_delta: float = 0.0):
         self._name = name
         self._log_dir = log_dir or "./tensorboard_log/"
+        self._log_dir = str(Path(self._log_dir).resolve())
         self._time_delta = time_delta
         self._time = time.time()
         self._steps = 0
         self._writer = mz.jaxboard.SummaryWriter(name, log_dir=self._log_dir)
-        print(f"{self._name} is logging to {self._log_dir}")
+        print(f"{self._name} is logging to {(self._log_dir)}")
 
     def write(self, data: JAXBoardStepData):
         now = time.time()

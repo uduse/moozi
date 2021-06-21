@@ -25,23 +25,31 @@ jax.config.update("jax_platform_name", platform)
 
 # %%
 seed = 0
-key = jax.random.PRNGKey(seed)
+master_key = jax.random.PRNGKey(seed)
 
 # %%
 raw_env = open_spiel.python.rl_environment.Environment("catch(columns=5,rows=5)")
 env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
 env = acme.wrappers.SinglePrecisionWrapper(env)
 env_spec = acme.specs.make_environment_spec(env)
-max_game_length = env.environment.environment.game.max_game_length()
-dim_action = env_spec.actions.num_values
-dim_image = env_spec.observations.observation.shape[0]
-dim_repr = 8
 print(env_spec)
 
+# %% 
+max_episode_length = env.environment.environment.game.max_game_length()
+dim_action = env_spec.actions.num_values
+frame_shape = env_spec.observations.observation.shape
+dim_repr = 8
+
+# %% 
+num_unroll_steps = 2
+num_stacked_frames = 2
+num_td_steps = 4
+
+stacked_frame_shape = (num_stacked_frames,) + frame_shape
 
 # %%
 nn_spec = mz.nn.NeuralNetworkSpec(
-    dim_image=dim_image,
+    stacked_frames_shape=stacked_frame_shape,
     dim_repr=dim_repr,
     dim_action=dim_action,
     repr_net_sizes=(256, 256),
@@ -55,23 +63,17 @@ print(nn_spec)
 
 
 # %%
-
-batch_size = 2000
+batch_size = 200
 max_replay_size = 100_000
-reverb_replay = acme_replay.make_reverb_prioritized_nstep_replay(
-    env_spec,
-    batch_size=batch_size,
-    n_step=5,
-    max_replay_size=int(max_replay_size),
-    discount=1.0,
+reverb_replay = mz.replay.make_replay(
+    env_spec, max_episode_length=max_episode_length, batch_size=batch_size
 )
-
 
 # %%
 time_delta = 10.0
 weight_decay = 1e-4
 entropy_reg = 7e-1
-key, new_key = jax.random.split(key)
+master_key, new_key = jax.random.split(master_key)
 learner = mz.learner.SGDLearner(
     network=network,
     loss_fn=mz.loss.OneStepAdvantagePolicyGradientLoss(
@@ -88,24 +90,17 @@ learner = mz.learner.SGDLearner(
 
 
 # %%
-key, new_key = jax.random.split(key)
+master_key, new_key = jax.random.split(master_key)
 variable_client = acme.jax.variable_utils.VariableClient(learner, "")
 
-
 # %%
-key, new_key = jax.random.split(key)
-actor = mz.actor.PriorPolicyActor(
-    environment_spec=env_spec,
-    network=network,
+master_key, new_key = jax.random.split(master_key)
+policy = mz.policies.PriorPolicy(network, variable_client)
+actor = mz.Actor(
+    env_spec=env_spec,
+    policy=policy,
     adder=reverb_replay.adder,
-    variable_client=variable_client,
     random_key=new_key,
-    loggers=[
-        acme.utils.loggers.TerminalLogger(time_delta=time_delta, print_fn=print),
-        mz.logging.JAXBoardLogger("actor", time_delta=time_delta),
-    ],
-    # epsilon=0.1,
-    # temperature=1,
 )
 
 # %%
@@ -120,9 +115,10 @@ agent = acme_agent.Agent(
 
 # %%
 loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent], logger=NoOpLogger())
+loop.run_episode()
 
 # %%
-num_steps = 500_000
+num_steps = 1000
 loop.run(num_steps=num_steps)
 
 # %%

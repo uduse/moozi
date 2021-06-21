@@ -33,11 +33,17 @@ def env_spec(env):
 
 
 @pytest.fixture
-def network(env_spec):
+def num_stacked_frames():
+    return 2
+
+
+@pytest.fixture
+def network(env_spec, num_stacked_frames):
     dim_action = env_spec.actions.num_values
-    dim_image = env_spec.observations.observation.shape[0]
+    frame_shape = env_spec.observations.observation.shape
+    stacked_frames_shape = (num_stacked_frames,) + frame_shape
     nn_spec = mz.nn.NeuralNetworkSpec(
-        dim_image=dim_image,
+        stacked_frames_shape=stacked_frames_shape,
         dim_repr=2,
         dim_action=dim_action,
         repr_net_sizes=(2, 2),

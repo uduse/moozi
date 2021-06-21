@@ -12,11 +12,11 @@ import moozi as mz
 
 @chex.dataclass(frozen=True)
 class NeuralNetworkOutput:
-    value: float
-    reward: float
+    value: chex.ArrayDevice
+    reward: chex.ArrayDevice
     # policy_logits: typing.Dict[mz.Action, float]
-    policy_logits: chex.Array
-    hidden_state: chex.Array
+    policy_logits: chex.ArrayDevice
+    hidden_state: chex.ArrayDevice
 
 
 class NeuralNetwork(typing.NamedTuple):
@@ -26,7 +26,7 @@ class NeuralNetwork(typing.NamedTuple):
 
 
 class NeuralNetworkSpec(typing.NamedTuple):
-    dim_image: int
+    stacked_frames_shape: tuple
     dim_repr: int
     dim_action: int
     repr_net_sizes: tuple = (16, 16)
@@ -48,7 +48,9 @@ def get_network(spec: NeuralNetworkSpec):
         key_1, key_2 = jax.random.split(random_key)
         batch_size = 1
         params = hk.data_structures.merge(
-            initial_inference.init(key_1, jnp.ones((batch_size, spec.dim_image))),
+            initial_inference.init(
+                key_1, jnp.ones((batch_size,) + spec.stacked_frames_shape)
+            ),
             recurrent_inference.init(
                 key_2,
                 jnp.ones((batch_size, spec.dim_repr)),
@@ -122,9 +124,10 @@ class MLPNet(hk.Module):
         next_rewards = jnp.squeeze(reward_branch(dyna_trunk_out), axis=-1)
         return next_hidden_states, next_rewards
 
-    def initial_inference(self, image):
-        chex.assert_rank(image, 2)
-        hidden_state = self.repr_net(image)
+    def initial_inference(self, stacked_frames):
+        chex.assert_rank(stacked_frames, 3)
+        flattened = hk.Flatten()(stacked_frames)
+        hidden_state = self.repr_net(flattened)
         value, policy_logits = self.pred_net(hidden_state)
         reward = jnp.zeros_like(value)
         chex.assert_rank([value, reward, policy_logits, hidden_state], [1, 1, 2, 2])

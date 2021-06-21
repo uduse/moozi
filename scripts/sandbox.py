@@ -1,11 +1,11 @@
 # %%
+import functools
 import random
 import typing
 from typing import NamedTuple, Optional
 
 import acme
 import acme.jax.utils
-import acme.jax.variable_utils
 import acme.wrappers
 import chex
 import dm_env
@@ -26,8 +26,10 @@ from acme.adders.reverb.base import ReverbAdder, Trajectory
 from acme.agents import agent as acme_agent
 from acme.agents import replay as acme_replay
 from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironmentLoop
+from acme.jax.variable_utils import VariableClient
+from acme.utils import tree_utils
 from acme.utils.loggers.base import NoOpLogger
-from moozi.replay import make_replay
+from moozi.replay import Trajectory, make_replay
 from nptyping import NDArray
 from reverb import rate_limiters
 from reverb.trajectory_writer import TrajectoryColumn
@@ -48,13 +50,18 @@ env_spec = acme.specs.make_environment_spec(env)
 
 # %%
 seed = 0
-key = jax.random.PRNGKey(seed)
+master_key = jax.random.PRNGKey(seed)
 max_replay_size = 1000
-max_episode_length = 5
+max_episode_length = env.environment.environment.game.max_game_length()
 num_unroll_steps = 2
 num_stacked_frames = 2
 num_td_steps = 4
 batch_size = 32
+discount = 0.99
+dim_action = env_spec.actions.num_values
+frame_shape = env_spec.observations.observation.shape
+
+stacked_frame_shape = (num_stacked_frames,) + frame_shape
 
 # %%
 reverb_replay = make_replay(
@@ -62,16 +69,71 @@ reverb_replay = make_replay(
 )
 
 # %%
-key, new_key = jax.random.split(key)
-random_actor = mz.Actor(
-    env_spec=env_spec,
-    policy=mz.policies.RandomPolicy(),
-    adder=reverb_replay.adder,
+dim_repr = 32
+nn_spec = mz.nn.NeuralNetworkSpec(
+    stacked_frames_shape=stacked_frame_shape,
+    dim_repr=dim_repr,
+    dim_action=dim_action,
+    repr_net_sizes=(256, 256),
+    pred_net_sizes=(256, 256),
+    dyna_net_sizes=(256, 256),
+)
+network = mz.nn.get_network(nn_spec)
+lr = 5e-4
+optimizer = optax.adam(lr)
+print(nn_spec)
+
+
+# %%
+master_key, new_key = jax.random.split(master_key)
+params = network.init(new_key)
+
+# %%
+# master_key, new_key = jax.random.split(master_key)
+data_iterator = mz.replay.post_process_data_iterator(
+    reverb_replay.data_iterator,
+    batch_size,
+    discount,
+    num_unroll_steps,
+    num_td_steps,
+    num_stacked_frames,
+)
+
+learner = mz.learner.SGDLearner(
+    network,
+    loss_fn=mz.loss.OneStepAdvantagePolicyGradientLoss(),
+    optimizer=optimizer,
+    data_iterator=data_iterator,
     random_key=new_key,
+    loggers=[],
+)
+variable_client = VariableClient(learner, None)
+
+# %%
+master_key, new_key = jax.random.split(master_key)
+prior_policy = mz.policies.PriorPolicy(network, variable_client)
+actor = mz.Actor(
+    env_spec,
+    prior_policy,
+    reverb_replay.adder,
+    new_key,
+    num_stacked_frames=num_stacked_frames,
 )
 
 # %%
-loop = OpenSpielEnvironmentLoop(
-    environment=env, actors=[random_actor], logger=NoOpLogger()
+obs_ratio = 500
+min_observations = 0
+agent = acme_agent.Agent(
+    actor=actor,
+    learner=learner,
+    min_observations=min_observations,
+    observations_per_step=int(obs_ratio),
 )
-loop.run_episode()
+
+
+# %%
+loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent], logger=NoOpLogger())
+loop.run(num_episodes=100)
+
+# %%
+print('hello')

@@ -16,19 +16,6 @@ class LossFn(typing.Protocol):
         r"""Loss function."""
 
 
-# # TODO: add a TD version of `initial_inference_value_loss`
-# def initial_inference_value_loss(network: mz.nn.NeuralNetwork, params, batch):
-#     pred_value = network.initial_inference(
-#         params, batch.data.observation.observation
-#     ).value.squeeze()
-#     target_value = batch.data.reward
-
-#     chex.assert_rank([pred_value, target_value], 1)  # shape: (batch_size,)
-
-#     loss_scalar = jnp.mean(jnp.square(pred_value - target_value))
-#     return loss_scalar, None
-
-
 def params_l2_loss(params):
     return 0.5 * sum(jnp.sum(jnp.square(p)) for p in jax.tree_leaves(params))
 
@@ -42,24 +29,22 @@ class OneStepAdvantagePolicyGradientLoss(LossFn):
         self,
         network: mz.nn.NeuralNetwork,
         params: chex.ArrayTree,
-        batch,
+        batch: mz.replay.TrainTarget,
     ) -> typing.Any:
-        r"""
-        Assume the batch data contains: (s_t, a_t, R_{t:t+n}, D_{t:t+n}, s_{t+N})
-        """
-        reward = batch.data.reward
-        action = batch.data.action
-        observation = batch.data.observation.observation
-        chex.assert_rank([reward, observation, action], [1, 2, 1])
+        value = batch.value[0]
+        action = batch.action[0]
+        stacked_frames = batch.stacked_frames
 
-        output_t = network.initial_inference(params, observation)
+        chex.assert_rank([value, stacked_frames, action], [1, 3, 1])
+
+        output_t = network.initial_inference(params, stacked_frames)
         output_tp1 = network.recurrent_inference(params, output_t.hidden_state, action)
 
         # compute loss
         v_val = output_t.value
         q_val = output_tp1.value
-        v_loss = jnp.mean(rlax.l2_loss(v_val, reward))
-        q_loss = jnp.mean(rlax.l2_loss(q_val, reward))
+        v_loss = jnp.mean(rlax.l2_loss(v_val, value))
+        q_loss = jnp.mean(rlax.l2_loss(q_val, value))
         adv = q_val - v_val
         pg_loss = rlax.policy_gradient_loss(
             logits_t=output_t.policy_logits,

@@ -1,4 +1,5 @@
 import copy
+import random
 from typing import Iterable, List, NamedTuple, Optional
 
 import chex
@@ -141,7 +142,7 @@ class MooZiAdder(ReverbAdder):
         self._writer.create_item(DEFAULT_PRIORITY_TABLE, 1.0, trajectory)
 
 
-class ReplaySample(NamedTuple):
+class Trajectory(NamedTuple):
     frame: NDArray[np.float32]
     reward: NDArray[np.float32]
     is_first: NDArray[np.bool]
@@ -150,8 +151,8 @@ class ReplaySample(NamedTuple):
     root_value: NDArray[np.float32]
     child_visits: NDArray[np.float32]
 
-    def cast(self) -> "ReplaySample":
-        return ReplaySample(
+    def cast(self) -> "Trajectory":
+        return Trajectory(
             frame=np.asarray(self.frame, dtype=np.float32),
             reward=np.asarray(self.reward, dtype=np.float32),
             is_first=np.asarray(self.is_first, dtype=np.bool),
@@ -163,7 +164,7 @@ class ReplaySample(NamedTuple):
 
 
 class TrainTarget(NamedTuple):
-    frame: NDArray[np.float32]
+    stacked_frames: NDArray[np.float32]
     action: NDArray[np.int32]
     value: NDArray[np.float32]
     last_reward: NDArray[np.float32]
@@ -171,7 +172,7 @@ class TrainTarget(NamedTuple):
 
     def cast(self) -> "TrainTarget":
         return TrainTarget(
-            frame=np.asarray(self.frame, dtype=np.float32),
+            stacked_frames=np.asarray(self.stacked_frames, dtype=np.float32),
             action=np.asarray(self.action, dtype=np.int32),
             value=np.asarray(self.value, dtype=np.float32),
             last_reward=np.asarray(self.last_reward, dtype=np.float32),
@@ -180,7 +181,7 @@ class TrainTarget(NamedTuple):
 
 
 def make_target(
-    sample: ReplaySample,
+    sample: Trajectory,
     start_idx,
     discount,
     num_unroll_steps,
@@ -202,11 +203,11 @@ def make_target(
 
     unrolled_data_stacked = tree_utils.stack_sequence_fields(unrolled_data)
 
-    frame = _get_frame(sample, start_idx, num_stacked_frames)
+    stacked_frames = _get_stacked_frames(sample, start_idx, num_stacked_frames)
     action = _get_action(sample, start_idx, num_unroll_steps)
 
     return TrainTarget(
-        frame=frame,
+        stacked_frames=stacked_frames,
         action=action,
         value=unrolled_data_stacked[0],
         last_reward=unrolled_data_stacked[1],
@@ -222,7 +223,7 @@ def _get_action(sample, start_idx, num_unroll_steps):
     return action
 
 
-def _get_frame(sample, start_idx, num_stacked_frames):
+def _get_stacked_frames(sample, start_idx, num_stacked_frames):
     frame_idx_lower = max(start_idx - num_stacked_frames + 1, 0)
     frame = sample.frame[frame_idx_lower : start_idx + 1]
     num_frames_to_pad = num_stacked_frames - frame.shape[0]
@@ -300,3 +301,34 @@ def make_replay(
         prefetch_size=prefetch_size,
     ).as_numpy_iterator()
     return ReverbReplay(server, adder, data_iterator, client=client)
+
+
+def post_process_data_iterator(
+    data_iterator,
+    batch_size: int,
+    discount: float,
+    num_unroll_steps: int,
+    num_td_steps: int,
+    num_stacked_frames: int,
+):
+    # NOTE: use jax.random instead of python native random?
+
+    def _make_one_target_from_one_trajectory(traj: Trajectory):
+        last_step_idx = traj.is_last.argmax()
+        random_start = random.randrange(last_step_idx + 1)
+        return mz.replay.make_target(
+            traj,
+            random_start,
+            discount,
+            num_unroll_steps,
+            num_td_steps,
+            num_stacked_frames,
+        )
+
+    while data := next(data_iterator).data:
+        raw_trajs = tree_utils.unstack_sequence_fields(data, batch_size=batch_size)
+        trajs = list(map(lambda x: Trajectory(**x), raw_trajs))
+        batched_target = tree_utils.stack_sequence_fields(
+            map(_make_one_target_from_one_trajectory, trajs)
+        )
+        yield batched_target

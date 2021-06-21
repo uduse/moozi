@@ -18,7 +18,7 @@ class RandomAgent(acme_agent.Agent):
         self._server = reverb_replay.server
 
         actor = mz.actor.RandomActor(reverb_replay.adder)
-        learner = mz.learner.LearnsNothingLearner()
+        learner = mz.learner.NoOpLearner()
         super().__init__(
             actor=actor,
             learner=learner,

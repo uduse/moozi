@@ -34,6 +34,9 @@ class SimpleQueue(object):
     def get(self):
         return self._list
 
+    def is_full(self) -> bool:
+        return len(self._list) == self._size
+
 
 class Actor(BaseActor):
     r"""
@@ -52,6 +55,7 @@ class Actor(BaseActor):
         policy: Policy,
         adder: mz.replay.MooZiAdder,
         random_key,
+        num_stacked_frames: int = 8,
         loggers: Optional[List] = None,
         name: Optional[str] = None,
     ):
@@ -61,17 +65,22 @@ class Actor(BaseActor):
         self._loggers = loggers or []
         self._name = name or self.__class__.__name__
         self._policy = policy
-        self._random_key = random_key
 
         self._memory = {
-            "last_frames": SimpleQueue(5),
+            "last_frames": SimpleQueue(num_stacked_frames),
+            "last_rewards": SimpleQueue(1000),
             "random_key": random_key,
             "policy_extras": SimpleQueue(5),
         }
 
     def select_action(self, observation: OLT) -> int:
         if isinstance(observation, OLT):
+            while not self._memory["last_frames"].is_full():
+                padding = np.zeros_like(observation.observation)
+                self._memory["last_frames"].put(padding)
             self._memory["last_frames"].put(observation.observation)
+        else:
+            raise NotImplementedError
 
         stacked_frames = jnp.array(self._memory["last_frames"].get())
 
@@ -115,6 +124,7 @@ class Actor(BaseActor):
         root_value, child_visits = self._get_last_search_stats()
         last_reflection = mz.replay.Reflection(action, root_value, child_visits)
         next_observation = mz.replay.Observation.from_env_timestep(next_timestep)
+        self._memory["last_rewards"] = next_observation.reward
         self._adder.add(last_reflection, next_observation)
 
     def _get_last_search_stats(self):

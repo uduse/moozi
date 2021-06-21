@@ -1,1 +1,1 @@
-from .policy import PolicyFeed, Policy, RandomPolicy
+from .policy import PolicyFeed, Policy, RandomPolicy, PriorPolicy

@@ -17,7 +17,7 @@ dim_repr = 2
 dim_action = 3
 network = mz.nn.get_network(
     mz.nn.NeuralNetworkSpec(
-        dim_image=dim_image,
+        stacked_frames_shape=dim_image,
         dim_repr=dim_repr,
         dim_action=dim_action,
         repr_net_sizes=(2,),

@@ -19,8 +19,8 @@ from nptyping import NDArray
 
 class PolicyFeed(NamedTuple):
     stacked_frames: chex.ArrayDevice
-    legal_actions_mask: types.NestedTensor
-    random_key: types.NestedTensor
+    legal_actions_mask: chex.ArrayDevice
+    random_key: chex.ArrayDevice
 
 
 class PolicyResult(NamedTuple):
@@ -41,8 +41,8 @@ class PriorPolicy(Policy):
         self,
         network: mz.nn.NeuralNetwork,
         variable_client: VariableClient,
-        epsilon: float,
-        temperature: float,
+        epsilon: float = 0.05,
+        temperature: float = 1.0,
     ) -> None:
         self._network = network
         self._variable_client = variable_client
@@ -72,7 +72,7 @@ class PriorPolicy(Policy):
         params = self._variable_client.params
         return _prior_policy(params, feed.stacked_frames, feed.random_key)
 
-    def update(self, wait: bool) -> None:
+    def update(self, wait: bool = False) -> None:
         self._variable_client.update(wait=wait)
 
 

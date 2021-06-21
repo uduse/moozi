@@ -44,11 +44,6 @@ class PriorPolicy(Policy):
         epsilon: float = 0.05,
         temperature: float = 1.0,
     ) -> None:
-        # self._epsilon = epsilon
-        # self._network = network
-        # self._temperature = temperature
-        # self._policy_fn = self._make_policy_fn()
-
         @jax.jit
         @chex.assert_max_traces(n=1)
         def _policy_fn(params, stacked_frames, random_key):

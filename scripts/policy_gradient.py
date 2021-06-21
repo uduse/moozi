@@ -99,9 +99,12 @@ data_iterator = mz.replay.post_process_data_iterator(
     num_stacked_frames,
 )
 
+# %%
+weight_decay = 1e-4
+entropy_reg = 0.5
 learner = mz.learner.SGDLearner(
     network,
-    loss_fn=mz.loss.OneStepAdvantagePolicyGradientLoss(),
+    loss_fn=mz.loss.OneStepAdvantagePolicyGradientLoss(weight_decay, entropy_reg),
     optimizer=optimizer,
     data_iterator=data_iterator,
     random_key=new_key,
@@ -139,7 +142,7 @@ agent = acme_agent.Agent(
 
 # %%
 loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent], logger=NoOpLogger())
-loop.run(num_episodes=1000)
+loop.run(num_episodes=100_000)
 
 # %%
 learner.close()

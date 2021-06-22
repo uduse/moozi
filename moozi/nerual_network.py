@@ -74,15 +74,14 @@ class MLPNet(hk.Module):
         super().__init__()
         self.spec = spec
 
-    def repr_net(self, stacked_frames):
-        flatten = hk.Flatten()
+    def repr_net(self, flattened_frames):
         net = hk.nets.MLP(
             output_sizes=[*self.spec.repr_net_sizes, self.spec.dim_repr],
             name="repr",
             activation=jnp.tanh,
             activate_final=True,
         )
-        return net(flatten(stacked_frames))
+        return net(flattened_frames)
 
     def pred_net(self, hidden_state):
         pred_trunk = hk.nets.MLP(

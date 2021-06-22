@@ -1,19 +1,26 @@
-import typing
+import functools
+from typing import Tuple, Any
 
 import chex
 import jax
 import jax.numpy as jnp
 import rlax
+from acme.jax.utils import add_batch_dim
+from jax import vmap
 
 import moozi as mz
 from moozi.logging import JAXBoardStepData
 
 
-class LossFn(typing.Protocol):
+class LossFn(object):
     def __call__(
-        self, network: mz.nn.NeuralNetwork, params: chex.ArrayTree, batch
-    ) -> typing.Any:
+        self,
+        network: mz.nn.NeuralNetwork,
+        params: chex.ArrayTree,
+        batch: mz.replay.TrainTarget,
+    ) -> Tuple[chex.ArrayDevice, Any]:
         r"""Loss function."""
+        raise NotImplementedError
 
 
 def params_l2_loss(params):
@@ -30,7 +37,7 @@ class OneStepAdvantagePolicyGradientLoss(LossFn):
         network: mz.nn.NeuralNetwork,
         params: chex.ArrayTree,
         batch: mz.replay.TrainTarget,
-    ) -> typing.Any:
+    ) -> Tuple[chex.ArrayDevice, Any]:
         value = jnp.take(batch.value, 0, axis=-1)
         action = jnp.take(batch.action, 0, axis=-1)
         stacked_frames = batch.stacked_frames
@@ -81,41 +88,57 @@ def mse(a, b):
 
 
 class MCTSLoss(LossFn):
-    def __init__(self, num_unroll_steps):
+    def __init__(self, num_unroll_steps, weight_decay=1e-4):
         self._num_unroll_steps = num_unroll_steps
+        self._weight_decay = weight_decay
 
     def __call__(
         self,
         network: mz.nn.NeuralNetwork,
         params: chex.ArrayTree,
         batch: mz.replay.TrainTarget,
-    ):
-        loss = 0
+    ) -> Tuple[chex.ArrayDevice, Any]:
+
+        chex.assert_rank(
+            [
+                batch.stacked_frames,
+                batch.action,
+                batch.value,
+                batch.last_reward,
+                batch.child_visits,
+            ],
+            [3, 2, 2, 2, 3],
+        )
+
+        loss = jnp.array([0])
         network_output = network.initial_inference(params, batch.stacked_frames)
-        loss += mse(batch.last_reward[0], network_output.reward)
-        loss += mse(batch.value[0], network_output.value)
-        loss += rlax.categorical_cross_entropy(
-            batch.child_visits[0], network_output.policy_logits
+        loss += vmap(mse)(batch.last_reward.take(0, axis=1), network_output.reward)
+        loss += vmap(mse)(batch.value.take(0, axis=1), network_output.value)
+        loss += vmap(rlax.categorical_cross_entropy)(
+            batch.child_visits.take(0, axis=1), network_output.policy_logits
         )
 
         for i in range(self._num_unroll_steps):
+            step_loss = 0
             network_output = network.recurrent_inference(
-                params, network_output.hidden_state, batch.action[i]
+                params, network_output.hidden_state, batch.action.take(0, axis=1)
             )
-            loss += mse(batch.last_reward[i + 1], network_output.reward)
-            loss += mse(batch.value[i + 1], network_output.value)
-            loss += jnp.mean(
-                jax.vmap(rlax.categorical_cross_entropy)(
-                    batch.child_visits[i + 1], network_output.policy_logits
-                )
+
+            step_loss += vmap(mse)(
+                batch.last_reward.take(i + 1, axis=1), network_output.reward
             )
-        return loss
+            step_loss += vmap(mse)(
+                batch.value.take(i + 1, axis=1), network_output.value
+            )
+            step_loss += vmap(rlax.categorical_cross_entropy)(
+                batch.child_visits.take(i + 1, axis=1), network_output.policy_logits
+            )
 
-        # def _body_fn(i, hidden_state):
-        #     next_network_output = network.recurrent_inference(
-        #         params, hidden_state, batch.actions[i]
-        #     )
+            invalid_action_mask = batch.action.take(0, axis=1) == -1
+            step_loss *= invalid_action_mask
+            loss += step_loss
 
-        # jax.lax.fori_loop(
-        #     0, self._num_unroll_steps, _body_fn, starting_network_output.hidden_state
-        # )
+        loss += params_l2_loss(params) * self._weight_decay
+        loss = jnp.mean(loss)
+
+        return loss, JAXBoardStepData(scalars={"loss": loss}, histograms={})

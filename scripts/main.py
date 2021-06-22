@@ -102,7 +102,7 @@ data_iterator = mz.replay.post_process_data_iterator(
 # %%
 weight_decay = 1e-4
 entropy_reg = 0.5
-loss_fn = mz.loss.OneStepAdvantagePolicyGradientLoss(weight_decay, entropy_reg)
+loss_fn = mz.loss.MCTSLoss(num_unroll_steps, weight_decay)
 learner = mz.learner.SGDLearner(
     network,
     loss_fn=loss_fn,
@@ -118,7 +118,7 @@ variable_client = VariableClient(learner, None)
 
 # %%
 master_key, new_key = jax.random.split(master_key)
-policy = mz.policies.PriorPolicy(network, variable_client)
+policy = mz.policies.SingleRollMonteCarlo(network, variable_client)
 actor = mz.Actor(
     env_spec,
     policy,

@@ -68,7 +68,7 @@ class Actor(BaseActor):
 
         self._memory = {
             "last_frames": SimpleQueue(num_stacked_frames),
-            "last_rewards": SimpleQueue(1000),
+            "rolling_average_reward": SimpleQueue(5000),
             "random_key": random_key,
             "policy_extras": SimpleQueue(5),
         }
@@ -120,8 +120,8 @@ class Actor(BaseActor):
         root_value, child_visits = self._get_last_search_stats()
         last_reflection = mz.replay.Reflection(action, root_value, child_visits)
         next_observation = mz.replay.Observation.from_env_timestep(next_timestep)
-        self._memory["last_rewards"].put(next_observation.reward)
-        rolling_reward = np.mean(self._memory["last_rewards"].get())
+        self._memory["rolling_average_reward"].put(next_observation.reward)
+        rolling_reward = np.mean(self._memory["rolling_average_reward"].get())
         data = mz.logging.JAXBoardStepData(
             scalars={"rolling_reward": rolling_reward}, histograms={}
         )

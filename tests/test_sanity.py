@@ -16,22 +16,6 @@ from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironm
 from pytest_mock import MockerFixture
 
 
-@pytest.fixture
-def n_step_reverb_replay(env_spec):
-    # NOTE: fixtures are copied for each test, maybe problematic for a shared replay buffer
-    batch_size = 3
-    n_steps = 5
-    return acme_replay.make_reverb_prioritized_nstep_replay(
-        env_spec, batch_size=batch_size, n_step=n_steps
-    )
-
-
-# @pytest.fixture
-# def random_noise_learner(network: mz.nn.NeuralNetwork):
-#     params = network.init(jax.random.PRNGKey(0))
-#     return mz.learner.RandomNoiseLearner(params)
-
-
 def test_prior_actor(
     env, env_spec, network, n_step_reverb_replay, random_noise_learner
 ):
@@ -90,25 +74,3 @@ def test_replay(env, env_spec):
     address = f"localhost:{server.port}"
     client = reverb.Client(address)
     adder = mz.replay.MooZiAdder(client)
-
-
-# def test_add_search_stats():
-#     start = mz.utils.make_moozi_observation(
-#         env_timestep=dm_env.restart(0), root_value=-10, child_visits=[1, 2]
-#     )
-#     mid = mz.utils.make_moozi_observation(
-#         env_timestep=dm_env.transition(
-#             reward=1, observation={"action": 0, "image": [0, 1]}, discount=0.5
-#         ),
-#         root_value=30,
-#         child_visits=[10, 20],
-#     )
-#     end = mz.utils.make_moozi_observation(
-#         env_timestep=dm_env.termination(
-#             reward=3, observation={"action": 0, "image": [3, 4]}
-#         ),
-#         root_value=40,
-#         child_visits=[100, 200],
-#     )
-#     print(start)
-#     # mz.utils.make_moozi_observation(end, end_search)

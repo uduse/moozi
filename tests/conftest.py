@@ -1,6 +1,7 @@
 from typing import List, Sequence
 
 import acme
+from dm_env import Environment
 import jax
 import moozi as mz
 import open_spiel
@@ -19,7 +20,7 @@ update_jax_config()
 
 
 @pytest.fixture
-def env():
+def env() -> Environment:
     raw_env = open_spiel.python.rl_environment.Environment("catch(columns=5,rows=5)")
     env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
     env = acme.wrappers.SinglePrecisionWrapper(env)
@@ -34,6 +35,11 @@ def env_spec(env):
 
 @pytest.fixture
 def num_stacked_frames():
+    return 2
+
+
+@pytest.fixture
+def num_unroll_steps():
     return 2
 
 

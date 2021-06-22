@@ -3,13 +3,13 @@ import jax
 import numpy as np
 import jax.numpy as jnp
 import pytest
-from moozi.policies.policy import PolicyFeed, PriorPolicy, RandomPolicy
+from moozi.policies import PolicyFeed, PriorPolicy, RandomPolicy, SingleRollMonteCarlo
 from moozi.nerual_network import NeuralNetwork
 
 
 @pytest.fixture
 def policy_feed(env, num_stacked_frames, random_key) -> PolicyFeed:
-    legal_actions_mask = np.zeros(10)
+    legal_actions_mask = np.zeros(4)
     legal_actions_indices = [1, 2, 3]
     legal_actions_mask[legal_actions_indices] = 1
     legal_actions_mask = jnp.array(legal_actions_mask)
@@ -42,6 +42,19 @@ def test_prior_poliy_sanity(
         epsilon=0.1,
         temperature=1,
     )
+    result = policy.run(policy_feed)
+    action_is_legal = policy_feed.legal_actions_mask[result.action] == 1
+    assert action_is_legal
+
+
+def test_monte_carlo_sanity(policy_feed, network, variable_client):
+    policy = SingleRollMonteCarlo(
+        network=network,
+        variable_client=variable_client,
+        num_unroll_steps=3,
+        num_simulations_per_action=20,
+    )
+
     result = policy.run(policy_feed)
     action_is_legal = policy_feed.legal_actions_mask[result.action] == 1
     assert action_is_legal

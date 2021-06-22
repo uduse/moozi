@@ -38,7 +38,9 @@ def get_network(spec: NeuralNetworkSpec):
     # TODO: rename to build network
     hk_module = functools.partial(MLPNet, spec)
     initial_inference = hk.without_apply_rng(
-        hk.transform(lambda image: hk_module().initial_inference(image))
+        hk.transform(
+            lambda stacked_frames: hk_module().initial_inference(stacked_frames)
+        )
     )
     recurrent_inference = hk.without_apply_rng(
         hk.transform(lambda h, a: hk_module().recurrent_inference(h, a))
@@ -72,14 +74,15 @@ class MLPNet(hk.Module):
         super().__init__()
         self.spec = spec
 
-    def repr_net(self, image):
+    def repr_net(self, stacked_frames):
+        flatten = hk.Flatten()
         net = hk.nets.MLP(
             output_sizes=[*self.spec.repr_net_sizes, self.spec.dim_repr],
             name="repr",
             activation=jnp.tanh,
             activate_final=True,
         )
-        return net(image)
+        return net(flatten(stacked_frames))
 
     def pred_net(self, hidden_state):
         pred_trunk = hk.nets.MLP(

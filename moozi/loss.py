@@ -74,3 +74,48 @@ class OneStepAdvantagePolicyGradientLoss(LossFn):
                 "logits": output_t.policy_logits,
             },
         )
+
+
+def mse(a, b):
+    return jnp.mean((a - b) ** 2)
+
+
+class MCTSLoss(LossFn):
+    def __init__(self, num_unroll_steps):
+        self._num_unroll_steps = num_unroll_steps
+
+    def __call__(
+        self,
+        network: mz.nn.NeuralNetwork,
+        params: chex.ArrayTree,
+        batch: mz.replay.TrainTarget,
+    ):
+        loss = 0
+        network_output = network.initial_inference(params, batch.stacked_frames)
+        loss += mse(batch.last_reward[0], network_output.reward)
+        loss += mse(batch.value[0], network_output.value)
+        loss += rlax.categorical_cross_entropy(
+            batch.child_visits[0], network_output.policy_logits
+        )
+
+        for i in range(self._num_unroll_steps):
+            network_output = network.recurrent_inference(
+                params, network_output.hidden_state, batch.action[i]
+            )
+            loss += mse(batch.last_reward[i + 1], network_output.reward)
+            loss += mse(batch.value[i + 1], network_output.value)
+            loss += jnp.mean(
+                jax.vmap(rlax.categorical_cross_entropy)(
+                    batch.child_visits[i + 1], network_output.policy_logits
+                )
+            )
+        return loss
+
+        # def _body_fn(i, hidden_state):
+        #     next_network_output = network.recurrent_inference(
+        #         params, hidden_state, batch.actions[i]
+        #     )
+
+        # jax.lax.fori_loop(
+        #     0, self._num_unroll_steps, _body_fn, starting_network_output.hidden_state
+        # )

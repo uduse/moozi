@@ -1,13 +1,13 @@
 from typing import List, Sequence
+
+import acme
+import jax
+import moozi as mz
+import open_spiel
+import pytest
+from acme import types
 from acme.core import VariableSource
 from acme.jax.variable_utils import VariableClient
-import jax
-import pytest
-import open_spiel
-import acme
-
-from acme import types
-import moozi as mz
 
 
 def update_jax_config():

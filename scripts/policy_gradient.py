@@ -117,10 +117,10 @@ variable_client = VariableClient(learner, None)
 
 # %%
 master_key, new_key = jax.random.split(master_key)
-prior_policy = mz.policies.PriorPolicy(network, variable_client)
+policy = mz.policies.PriorPolicy(network, variable_client)
 actor = mz.Actor(
     env_spec,
-    prior_policy,
+    policy,
     reverb_replay.adder,
     new_key,
     num_stacked_frames=num_stacked_frames,
@@ -138,7 +138,6 @@ agent = acme_agent.Agent(
     min_observations=min_observations,
     observations_per_step=int(obs_ratio),
 )
-
 
 # %%
 loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent], logger=NoOpLogger())

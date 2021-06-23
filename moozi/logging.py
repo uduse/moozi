@@ -10,23 +10,6 @@ import jax.numpy as jnp
 
 import moozi as mz
 
-# TIMEZONE = pytz.timezone("America/Edmonton")
-
-# https://github.com/guildai/guildai/issues/290
-# TMP_LOG_DIR = None
-# def get_log_dir():
-#     global TMP_LOG_DIR
-#     guild_ai_run_dir_key = "RUN_DIR"
-#     env_items = dict(os.environ.items())
-#     if guild_ai_run_dir_key in env_items:
-#         return env_items[guild_ai_run_dir_key]
-#     elif TMP_LOG_DIR:
-#         return TMP_LOG_DIR
-#     else:
-#         TMP_LOG_DIR = "/tmp/moozi-log-" + str(uuid.uuid4())[:16]
-#         print(f"Using log directory {TMP_LOG_DIR}")
-#         return TMP_LOG_DIR
-
 
 class JAXBoardStepData(typing.NamedTuple):
     scalars: typing.Dict[str, jnp.DeviceArray]

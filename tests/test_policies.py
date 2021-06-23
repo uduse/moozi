@@ -1,9 +1,10 @@
+from acme.jax.utils import add_batch_dim
 from acme.jax.variable_utils import VariableClient
 import jax
 import numpy as np
 import jax.numpy as jnp
 import pytest
-from moozi.policies import PolicyFeed, PriorPolicy, RandomPolicy, SingleRollMonteCarlo
+from moozi.policies import PolicyFeed, PriorPolicy, RandomPolicy, MonteCarlo
 from moozi.nerual_network import NeuralNetwork
 
 
@@ -48,7 +49,7 @@ def test_prior_poliy_sanity(
 
 
 def test_monte_carlo_sanity(policy_feed, network, variable_client):
-    policy = SingleRollMonteCarlo(
+    policy = MonteCarlo(
         network=network,
         variable_client=variable_client,
         num_unroll_steps=3,

@@ -76,7 +76,7 @@ def make_signature(env_spec: specs.EnvironmentSpec, max_episode_length):
     )
 
 
-class MooZiAdder(ReverbAdder):
+class Adder(ReverbAdder):
     def __init__(
         self,
         client: reverb.Client,
@@ -264,8 +264,6 @@ def _get_child_visits(sample, curr_idx, last_step_idx):
 def make_replay(
     env_spec: specs.EnvironmentSpec,
     max_episode_length: int = 500,
-    # num_td_steps: int = 10,
-    # num_stacked_frames: int = 8,
     batch_size: int = 32,
     max_replay_size: int = 100_000,
     min_replay_size: int = 1,
@@ -275,10 +273,9 @@ def make_replay(
 
     signature = mz.replay.make_signature(env_spec, max_episode_length)
 
-    sampler = reverb.selectors.Uniform()
     replay_table = reverb.Table(
         name=replay_table_name,
-        sampler=sampler,
+        sampler=reverb.selectors.Uniform(),
         remover=reverb.selectors.Fifo(),
         max_size=max_replay_size,
         rate_limiter=reverb.rate_limiters.MinSize(min_replay_size),
@@ -289,9 +286,7 @@ def make_replay(
     # The adder is used to insert observations into replay.
     address = f"localhost:{server.port}"
     client = reverb.Client(address)
-    adder = MooZiAdder(
-        client, max_episode_length=max_episode_length, delta_encoded=True
-    )
+    adder = Adder(client, max_episode_length=max_episode_length, delta_encoded=True)
 
     # The dataset provides an interface to sample from replay.
     data_iterator = datasets.make_reverb_dataset(
@@ -300,7 +295,10 @@ def make_replay(
         batch_size=batch_size,
         prefetch_size=prefetch_size,
     ).as_numpy_iterator()
-    return ReverbReplay(server, adder, data_iterator, client=client)
+
+    return ReverbReplay(
+        server=server, adder=adder, data_iterator=data_iterator, client=client
+    )
 
 
 def post_process_data_iterator(

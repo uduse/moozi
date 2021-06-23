@@ -39,7 +39,7 @@ def num_stacked_frames():
 
 
 @pytest.fixture
-def num_unroll_steps():
+def num_unroll_steps() -> int:
     return 2
 
 

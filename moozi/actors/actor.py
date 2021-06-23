@@ -53,7 +53,7 @@ class Actor(BaseActor):
         self,
         env_spec: specs.EnvironmentSpec,
         policy: Policy,
-        adder: mz.replay.MooZiAdder,
+        adder: mz.replay.Adder,
         random_key,
         num_stacked_frames: int = 8,
         loggers: Optional[List] = None,

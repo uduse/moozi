@@ -69,7 +69,7 @@ class SGDLearner(acme.Learner):
     ):
         self._name = name or self.__class__.__name__
         self._counter = acme.utils.counting.Counter()
-        self._loggers = loggers or self._get_default_loggers()
+        self._loggers = loggers or []
 
         self._data_iterator = acme.jax.utils.prefetch(data_iterator)
         self._sgd_step_fn = self._make_sgd_step_fn(network, loss_fn, optimizer)
@@ -79,11 +79,11 @@ class SGDLearner(acme.Learner):
             params=params, opt_state=optimizer.init(params), steps=0, rng_key=key_state
         )
 
-    def _get_default_loggers(self):
-        return [
-            acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
-            mz.logging.JAXBoardLogger(self._name, time_delta=5.0),
-        ]
+    # def _get_default_loggers(self):
+    #     return [
+    #         acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
+    #         mz.logging.JAXBoardLogger(self._name, time_delta=5.0),
+    #     ]
 
     def _make_sgd_step_fn(
         self, network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, optimizer

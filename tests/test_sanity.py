@@ -73,4 +73,4 @@ def test_replay(env, env_spec):
     server = reverb.Server([replay_table], port=None)
     address = f"localhost:{server.port}"
     client = reverb.Client(address)
-    adder = mz.replay.MooZiAdder(client)
+    adder = mz.replay.Adder(client)

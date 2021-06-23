@@ -71,7 +71,7 @@ class PriorPolicy(Policy):
         return self._policy_fn(params, feed.stacked_frames, feed.random_key)
 
     def update(self, wait: bool = False) -> None:
-        self._variable_client.update(wait=wait)
+        self._variable_client.update(wait)
 
 
 class RandomPolicy(Policy):

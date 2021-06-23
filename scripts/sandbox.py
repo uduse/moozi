@@ -91,7 +91,7 @@ params = network.init(new_key)
 # %%
 # master_key, new_key = jax.random.split(master_key)
 data_iterator = mz.replay.post_process_data_iterator(
-    reverb_replay.data_iterator,
+    åeverb_replay.data_iterator,
     batch_size,
     discount,
     num_unroll_steps,
@@ -148,3 +148,6 @@ loop.run(num_episodes=100_000)
 # %%
 learner.close()
 actor.close()
+
+# %%
+jnp.ones((3, 3)).take(0, axis=0)

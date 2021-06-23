@@ -43,28 +43,30 @@ class MonteCarlo(Policy):
         @jax.jit
         @chex.assert_max_traces(n=1)
         def _policy_fn(params, feed: PolicyFeed) -> PolicyResult:
+            key = feed.random_key
             action_space_size = jnp.size(feed.legal_actions_mask)
             actions_reward_sum = jnp.zeros((action_space_size,))
 
-            starting_hidden_state = network.initial_inference(
-                params, add_batch_dim(feed.stacked_frames)
+            starting_hidden_state = network.initial_inference_unbatched(
+                params, feed.stacked_frames
             ).hidden_state
-            starting_hidden_state = squeeze_batch_dim(starting_hidden_state)
 
+            key, new_key = jax.random.split(key)
             random_actions_for_unrolling = jax.random.randint(
-                feed.random_key,
+                new_key,
                 (action_space_size, num_simulations_per_action, num_unroll_steps),
                 minval=jnp.array(0),
                 maxval=jnp.array(action_space_size),
             )
 
+            # TODO: too verbose, break into smaller functions
             for child_action_idx in jnp.arange(action_space_size):
                 for sim_idx in range(num_simulations_per_action):
                     hidden_state = starting_hidden_state
-                    child_network_output = network.recurrent_inference(
+                    child_network_output = network.recurrent_inference_unbatched(
                         params,
-                        add_batch_dim(hidden_state),
-                        add_batch_dim(child_action_idx),
+                        hidden_state,
+                        child_action_idx,
                     )
                     actions_reward_sum = index_add(
                         actions_reward_sum,
@@ -72,14 +74,15 @@ class MonteCarlo(Policy):
                         child_network_output.reward.item(),
                     )
                     roll_out_hidden_state = child_network_output.hidden_state
+
                     for step_idx in range(num_unroll_steps):
                         random_action_for_unroll = random_actions_for_unrolling[
                             child_action_idx, sim_idx, step_idx
                         ]
-                        network_output = network.recurrent_inference(
+                        network_output = network.recurrent_inference_unbatched(
                             params,
-                            add_batch_dim(roll_out_hidden_state),
-                            add_batch_dim(random_action_for_unroll),
+                            roll_out_hidden_state,
+                            random_action_for_unroll,
                         )
                         actions_reward_sum = index_add(
                             actions_reward_sum,
@@ -88,11 +91,13 @@ class MonteCarlo(Policy):
                         )
                         roll_out_hidden_state = network_output.hidden_state
 
-            child_action_idx = rlax.epsilon_greedy(epsilon).sample(
-                feed.random_key, actions_reward_sum
-            )
+            key, new_key = jax.random.split(key)
+            action_probs = rlax.epsilon_greedy(epsilon).probs(actions_reward_sum)
+            action_probs *= feed.legal_actions_mask
+            key, new_key = jax.random.split(key)
+            action = rlax.categorical_sample(new_key, action_probs)
 
-            return PolicyResult(action=child_action_idx, extras={})
+            return PolicyResult(action=action, extras={})
 
         self._policy_fn = _policy_fn
         self._variable_client = variable_client

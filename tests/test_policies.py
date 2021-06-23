@@ -1,5 +1,6 @@
 from acme.jax.utils import add_batch_dim
 from acme.jax.variable_utils import VariableClient
+import chex
 import jax
 import numpy as np
 import jax.numpy as jnp
@@ -57,5 +58,9 @@ def test_monte_carlo_sanity(policy_feed, network, variable_client):
     )
 
     result = policy.run(policy_feed)
+    action_is_legal = policy_feed.legal_actions_mask[result.action] == 1
+    assert action_is_legal
+
+    result = jax.jit(policy.run, static_argnums=(0,))(policy_feed)
     action_is_legal = policy_feed.legal_actions_mask[result.action] == 1
     assert action_is_legal

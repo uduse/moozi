@@ -1,5 +1,6 @@
 import functools
 import typing
+from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 
 import chex
 import haiku as hk
@@ -23,6 +24,8 @@ class NeuralNetwork(typing.NamedTuple):
     init: typing.Callable
     initial_inference: typing.Callable[..., NeuralNetworkOutput]
     recurrent_inference: typing.Callable[..., NeuralNetworkOutput]
+    initial_inference_unbatched: typing.Callable[..., NeuralNetworkOutput]
+    recurrent_inference_unbatched: typing.Callable[..., NeuralNetworkOutput]
 
 
 class NeuralNetworkSpec(typing.NamedTuple):
@@ -56,13 +59,30 @@ def get_network(spec: NeuralNetworkSpec):
             recurrent_inference.init(
                 key_2,
                 jnp.ones((batch_size, spec.dim_repr)),
-                # input actions will be scalar values and converted to one-hot ad-hoc
                 jnp.ones((batch_size,)),
             ),
         )
         return params
 
-    return NeuralNetwork(init, initial_inference.apply, recurrent_inference.apply)
+    def _initial_inference_unbatched(params, stacked_frames):
+        return squeeze_batch_dim(
+            initial_inference.apply(params, add_batch_dim(stacked_frames))
+        )
+
+    def _recurrent_inference_unbatched(params, hidden_state, action):
+        return squeeze_batch_dim(
+            recurrent_inference.apply(
+                params, add_batch_dim(hidden_state), add_batch_dim(action)
+            )
+        )
+
+    return NeuralNetwork(
+        init,
+        initial_inference.apply,
+        recurrent_inference.apply,
+        _initial_inference_unbatched,
+        _recurrent_inference_unbatched,
+    )
 
 
 class MLPNet(hk.Module):
@@ -118,9 +138,9 @@ class MLPNet(hk.Module):
             activate_final=True,
         )
 
-        action = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
-        chex.assert_equal_rank([hidden_state, action])
-        state_action_repr = jnp.concatenate((hidden_state, action), axis=-1)
+        action_one_hot = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
+        chex.assert_equal_rank([hidden_state, action_one_hot])
+        state_action_repr = jnp.concatenate((hidden_state, action_one_hot), axis=-1)
         dyna_trunk_out = dyna_trunk(state_action_repr)
         next_hidden_states = trans_branch(dyna_trunk_out)
         next_rewards = jnp.squeeze(reward_branch(dyna_trunk_out), axis=-1)

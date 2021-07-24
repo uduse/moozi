@@ -1,3 +1,12 @@
+- model: main
+  operations:
+    run:
+      default: true
+      main: scripts.main
+      output-scalars: off
+      flags-import: all
+
+    
 - model: pg
   descript: Policy Gradient method on the game of Catch
   operations:

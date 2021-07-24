@@ -60,7 +60,7 @@ def test_integration(
     policy = mz.policies.SingleRollMonteCarlo(
         network, variable_client, num_unroll_steps=num_unroll_steps
     )
-    actor = mz.Actor(
+    actor = mz.MuZeroActor(
         env_spec,
         policy,
         reverb_replay.adder,

@@ -14,9 +14,9 @@
         // "--profile-svg",
         // "-o faulthandler_timeout=20",
         // "--fulltrace",
-        "--cov=.",
-        "--cov-report=xml",
-        "--cov-report=html",
+        // "--cov=.",
+        // "--cov-report=xml",
+        // "--cov-report=html",
         "tests",
     ],
     // disable native tests to avoid redundant CodeLens

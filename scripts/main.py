@@ -119,7 +119,7 @@ variable_client = VariableClient(learner, None)
 # %%
 master_key, new_key = jax.random.split(master_key)
 policy = mz.policies.SingleRollMonteCarlo(network, variable_client)
-actor = mz.Actor(
+actor = mz.MuZeroActor(
     env_spec,
     policy,
     reverb_replay.adder,

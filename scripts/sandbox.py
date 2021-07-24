@@ -120,7 +120,7 @@ master_key, new_key = jax.random.split(master_key)
 policy = mz.policies.SingleRollMonteCarlo(
     network, variable_client, num_unroll_steps=num_unroll_steps
 )
-actor = mz.Actor(
+actor = mz.MuZeroActor(
     env_spec,
     policy,
     reverb_replay.adder,
@@ -150,4 +150,12 @@ learner.close()
 actor.close()
 
 # %%
-jnp.ones((3, 3)).take(0, axis=0)
+params = {"x": jnp.ones((3, 3))}
+
+def func(params, y, z):
+    return jnp.sum(jax.tree_flatten(params)) * jnp.mean(z @ y)
+
+func = jnp.vectorize(func, signature="(),(m,n),(n,m)->()")
+y = jnp.ones((4, 3)) * 2
+z = jnp.ones((3, 4)) * 2
+func(params, y, z)

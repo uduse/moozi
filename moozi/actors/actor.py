@@ -16,7 +16,7 @@ from acme.jax.variable_utils import VariableClient
 from acme.utils import tree_utils
 from acme.wrappers.open_spiel_wrapper import OLT
 from moozi.policies import PolicyFeed, Policy
-from nptyping import NDArray
+# from nptyping import NDArray
 
 
 class SimpleQueue(object):
@@ -38,7 +38,7 @@ class SimpleQueue(object):
         return len(self._list) == self._size
 
 
-class Actor(BaseActor):
+class MuZeroActor(BaseActor):
     r"""
 
     # NOTE: acme's actor's batching behavior is inconsistent

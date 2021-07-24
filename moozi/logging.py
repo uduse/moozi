@@ -26,6 +26,11 @@ class JAXBoardStepData(typing.NamedTuple):
             self.histograms[name] = weights
 
 
+class StepData(typing.NamedTuple):
+    name: str
+    data: jnp.DeviceArray
+
+
 class JAXBoardLogger(acme.utils.loggers.base.Logger):
     def __init__(self, name, log_dir=None, time_delta: float = 0.0):
         self._name = name

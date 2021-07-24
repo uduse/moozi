@@ -14,8 +14,10 @@ tqdm = "*"
 trueskill = "*"
 rlax = "*"
 nbconvert = "<6"
+guildai = "*"
 
 [dev-packages]
 
+jupyter = "*"
 [requires]
 python_version = "3.8"

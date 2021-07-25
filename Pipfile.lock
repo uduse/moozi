@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "650e98a5628c8b14e47a991770b2e2206fb9e065ec66cf174922c6426b203478"
+            "sha256": "be5f8269323e8e8f50581e2718565e6481a223c51e8ad5b88be7733d80762f4c"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -116,6 +116,10 @@
                 "sha256:23e223426b28491b1ced97dc3bbe183027419dfc7982b4fa2f05d5f3ff10711c"
             ],
             "version": "==0.3.2"
+        },
+        "dm-acme": {
+            "editable": true,
+            "path": "./local_deps/acme"
         },
         "dm-env": {
             "hashes": [

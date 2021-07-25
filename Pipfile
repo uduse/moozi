@@ -15,9 +15,17 @@ trueskill = "*"
 rlax = "*"
 nbconvert = "<6"
 guildai = "*"
+dm-acme = {editable = true, path = "./local_deps/acme"}
+black = "*"
+reverb = "*"
+mypy = "*"
+numpy = "*"
+nptyping = "*"
+gym = "*"
+open-spiel = "*"
 
 [dev-packages]
-
 jupyter = "*"
+
 [requires]
 python_version = "3.8"

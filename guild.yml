@@ -5,6 +5,11 @@
       main: scripts.main
       output-scalars: off
       flags-import: all
+      sourcecode:
+        - '*.py'
+        - '*.yml'
+        - exclude:
+            dir: local_deps
 
     
 - model: pg

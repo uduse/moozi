@@ -57,7 +57,7 @@ def test_integration(
     )
 
     variable_client = VariableClient(learner, None)
-    policy = mz.policies.SingleRollMonteCarlo(
+    policy = mz.policies.MonteCarlo(
         network, variable_client, num_unroll_steps=num_unroll_steps
     )
     actor = mz.MuZeroActor(

@@ -18,14 +18,14 @@ from nptyping import NDArray
 
 
 class PolicyFeed(NamedTuple):
-    stacked_frames: chex.ArrayDevice
-    legal_actions_mask: chex.ArrayDevice
-    random_key: chex.ArrayDevice
+    stacked_frames: jnp.ndarray
+    legal_actions_mask: jnp.ndarray
+    random_key: jnp.ndarray
 
 
 class PolicyResult(NamedTuple):
-    action: chex.ArrayDevice
-    extras: Dict[str, chex.ArrayDevice]
+    action: jnp.ndarray
+    extras: Dict[str, jnp.ndarray]
 
 
 class Policy(object):

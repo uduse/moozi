@@ -6,7 +6,7 @@ import numpy as np
 import jax.numpy as jnp
 import pytest
 from moozi.policies import PolicyFeed, PriorPolicy, RandomPolicy, MonteCarlo
-from moozi.nerual_network import NeuralNetwork
+from moozi.nn import NeuralNetwork
 
 
 @pytest.fixture

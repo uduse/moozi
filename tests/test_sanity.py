@@ -61,7 +61,7 @@ def test_logger(mocker: MockerFixture, tmp_path):
 
 def test_replay(env, env_spec):
     max_replay_size = 1000
-    signature = mz.replay.make_signature(env_spec)
+    signature = mz.replay.make_signature(env_spec, max_replay_size)
     replay_table = reverb.Table(
         name="test",
         sampler=reverb.selectors.Fifo(),

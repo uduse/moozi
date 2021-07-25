@@ -1,5 +1,5 @@
 import functools
-import typing
+from typing import Callable, NamedTuple
 from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 
 import chex
@@ -10,24 +10,23 @@ import jax.numpy as jnp
 import moozi as mz
 
 
-@chex.dataclass(frozen=True)
-class NeuralNetworkOutput:
-    value: chex.ArrayDevice
-    reward: chex.ArrayDevice
+class NeuralNetworkOutput(NamedTuple):
+    value: jnp.ndarray
+    reward: jnp.ndarray
     # policy_logits: typing.Dict[mz.Action, float]
-    policy_logits: chex.ArrayDevice
-    hidden_state: chex.ArrayDevice
+    policy_logits: jnp.ndarray
+    hidden_state: jnp.ndarray
 
 
-class NeuralNetwork(typing.NamedTuple):
-    init: typing.Callable
-    initial_inference: typing.Callable[..., NeuralNetworkOutput]
-    recurrent_inference: typing.Callable[..., NeuralNetworkOutput]
-    initial_inference_unbatched: typing.Callable[..., NeuralNetworkOutput]
-    recurrent_inference_unbatched: typing.Callable[..., NeuralNetworkOutput]
+class NeuralNetwork(NamedTuple):
+    init: Callable
+    initial_inference: Callable[..., NeuralNetworkOutput]
+    recurrent_inference: Callable[..., NeuralNetworkOutput]
+    initial_inference_unbatched: Callable[..., NeuralNetworkOutput]
+    recurrent_inference_unbatched: Callable[..., NeuralNetworkOutput]
 
 
-class NeuralNetworkSpec(typing.NamedTuple):
+class NeuralNetworkSpec(NamedTuple):
     stacked_frames_shape: tuple
     dim_repr: int
     dim_action: int

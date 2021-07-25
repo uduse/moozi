@@ -6,7 +6,7 @@ import rlax
 from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 from acme.jax.variable_utils import VariableClient
 from jax.ops import index_add, index
-from moozi.nerual_network import NeuralNetwork, NeuralNetworkOutput
+from moozi.nn import NeuralNetwork, NeuralNetworkOutput
 
 from .policy import Policy, PolicyFeed, PolicyResult
 

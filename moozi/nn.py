@@ -6,7 +6,6 @@ import chex
 import haiku as hk
 import jax
 import jax.numpy as jnp
-from torch.nn.modules import activation
 
 import moozi as mz
 

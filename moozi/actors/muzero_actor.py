@@ -16,7 +16,6 @@ from acme.jax.variable_utils import VariableClient
 from acme.utils import tree_utils
 from acme.wrappers.open_spiel_wrapper import OLT
 from moozi.policies import PolicyFeed, Policy
-# from nptyping import NDArray
 
 
 class SimpleQueue(object):

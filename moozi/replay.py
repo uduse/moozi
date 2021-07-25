@@ -22,8 +22,8 @@ class Observation(NamedTuple):
     frame: np.ndarray
     reward: np.float32
     # legal_actions_mask: chex.Array
-    is_first: np.bool
-    is_last: np.bool
+    is_first: np.bool8
+    is_last: np.bool8
 
     @staticmethod
     def from_env_timestep(timestep: dm_env.TimeStep):
@@ -33,9 +33,9 @@ class Observation(NamedTuple):
                 reward = np.float32(0)
             else:
                 reward = np.float32(timestep.reward).squeeze()
-            # legal_actions_mask = timestep.observation[0].legal_actions.astype(np.bool)
-            is_first = np.bool(timestep.first())
-            is_last = np.bool(timestep.last())
+            # legal_actions_mask = timestep.observation[0].legal_actions.astype(np.bool8)
+            is_first = np.bool8(timestep.first())
+            is_last = np.bool8(timestep.last())
             # return Observation(frame, reward, legal_actions_mask, is_first, is_last)
             return Observation(frame, reward, is_first, is_last)
         else:
@@ -57,8 +57,8 @@ def make_signature(env_spec: specs.EnvironmentSpec, max_episode_length):
     obs_signature = Observation(
         frame=_prefix_dim(env_spec.observations.observation, max_episode_length),
         reward=_prefix_dim(env_spec.rewards, max_episode_length),
-        is_first=specs.Array(shape=(max_episode_length,), dtype=np.bool),
-        is_last=specs.Array(shape=(max_episode_length,), dtype=np.bool),
+        is_first=specs.Array(shape=(max_episode_length,), dtype=np.bool8),
+        is_last=specs.Array(shape=(max_episode_length,), dtype=np.bool8),
     )
 
     ref_signature = Reflection(
@@ -145,8 +145,8 @@ class Adder(ReverbAdder):
 class Trajectory(NamedTuple):
     frame: NDArray[np.float32]
     reward: NDArray[np.float32]
-    is_first: NDArray[np.bool]
-    is_last: NDArray[np.bool]
+    is_first: NDArray[np.bool8]
+    is_last: NDArray[np.bool8]
     action: NDArray[np.int32]
     root_value: NDArray[np.float32]
     child_visits: NDArray[np.float32]
@@ -155,8 +155,8 @@ class Trajectory(NamedTuple):
         return Trajectory(
             frame=np.asarray(self.frame, dtype=np.float32),
             reward=np.asarray(self.reward, dtype=np.float32),
-            is_first=np.asarray(self.is_first, dtype=np.bool),
-            is_last=np.asarray(self.is_last, dtype=np.bool),
+            is_first=np.asarray(self.is_first, dtype=np.bool8),
+            is_last=np.asarray(self.is_last, dtype=np.bool8),
             action=np.asarray(self.action, dtype=np.int32),
             root_value=np.asarray(self.root_value, dtype=np.float32),
             child_visits=np.asarray(self.child_visits, dtype=np.float32),

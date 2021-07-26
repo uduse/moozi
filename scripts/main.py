@@ -146,7 +146,7 @@ num_episodes = 10
 loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent], logger=NoOpLogger())
 loop.run(num_episodes=num_episodes)
 
-# %% 
+# %%
 reverb_replay = make_replay(
     env_spec, max_episode_length=max_episode_length, batch_size=batch_size
 )
@@ -162,18 +162,50 @@ actor = mz.MuZeroActor(
     ],
 )
 
+
 def convert_timestep(timestep):
     return timestep._replace(observation=timestep.observation[0])
-    
-# %% 
-timestep = env.reset()
-actor.observe_first(convert_timestep(timestep))
 
-# %% 
-for _ in range(10):
-    action = jnp.array(actor.select_action(timestep.observation[0]))
-    timestep = env.step([action])
-    actor.observe(action, convert_timestep(timestep))
+
+# %%
+actor.reset_memory()
+loop = OpenSpielEnvironmentLoop(environment=env, actors=[actor], logger=NoOpLogger())
+loop.run_episode()
+
+# %%
+def frame_to_str_gen(frame):
+    for irow, row in enumerate(frame):
+        for val in row:
+            if np.isclose(val, 0.0):
+                yield '.'
+                continue
+            assert np.isclose(val, 1), val
+            if irow == len(frame) - 1:
+                yield 'X'
+            else:
+                yield 'O'
+        yield '\n'
+        
+def frame_to_str(frame):
+    return ''.join(frame_to_str_gen(frame))
+
+
+# %%
+len(actor.m["policy_results"].get())
+
+# %%
+for i in range(len(actor.m["last_frames"])):
+    frame = actor.m["last_frames"].get()[i]
+    # actor.m["polic"
+    frame = frame.reshape((5, 7)).tolist()
+    print(frame_to_str(frame))
+    if i < len(actor.m["policy_results"].get()):
+        policy_result = actor.m["policy_results"].get()[i]
+        probs = np.array(policy_result.extras['action_probs'])
+        probs = np.round(probs, 2)
+        print(probs)
+        policy_result.extras['action_probs'] = probs.tolist()
+    print('\n')
 
 # %%
 learner.close()

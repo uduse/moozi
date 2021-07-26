@@ -1,4 +1,5 @@
 from collections import defaultdict
+import functools
 from typing import Dict, List, NamedTuple, Optional, Tuple, overload
 
 import chex
@@ -36,6 +37,13 @@ class SimpleQueue(object):
     def is_full(self) -> bool:
         return len(self._list) == self._size
 
+    def __len__(self):
+        return len(self._list)
+        
+    @property
+    def size(self):
+        return self._size
+
 
 class MuZeroActor(BaseActor):
     r"""
@@ -64,53 +72,54 @@ class MuZeroActor(BaseActor):
         self._loggers = loggers or []
         self._name = name or self.__class__.__name__
         self._policy = policy
+        self._num_stacked_frames = num_stacked_frames
 
-        self._memory = {
-            "last_frames": SimpleQueue(num_stacked_frames),
-            "rolling_average_reward": SimpleQueue(5000),
-            "random_key": random_key,
-            "policy_extras": SimpleQueue(5),
-        }
+        def _init_memory():
+            return {
+                "random_key": random_key,
+                "last_frames": SimpleQueue(5000),
+                "rolling_average_reward": SimpleQueue(5000),
+                "policy_results": SimpleQueue(5000),
+            }
+
+        self._init_memory_fn = _init_memory
+        self._memory = self._init_memory_fn()
+
+    def reset_memory(self):
+        self._memory = self._init_memory_fn()
 
     def select_action(self, observation: OLT) -> int:
-        if isinstance(observation, OLT):
-            while not self._memory["last_frames"].is_full():
-                padding = np.zeros_like(observation.observation)
-                self._memory["last_frames"].put(padding)
-            self._memory["last_frames"].put(observation.observation)
-        else:
-            raise NotImplementedError
 
-        stacked_frames = jnp.array(self._memory["last_frames"].get())
+        last_frames = self._memory["last_frames"].get()[-self._num_stacked_frames :]
+        while len(last_frames) < self._num_stacked_frames:
+            padding = np.zeros_like(observation.observation)
+            last_frames.append(padding)
+        obs_stacked_frames = jnp.array(last_frames)
 
         key, new_key = jax.random.split(self._memory["random_key"])
         self._memory["random_key"] = key
         policy_feed = PolicyFeed(
-            stacked_frames=stacked_frames,
+            stacked_frames=obs_stacked_frames,
             legal_actions_mask=jnp.array(observation.legal_actions),
             random_key=new_key,
         )
         result = self._policy.run(policy_feed)
-        self._memory["policy_extras"].put(result.extras)
+        self._memory["policy_results"].put(result)
         return result.action
 
-        # self._random_key, new_key = jax.random.split(self._random_key)
-        # action, step_data = self._policy_fn(
-        #     self._client.params,
-        #     image=observation.observation,
-        #     legal_actions_mask=observation.legal_actions,
-        #     random_key=new_key,
-        # )
-        # self._log(step_data)
-        # self._last_actions.append(action)
-        # self._last_actions = self._last_actions[-1000:]
-        # return action
-
     def observe_first(self, timestep: dm_env.TimeStep):
+        if isinstance(timestep.observation, OLT):
+            self._memory["last_frames"].put(timestep.observation.observation)
+        else:
+            raise NotImplementedError
         observation = mz.replay.Observation.from_env_timestep(timestep)
         self._adder.add_first(observation)
 
     def observe(self, action: chex.Array, next_timestep: dm_env.TimeStep):
+        if isinstance(next_timestep.observation, OLT):
+            self._memory["last_frames"].put(next_timestep.observation.observation)
+        else:
+            raise NotImplementedError
         root_value, child_visits = self._get_last_search_stats()
         last_reflection = mz.replay.Reflection(action, root_value, child_visits)
         next_observation = mz.replay.Observation.from_env_timestep(next_timestep)
@@ -124,7 +133,7 @@ class MuZeroActor(BaseActor):
 
     def _get_last_search_stats(self):
         action_space_size = self._env_spec.actions.num_values
-        latest_policy_extras = self._memory["policy_extras"].get()[-1]
+        latest_policy_extras = self._memory["policy_results"].get()[-1].extras
         root_value = latest_policy_extras.get("root_value", np.float32(0))
         dummy_child_visits = np.zeros(action_space_size, dtype=np.float32)
         child_visits = latest_policy_extras.get("child_visits", dummy_child_visits)
@@ -144,6 +153,10 @@ class MuZeroActor(BaseActor):
             if isinstance(logger, mz.logging.JAXBoardLogger):
                 print(logger._name, "closed")
                 logger.close()
+
+    @property
+    def m(self):
+        return self._memory
 
     def __del__(self):
         self.close()

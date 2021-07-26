@@ -93,11 +93,18 @@ class MonteCarlo(Policy):
 
             key, new_key = jax.random.split(key)
             action_probs = rlax.epsilon_greedy(epsilon).probs(actions_reward_sum)
-            action_probs *= feed.legal_actions_mask
+            legal_action_probs = action_probs * feed.legal_actions_mask
             key, new_key = jax.random.split(key)
-            action = rlax.categorical_sample(new_key, action_probs)
+            action = rlax.categorical_sample(new_key, legal_action_probs)
 
-            return PolicyResult(action=action, extras={})
+            return PolicyResult(
+                action=action,
+                extras={
+                    "actions_reward_sum": actions_reward_sum,
+                    "action_probs": action_probs,
+                    "legal_action_probs": legal_action_probs,
+                },
+            )
 
         self._policy_fn = _policy_fn
         self._variable_client = variable_client

@@ -106,11 +106,6 @@ class MuZeroActor(BaseActor):
         # self._last_actions = self._last_actions[-1000:]
         # return action
 
-    def _log(self, data: mz.logging.JAXBoardStepData):
-        for logger in self._loggers:
-            if isinstance(logger, mz.logging.JAXBoardLogger):
-                logger.write(data)
-
     def observe_first(self, timestep: dm_env.TimeStep):
         observation = mz.replay.Observation.from_env_timestep(timestep)
         self._adder.add_first(observation)
@@ -135,6 +130,12 @@ class MuZeroActor(BaseActor):
         child_visits = latest_policy_extras.get("child_visits", dummy_child_visits)
         return root_value, child_visits
 
+    def _log(self, data: mz.logging.JAXBoardStepData):
+        for logger in self._loggers:
+            if isinstance(logger, mz.logging.JAXBoardLogger):
+                logger.write(data)
+
+    # override
     def update(self, wait: bool = False):
         self._policy.update(wait)
 

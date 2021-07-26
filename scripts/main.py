@@ -51,7 +51,7 @@ env_spec = acme.specs.make_environment_spec(env)
 # %%
 seed = 0
 master_key = jax.random.PRNGKey(seed)
-max_replay_size = 1000
+max_replay_size = 100000
 max_episode_length = env.environment.environment.game.max_game_length()
 num_unroll_steps = 1
 num_stacked_frames = 1
@@ -118,7 +118,7 @@ variable_client = VariableClient(learner, None)
 
 # %%
 master_key, new_key = jax.random.split(master_key)
-policy = mz.policies.SingleRollMonteCarlo(network, variable_client)
+policy = mz.policies.MonteCarlo(network, variable_client)
 actor = mz.MuZeroActor(
     env_spec,
     policy,
@@ -127,6 +127,7 @@ actor = mz.MuZeroActor(
     num_stacked_frames=num_stacked_frames,
     loggers=[
         mz.logging.JAXBoardLogger("actor", time_delta=5.0),
+        acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
     ],
 )
 
@@ -141,8 +142,38 @@ agent = acme_agent.Agent(
 )
 
 # %%
+num_episodes = 10
 loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent], logger=NoOpLogger())
-loop.run(num_episodes=100_000)
+loop.run(num_episodes=num_episodes)
+
+# %% 
+reverb_replay = make_replay(
+    env_spec, max_episode_length=max_episode_length, batch_size=batch_size
+)
+actor = mz.MuZeroActor(
+    env_spec,
+    policy,
+    reverb_replay.adder,
+    new_key,
+    num_stacked_frames=num_stacked_frames,
+    loggers=[
+        mz.logging.JAXBoardLogger("actor", time_delta=5.0),
+        acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
+    ],
+)
+
+def convert_timestep(timestep):
+    return timestep._replace(observation=timestep.observation[0])
+    
+# %% 
+timestep = env.reset()
+actor.observe_first(convert_timestep(timestep))
+
+# %% 
+for _ in range(10):
+    action = jnp.array(actor.select_action(timestep.observation[0]))
+    timestep = env.step([action])
+    actor.observe(action, convert_timestep(timestep))
 
 # %%
 learner.close()

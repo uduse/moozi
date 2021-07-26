@@ -6,12 +6,11 @@
       output-scalars: off
       flags-import: all
       sourcecode:
-        - '*.py'
-        - '*.yml'
+        - "*.py"
+        - "*.yml"
         - exclude:
             dir: local_deps
 
-    
 - model: pg
   descript: Policy Gradient method on the game of Catch
   operations:

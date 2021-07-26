@@ -17,7 +17,7 @@
         // "--cov=.",
         // "--cov-report=xml",
         // "--cov-report=html",
-        "tests",
+        "./tests",
     ],
     // disable native tests to avoid redundant CodeLens
     // https://github.com/kondratyev-nv/vscode-python-test-adapter/issues/243

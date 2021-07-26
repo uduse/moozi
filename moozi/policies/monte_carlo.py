@@ -71,7 +71,7 @@ class MonteCarlo(Policy):
                     actions_reward_sum = index_add(
                         actions_reward_sum,
                         index[child_action_idx],
-                        child_network_output.reward.item(),
+                        child_network_output.reward,
                     )
                     roll_out_hidden_state = child_network_output.hidden_state
 

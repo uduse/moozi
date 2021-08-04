@@ -1,6 +1,6 @@
 from collections import defaultdict
 from functools import partial
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import chex
 import dm_env
@@ -25,7 +25,7 @@ class PolicyFeed(NamedTuple):
 
 class PolicyResult(NamedTuple):
     action: jnp.ndarray
-    extras: Dict[str, jnp.ndarray]
+    extras: Dict[str, Any]
 
 
 class Policy(object):

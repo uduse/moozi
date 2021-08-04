@@ -1,3 +1,4 @@
+from typing import NamedTuple
 import chex
 import jax
 import jax.numpy as jnp
@@ -31,6 +32,105 @@ from .policy import Policy, PolicyFeed, PolicyResult
 #         return self.value_sum / self.visit_count
 
 
+class Node(NamedTuple):
+    prior: jnp.ndarray
+    child_rewards: jnp.ndarray
+    children: list
+
+
+class SingleRollMonteCarlo(Policy):
+    def __init__(
+        self,
+        network: NeuralNetwork,
+        variable_client: VariableClient,
+        num_unroll_steps: int = 5,
+        epsilon: float = 0.1,
+    ):
+        @jax.jit
+        @chex.assert_max_traces(n=1)
+        def _policy_fn(params, feed: PolicyFeed) -> PolicyResult:
+            key = feed.random_key
+            action_space_size = jnp.size(feed.legal_actions_mask)
+            actions_reward_sum = jnp.zeros((action_space_size,))
+
+            starting_hidden_state = network.initial_inference_unbatched(
+                params, feed.stacked_frames
+            ).hidden_state
+
+            key, new_key = jax.random.split(key)
+            random_actions_for_unrolling = jax.random.randint(
+                new_key,
+                (action_space_size, num_unroll_steps),
+                minval=jnp.array(0),
+                maxval=jnp.array(action_space_size),
+            )
+
+            root_node = Node(
+                prior=jnp.array(0),
+                child_rewards=jnp.zeros((action_space_size,)),
+                children=[],
+            )
+
+            # TODO: too verbose, break into smaller functions
+            for child_action_idx in jnp.arange(action_space_size):
+                hidden_state = starting_hidden_state
+                child_network_output = network.recurrent_inference_unbatched(
+                    params,
+                    hidden_state,
+                    child_action_idx,
+                )
+
+                actions_reward_sum = index_add(
+                    actions_reward_sum,
+                    index[child_action_idx],
+                    child_network_output.reward,
+                )
+                roll_out_hidden_state = child_network_output.hidden_state
+
+                for step_idx in range(num_unroll_steps):
+                    random_action_for_unroll = random_actions_for_unrolling[
+                        child_action_idx, step_idx
+                    ]
+                    network_output = network.recurrent_inference_unbatched(
+                        params,
+                        roll_out_hidden_state,
+                        random_action_for_unroll,
+                    )
+                    actions_reward_sum = index_add(
+                        actions_reward_sum,
+                        index[child_action_idx],
+                        network_output.reward,
+                    )
+                    roll_out_hidden_state = network_output.hidden_state
+
+            key, new_key = jax.random.split(key)
+            action_probs = rlax.epsilon_greedy(epsilon).probs(actions_reward_sum)
+            legal_action_probs = action_probs * feed.legal_actions_mask
+            key, new_key = jax.random.split(key)
+            action = rlax.categorical_sample(new_key, legal_action_probs)
+
+            return PolicyResult(
+                action=action,
+                extras={
+                    "actions_reward_sum": actions_reward_sum,
+                    "action_probs": action_probs,
+                    "legal_action_probs": legal_action_probs,
+                    "tree": root_node,
+                },
+            )
+
+        self._policy_fn = _policy_fn
+        self._variable_client = variable_client
+
+    def run(self, feed: PolicyFeed) -> PolicyResult:
+        # dim_actions = jnp.size(feed.legal_actions_mask)
+        params = self._variable_client.params
+        return self._policy_fn(params, feed)
+
+    def update(self, wait: bool = False) -> None:
+        self._variable_client.update(wait=wait)
+
+
 class MonteCarlo(Policy):
     def __init__(
         self,
@@ -57,6 +157,12 @@ class MonteCarlo(Policy):
                 (action_space_size, num_simulations_per_action, num_unroll_steps),
                 minval=jnp.array(0),
                 maxval=jnp.array(action_space_size),
+            )
+
+            root_node = Node(
+                prior=jnp.array(0),
+                child_rewards=jnp.zeros((action_space_size,)),
+                children=[],
             )
 
             # TODO: too verbose, break into smaller functions
@@ -103,6 +209,7 @@ class MonteCarlo(Policy):
                     "actions_reward_sum": actions_reward_sum,
                     "action_probs": action_probs,
                     "legal_action_probs": legal_action_probs,
+                    "tree": None,
                 },
             )
 

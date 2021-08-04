@@ -31,6 +31,8 @@ ipython = "*"
 jupyter = "*"
 pytest = "*"
 moozi = {editable = true, path = "."}
+rope = "*"
+anytree = "*"
 
 [dev-packages]
 

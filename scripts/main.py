@@ -51,12 +51,12 @@ env_spec = acme.specs.make_environment_spec(env)
 # %%
 seed = 0
 master_key = jax.random.PRNGKey(seed)
-max_replay_size = 100000
+max_replay_size = 10000
 max_episode_length = env.environment.environment.game.max_game_length()
-num_unroll_steps = 1
-num_stacked_frames = 1
+num_unroll_steps = 5
+num_stacked_frames = 2
 num_td_steps = 100
-batch_size = 32
+batch_size = 64
 discount = 0.99
 dim_action = env_spec.actions.num_values
 frame_shape = env_spec.observations.observation.shape
@@ -118,7 +118,7 @@ variable_client = VariableClient(learner, None)
 
 # %%
 master_key, new_key = jax.random.split(master_key)
-policy = mz.policies.MonteCarlo(network, variable_client)
+policy = mz.policies.SingleRollMonteCarlo(network, variable_client)
 actor = mz.MuZeroActor(
     env_spec,
     policy,
@@ -142,8 +142,12 @@ agent = acme_agent.Agent(
 )
 
 # %%
-num_episodes = 10
-loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent], logger=NoOpLogger())
+num_episodes = 10000
+loop = OpenSpielEnvironmentLoop(
+    environment=env,
+    actors=[agent],
+    logger=acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
+)
 loop.run(num_episodes=num_episodes)
 
 # %%
@@ -177,21 +181,48 @@ def frame_to_str_gen(frame):
     for irow, row in enumerate(frame):
         for val in row:
             if np.isclose(val, 0.0):
-                yield '.'
+                yield "."
                 continue
             assert np.isclose(val, 1), val
             if irow == len(frame) - 1:
-                yield 'X'
+                yield "X"
             else:
-                yield 'O'
-        yield '\n'
-        
+                yield "O"
+        yield "\n"
+
+
 def frame_to_str(frame):
-    return ''.join(frame_to_str_gen(frame))
+    return "".join(frame_to_str_gen(frame))
 
 
 # %%
-len(actor.m["policy_results"].get())
+import anytree
+
+# %%
+def convert_to_anytree(policy_tree_root, anytree_root=None, action="."):
+    anytree_child = anytree.Node(
+        action,
+        parent=anytree_root,
+        reward=np.round(np.array(policy_tree_root.network_output.reward).item(), 3),
+    )
+    for next_action, policy_tree_child in policy_tree_root.children:
+        convert_to_anytree(policy_tree_child, anytree_child, action + str(next_action))
+    return anytree_child
+
+
+# %%
+policy_result_tree = actor.m["policy_results"].get()[0].extras["tree"]
+anytree_root = convert_to_anytree(policy_result_tree)
+print(anytree.RenderTree(anytree_root))
+
+
+# %%
+from anytree.exporter import DotExporter
+ex = DotExporter(anytree_root)
+ex.to_picture("/tmp/policy_tree.png")
+from IPython.display import Image
+Image('/tmp/policy_tree.png')
+
 
 # %%
 for i in range(len(actor.m["last_frames"])):
@@ -201,11 +232,17 @@ for i in range(len(actor.m["last_frames"])):
     print(frame_to_str(frame))
     if i < len(actor.m["policy_results"].get()):
         policy_result = actor.m["policy_results"].get()[i]
-        probs = np.array(policy_result.extras['action_probs'])
+        probs = np.array(policy_result.extras["action_probs"])
         probs = np.round(probs, 2)
-        print(probs)
-        policy_result.extras['action_probs'] = probs.tolist()
-    print('\n')
+        print("action probs:".ljust(20), probs)
+        print(
+            "legal action probs:".ljust(20), policy_result.extras["legal_action_probs"]
+        )
+        print(
+            "actions reward sum:".ljust(20), policy_result.extras["actions_reward_sum"]
+        )
+        policy_result.extras["action_probs"] = probs.tolist()
+    print("\n")
 
 # %%
 learner.close()

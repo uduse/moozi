@@ -51,12 +51,12 @@ env_spec = acme.specs.make_environment_spec(env)
 # %%
 seed = 0
 master_key = jax.random.PRNGKey(seed)
-max_replay_size = 10000
+max_replay_size = 1000000
 max_episode_length = env.environment.environment.game.max_game_length()
-num_unroll_steps = 5
+num_unroll_steps = 3
 num_stacked_frames = 2
 num_td_steps = 100
-batch_size = 64
+batch_size = 256
 discount = 0.99
 dim_action = env_spec.actions.num_values
 frame_shape = env_spec.observations.observation.shape
@@ -69,7 +69,7 @@ reverb_replay = make_replay(
 )
 
 # %%
-dim_repr = 16
+dim_repr = 32
 nn_spec = mz.nn.NeuralNetworkSpec(
     stacked_frames_shape=stacked_frame_shape,
     dim_repr=dim_repr,
@@ -132,7 +132,7 @@ actor = mz.MuZeroActor(
 )
 
 # %%
-obs_ratio = 100
+obs_ratio = 1000
 min_observations = 0
 agent = acme_agent.Agent(
     actor=actor,
@@ -142,7 +142,7 @@ agent = acme_agent.Agent(
 )
 
 # %%
-num_episodes = 10000
+num_episodes = 100000
 loop = OpenSpielEnvironmentLoop(
     environment=env,
     actors=[agent],
@@ -197,16 +197,25 @@ def frame_to_str(frame):
 
 # %%
 import anytree
+import uuid
+
+
+def get_uuid():
+    return uuid.uuid4().hex[:8]
+
 
 # %%
-def convert_to_anytree(policy_tree_root, anytree_root=None, action="."):
+def convert_to_anytree(policy_tree_root, anytree_root=None, action="_"):
     anytree_child = anytree.Node(
-        action,
+        id=get_uuid(),
+        name=action,
         parent=anytree_root,
+        prior=policy_tree_root.prior,
         reward=np.round(np.array(policy_tree_root.network_output.reward).item(), 3),
+        value=np.round(np.array(policy_tree_root.network_output.value).item(), 3),
     )
     for next_action, policy_tree_child in policy_tree_root.children:
-        convert_to_anytree(policy_tree_child, anytree_child, action + str(next_action))
+        convert_to_anytree(policy_tree_child, anytree_child, next_action)
     return anytree_child
 
 
@@ -217,17 +226,32 @@ print(anytree.RenderTree(anytree_root))
 
 
 # %%
-from anytree.exporter import DotExporter
-ex = DotExporter(anytree_root)
+from anytree.exporter import DotExporter, UniqueDotExporter
+
+
+def nodeattrfunc(node):
+    return (
+        f'"reward: {node.reward:.3f}\nvalue: {node.value:.3f}"'
+    )
+    
+def edgeattrfunc(parent, child):
+    return f"label=\"{child.name} ({child.prior:.3f})\""
+
+ex = UniqueDotExporter(
+    anytree_root,
+    nodenamefunc=lambda node: node.id,
+    nodeattrfunc=lambda node: f"label={nodeattrfunc(node)}",
+    edgeattrfunc=edgeattrfunc,
+)
 ex.to_picture("/tmp/policy_tree.png")
 from IPython.display import Image
-Image('/tmp/policy_tree.png')
+
+Image("/tmp/policy_tree.png")
 
 
 # %%
 for i in range(len(actor.m["last_frames"])):
     frame = actor.m["last_frames"].get()[i]
-    # actor.m["polic"
     frame = frame.reshape((5, 7)).tolist()
     print(frame_to_str(frame))
     if i < len(actor.m["policy_results"].get()):

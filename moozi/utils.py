@@ -6,29 +6,6 @@ import typing
 import random
 
 
-# class MooZiObservation(typing.NamedTuple):
-#     # environment
-#     frame: chex.ArrayDevice
-#     legal_actions: chex.ArrayDevice
-#     terminal: chex.ArrayDevice
-#     last_reward: chex.ArrayDevice
-#     action: chex.ArrayDevice
-#     # sentience
-#     root_value: chex.ArrayDevice
-#     child_visits: chex.ArrayDevice
-
-
-# class MooZiTrainTarget(typing.NamedTuple):
-#     # to unroll
-#     observations: chex.ArrayDevice
-#     actions: chex.ArrayDevice
-
-#     # to compute losses
-#     child_visits: chex.ArrayDevice
-#     last_rewards: chex.ArrayDevice
-#     values: chex.ArrayDevice
-
-
 def print_traj_in_env(env):
     timestep = env.reset()
     while True:

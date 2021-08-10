@@ -39,7 +39,7 @@ class SimpleQueue(object):
 
     def __len__(self):
         return len(self._list)
-        
+
     @property
     def size(self):
         return self._size
@@ -78,8 +78,9 @@ class MuZeroActor(BaseActor):
             return {
                 "random_key": random_key,
                 "last_frames": SimpleQueue(5000),
-                "rolling_average_reward": SimpleQueue(5000),
+                "rolling_rewards": SimpleQueue(5000),
                 "policy_results": SimpleQueue(5000),
+                "action_probs": SimpleQueue(5000),
             }
 
         self._init_memory_fn = _init_memory
@@ -105,6 +106,7 @@ class MuZeroActor(BaseActor):
         )
         result = self._policy.run(policy_feed)
         self._memory["policy_results"].put(result)
+        self._memory["action_probs"].put(result.extras["action_probs"])
         return result.action
 
     def observe_first(self, timestep: dm_env.TimeStep):
@@ -120,13 +122,13 @@ class MuZeroActor(BaseActor):
             self._memory["last_frames"].put(next_timestep.observation.observation)
         else:
             raise NotImplementedError
-        root_value, child_visits = self._get_last_search_stats()
-        last_reflection = mz.replay.Reflection(action, root_value, child_visits)
+        root_value, action_probs = self._get_last_search_stats()
+        last_reflection = mz.replay.Reflection(action, root_value, action_probs)
         next_observation = mz.replay.Observation.from_env_timestep(next_timestep)
-        self._memory["rolling_average_reward"].put(next_observation.reward)
-        rolling_reward = np.mean(self._memory["rolling_average_reward"].get())
+        self._memory["rolling_rewards"].put(next_observation.reward)
+        rolling_rewards = np.mean(self._memory["rolling_rewards"].get())
         data = mz.logging.JAXBoardStepData(
-            scalars={"rolling_reward": rolling_reward}, histograms={}
+            scalars={"rolling_rewards": rolling_rewards}, histograms={}
         )
         self._log(data)
         self._adder.add(last_reflection, next_observation)
@@ -135,9 +137,9 @@ class MuZeroActor(BaseActor):
         action_space_size = self._env_spec.actions.num_values
         latest_policy_extras = self._memory["policy_results"].get()[-1].extras
         root_value = latest_policy_extras.get("root_value", np.float32(0))
-        dummy_child_visits = np.zeros(action_space_size, dtype=np.float32)
-        child_visits = latest_policy_extras.get("child_visits", dummy_child_visits)
-        return root_value, child_visits
+        dummy_action_probs = np.zeros(action_space_size, dtype=np.float32)
+        action_probs = latest_policy_extras.get("action_probs", dummy_action_probs)
+        return root_value, action_probs
 
     def _log(self, data: mz.logging.JAXBoardStepData):
         for logger in self._loggers:

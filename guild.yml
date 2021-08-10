@@ -1,7 +1,8 @@
 - model: main
+  default: true
   operations:
     run:
-      default: true
+      # default: true
       main: scripts.main
       output-scalars: off
       flags-import: all

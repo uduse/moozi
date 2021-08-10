@@ -45,7 +45,7 @@ class Observation(NamedTuple):
 class Reflection(NamedTuple):
     action: np.ndarray
     root_value: np.ndarray
-    child_visits: np.ndarray
+    action_probs: np.ndarray
 
 
 def _prefix_dim(spec, size):
@@ -64,7 +64,7 @@ def make_signature(env_spec: specs.EnvironmentSpec, max_episode_length):
     ref_signature = Reflection(
         action=specs.Array(shape=(max_episode_length,), dtype=np.int32),
         root_value=specs.Array(shape=(max_episode_length,), dtype=np.float32),
-        child_visits=specs.Array(
+        action_probs=specs.Array(
             shape=(max_episode_length, env_spec.actions.num_values), dtype=np.float32
         ),
     )
@@ -149,7 +149,7 @@ class Trajectory(NamedTuple):
     is_last: NDArray[np.bool8]
     action: NDArray[np.int32]
     root_value: NDArray[np.float32]
-    child_visits: NDArray[np.float32]
+    action_probs: NDArray[np.float32]
 
     def cast(self) -> "Trajectory":
         return Trajectory(
@@ -159,7 +159,7 @@ class Trajectory(NamedTuple):
             is_last=np.asarray(self.is_last, dtype=np.bool8),
             action=np.asarray(self.action, dtype=np.int32),
             root_value=np.asarray(self.root_value, dtype=np.float32),
-            child_visits=np.asarray(self.child_visits, dtype=np.float32),
+            action_probs=np.asarray(self.action_probs, dtype=np.float32),
         )
 
 
@@ -168,7 +168,7 @@ class TrainTarget(NamedTuple):
     action: NDArray[np.int32]
     value: NDArray[np.float32]
     last_reward: NDArray[np.float32]
-    child_visits: NDArray[np.float32]
+    action_probs: NDArray[np.float32]
 
     def cast(self) -> "TrainTarget":
         return TrainTarget(
@@ -176,7 +176,7 @@ class TrainTarget(NamedTuple):
             action=np.asarray(self.action, dtype=np.int32),
             value=np.asarray(self.value, dtype=np.float32),
             last_reward=np.asarray(self.last_reward, dtype=np.float32),
-            child_visits=np.asarray(self.child_visits, dtype=np.float32),
+            action_probs=np.asarray(self.action_probs, dtype=np.float32),
         )
 
 
@@ -198,8 +198,8 @@ def make_target(
     for curr_idx in range(start_idx, start_idx + num_unroll_steps + 1):
         value = _get_value(sample, curr_idx, last_step_idx, num_td_steps, discount)
         last_reward = _get_last_reward(sample, start_idx, curr_idx, last_step_idx)
-        child_visits = _get_child_visits(sample, curr_idx, last_step_idx)
-        unrolled_data.append((value, last_reward, child_visits))
+        action_probs = get_action_probs(sample, curr_idx, last_step_idx)
+        unrolled_data.append((value, last_reward, action_probs))
 
     unrolled_data_stacked = tree_utils.stack_sequence_fields(unrolled_data)
 
@@ -211,7 +211,7 @@ def make_target(
         action=action,
         value=unrolled_data_stacked[0],
         last_reward=unrolled_data_stacked[1],
-        child_visits=unrolled_data_stacked[2],
+        action_probs=unrolled_data_stacked[2],
     )
 
 
@@ -254,11 +254,11 @@ def _get_last_reward(sample, start_idx, curr_idx, last_step_idx):
         return 0
 
 
-def _get_child_visits(sample, curr_idx, last_step_idx):
+def get_action_probs(sample, curr_idx, last_step_idx):
     if curr_idx <= last_step_idx:
-        return sample.child_visits[curr_idx]
+        return sample.action_probs[curr_idx]
     else:
-        return np.zeros_like(sample.child_visits[0])
+        return np.zeros_like(sample.action_probs[0])
 
 
 def make_replay(

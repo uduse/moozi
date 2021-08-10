@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import rlax
 from acme.jax.utils import add_batch_dim
 from jax import vmap
+import tree
 
 import moozi as mz
 from moozi.logging import JAXBoardStepData
@@ -87,7 +88,7 @@ def mse(a, b):
     return jnp.mean((a - b) ** 2)
 
 
-class MCTSLoss(LossFn):
+class MuZeroLoss(LossFn):
     def __init__(self, num_unroll_steps, weight_decay=1e-4):
         self._num_unroll_steps = num_unroll_steps
         self._weight_decay = weight_decay
@@ -105,40 +106,50 @@ class MCTSLoss(LossFn):
                 batch.action,
                 batch.value,
                 batch.last_reward,
-                batch.child_visits,
+                batch.action_probs,
             ],
             [3, 2, 2, 2, 3],
         )
 
-        loss = jnp.array([0])
         network_output = network.initial_inference(params, batch.stacked_frames)
-        loss += vmap(mse)(batch.last_reward.take(0, axis=1), network_output.reward)
-        loss += vmap(mse)(batch.value.take(0, axis=1), network_output.value)
-        loss += vmap(rlax.categorical_cross_entropy)(
-            batch.child_visits.take(0, axis=1), network_output.policy_logits
+
+        losses = {}
+
+        losses["reward_loss_0"] = vmap(mse)(
+            batch.last_reward.take(0, axis=1), network_output.reward
+        )
+        losses["value_loss_0"] = vmap(mse)(
+            batch.value.take(0, axis=1), network_output.value
+        )
+        losses["action_probs_loss_0"] = vmap(rlax.categorical_cross_entropy)(
+            batch.action_probs.take(0, axis=1), network_output.policy_logits
         )
 
         for i in range(self._num_unroll_steps):
-            step_loss = 0
+            is_valid_action = batch.action.take(i, axis=1) != -1
+            step_loss_mask = is_valid_action
+
             network_output = network.recurrent_inference(
                 params, network_output.hidden_state, batch.action.take(0, axis=1)
             )
 
-            step_loss += vmap(mse)(
-                batch.last_reward.take(i + 1, axis=1), network_output.reward
+            losses[f"reward_loss_{str(i + 1)}"] = (
+                vmap(mse)(batch.last_reward.take(i + 1, axis=1), network_output.reward)
+                * step_loss_mask
             )
-            step_loss += vmap(mse)(
-                batch.value.take(i + 1, axis=1), network_output.value
+            losses[f"value_loss_{str(i + 1)}"] = (
+                vmap(mse)(batch.value.take(i + 1, axis=1), network_output.value)
+                * step_loss_mask
             )
-            step_loss += vmap(rlax.categorical_cross_entropy)(
-                batch.child_visits.take(i + 1, axis=1), network_output.policy_logits
+            losses[f"action_probs_loss_{str(i + 1)}"] = (
+                vmap(rlax.categorical_cross_entropy)(
+                    batch.action_probs.take(i + 1, axis=1), network_output.policy_logits
+                )
+                * step_loss_mask
             )
 
-            invalid_action_mask = batch.action.take(0, axis=1) == -1
-            step_loss *= invalid_action_mask
-            loss += step_loss
+        losses["l2_loss"] = jnp.reshape(params_l2_loss(params) * self._weight_decay, (1,))
 
-        loss += params_l2_loss(params) * self._weight_decay
-        loss = jnp.mean(loss)
+        loss = jnp.sum(jnp.concatenate(tree.flatten(losses)))
 
-        return loss, JAXBoardStepData(scalars={"loss": loss}, histograms={})
+        return loss, JAXBoardStepData(scalars=tree.map_structure(jnp.mean,losses), histograms={})

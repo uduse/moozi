@@ -42,8 +42,11 @@ if use_jit:
 platform = "gpu"
 jax.config.update("jax_platform_name", platform)
 
+print(jax.devices())
+
 # %%
-raw_env = open_spiel.python.rl_environment.Environment("catch(columns=7,rows=5)")
+# raw_env = open_spiel.python.rl_environment.Environment("catch(columns=7,rows=5)")
+raw_env = open_spiel.python.rl_environment.Environment("catch(columns=3,rows=3)")
 env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
 env = acme.wrappers.SinglePrecisionWrapper(env)
 env_spec = acme.specs.make_environment_spec(env)
@@ -51,10 +54,10 @@ env_spec = acme.specs.make_environment_spec(env)
 # %%
 seed = 0
 master_key = jax.random.PRNGKey(seed)
-max_replay_size = 1000000
+max_replay_size = 10000
 max_episode_length = env.environment.environment.game.max_game_length()
-num_unroll_steps = 3
-num_stacked_frames = 2
+num_unroll_steps = 1
+num_stacked_frames = 1
 num_td_steps = 100
 batch_size = 256
 discount = 0.99
@@ -74,9 +77,9 @@ nn_spec = mz.nn.NeuralNetworkSpec(
     stacked_frames_shape=stacked_frame_shape,
     dim_repr=dim_repr,
     dim_action=dim_action,
-    repr_net_sizes=(128, 128),
-    pred_net_sizes=(128, 128),
-    dyna_net_sizes=(128, 128),
+    repr_net_sizes=(64, 64),
+    pred_net_sizes=(64, 64),
+    dyna_net_sizes=(64, 64),
 )
 network = mz.nn.get_network(nn_spec)
 lr = 5e-4
@@ -102,7 +105,7 @@ data_iterator = mz.replay.post_process_data_iterator(
 # %%
 weight_decay = 1e-4
 entropy_reg = 0.5
-loss_fn = mz.loss.MCTSLoss(num_unroll_steps, weight_decay)
+loss_fn = mz.loss.MuZeroLoss(num_unroll_steps, weight_decay)
 learner = mz.learner.SGDLearner(
     network,
     loss_fn=loss_fn,
@@ -132,7 +135,7 @@ actor = mz.MuZeroActor(
 )
 
 # %%
-obs_ratio = 1000
+obs_ratio = 50
 min_observations = 0
 agent = acme_agent.Agent(
     actor=actor,
@@ -142,6 +145,7 @@ agent = acme_agent.Agent(
 )
 
 # %%
+# num_episodes = 100
 num_episodes = 100000
 loop = OpenSpielEnvironmentLoop(
     environment=env,
@@ -151,32 +155,29 @@ loop = OpenSpielEnvironmentLoop(
 loop.run(num_episodes=num_episodes)
 
 # %%
-reverb_replay = make_replay(
-    env_spec, max_episode_length=max_episode_length, batch_size=batch_size
-)
-actor = mz.MuZeroActor(
-    env_spec,
-    policy,
-    reverb_replay.adder,
-    new_key,
-    num_stacked_frames=num_stacked_frames,
-    loggers=[
-        mz.logging.JAXBoardLogger("actor", time_delta=5.0),
-        acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
-    ],
-)
+# reverb_replay = make_replay(
+#     env_spec, max_episode_length=max_episode_length, batch_size=batch_size
+# )
+# actor = mz.MuZeroActor(
+#     env_spec,
+#     policy,
+#     reverb_replay.adder,
+#     new_key,
+#     num_stacked_frames=num_stacked_frames,
+#     loggers=[
+#         mz.logging.JAXBoardLogger("actor", time_delta=5.0),
+#         acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
+#     ],
+# )
 
+# actor.reset_memory()
+# loop = OpenSpielEnvironmentLoop(environment=env, actors=[actor], logger=NoOpLogger())
+# loop.run_episode()
 
+# %%
 def convert_timestep(timestep):
     return timestep._replace(observation=timestep.observation[0])
 
-
-# %%
-actor.reset_memory()
-loop = OpenSpielEnvironmentLoop(environment=env, actors=[actor], logger=NoOpLogger())
-loop.run_episode()
-
-# %%
 def frame_to_str_gen(frame):
     for irow, row in enumerate(frame):
         for val in row:
@@ -243,16 +244,16 @@ ex = UniqueDotExporter(
     nodeattrfunc=lambda node: f"label={nodeattrfunc(node)}",
     edgeattrfunc=edgeattrfunc,
 )
-ex.to_picture("/tmp/policy_tree.png")
+ex.to_picture("./policy_tree.png")
 from IPython.display import Image
 
-Image("/tmp/policy_tree.png")
+Image("./policy_tree.png")
 
 
 # %%
 for i in range(len(actor.m["last_frames"])):
     frame = actor.m["last_frames"].get()[i]
-    frame = frame.reshape((5, 7)).tolist()
+    frame = frame.reshape((3, 3)).tolist()
     print(frame_to_str(frame))
     if i < len(actor.m["policy_results"].get()):
         policy_result = actor.m["policy_results"].get()[i]
@@ -267,6 +268,7 @@ for i in range(len(actor.m["last_frames"])):
         )
         policy_result.extras["action_probs"] = probs.tolist()
     print("\n")
+    
 
 # %%
 learner.close()

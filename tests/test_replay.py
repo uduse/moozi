@@ -11,7 +11,7 @@ SAMPLE = mz.replay.Trajectory(
     is_last=[False, False, False, False, False, True],
     action=[101, 102, 103, 104, 105, -1],
     root_value=[10, 20, 30, 40, 50, -1],
-    child_visits=[np.arange(i, i + 3) / sum(list(range(i, i + 3))) for i in range(5)]
+    action_probs=[np.arange(i, i + 3) / sum(list(range(i, i + 3))) for i in range(5)]
     + [np.array([0, 0, 0])],
 ).cast()
 
@@ -31,7 +31,7 @@ TEST_CASES.append(
             action=[101],
             value=[200 + 20 * 0.5, 300 + 30 * 0.5],
             last_reward=[0, 200],
-            child_visits=SAMPLE.child_visits[0:2],
+            action_probs=SAMPLE.action_probs[0:2],
         ).cast(),
     )
 )
@@ -54,7 +54,7 @@ TEST_CASES.append(
                 400 + 500 * 0.5 + 50 * 0.5 ** 2,
             ],
             last_reward=[0, 200, 300],
-            child_visits=SAMPLE.child_visits[0:3],
+            action_probs=SAMPLE.action_probs[0:3],
         ).cast(),
     )
 )
@@ -73,7 +73,7 @@ TEST_CASES.append(
             action=[103],
             value=[400 + 40 * 0.5, 500 + 50 * 0.5],
             last_reward=[0, 400],
-            child_visits=SAMPLE.child_visits[2:4],
+            action_probs=SAMPLE.action_probs[2:4],
         ).cast(),
     ),
 )
@@ -92,7 +92,7 @@ TEST_CASES.append(
             action=[-1],
             value=[0, 0],
             last_reward=[0, 0],
-            child_visits=[np.zeros(3), np.zeros(3)],
+            action_probs=[np.zeros(3), np.zeros(3)],
         ).cast(),
     )
 )
@@ -111,8 +111,8 @@ TEST_CASES.append(
             action=[105, -1, -1],
             value=[600, 0, 0, 0],
             last_reward=[0, 600, 0, 0],
-            child_visits=[
-                SAMPLE.child_visits[4],
+            action_probs=[
+                SAMPLE.action_probs[4],
                 np.zeros(3),
                 np.zeros(3),
                 np.zeros(3),
@@ -145,7 +145,7 @@ def test_make_target(
         num_stacked_frames,
     )
 
-    assert computed_target.value.shape[0] == computed_target.child_visits.shape[0]
+    assert computed_target.value.shape[0] == computed_target.action_probs.shape[0]
     assert computed_target.value.shape[0] == computed_target.last_reward.shape[0]
     assert computed_target.value.shape[0] == computed_target.action.shape[0] + 1
     assert computed_target.stacked_frames.shape[0] == num_stacked_frames

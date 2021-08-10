@@ -33,6 +33,7 @@ pytest = "*"
 moozi = {editable = true, path = "."}
 rope = "*"
 anytree = "*"
+debugpy = "*"
 
 [dev-packages]
 

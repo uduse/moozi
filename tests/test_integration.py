@@ -44,7 +44,7 @@ def test_integration(
     )
 
     weight_decay = 1e-4
-    loss_fn = mz.loss.MCTSLoss(
+    loss_fn = mz.loss.MuZeroLoss(
         num_unroll_steps=num_unroll_steps, weight_decay=weight_decay
     )
     learner = mz.learner.SGDLearner(

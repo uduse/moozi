@@ -96,7 +96,7 @@ class SingleRollMonteCarlo(Policy):
                 action=action,
                 extras={
                     "actions_reward_sum": actions_reward_sum,
-                    "action_probs": action_probs,
+                    "action_probs": legal_action_probs,
                     "legal_action_probs": legal_action_probs,
                     "tree": root_node,
                 },

@@ -1,9 +1,15 @@
+import random
+import functools
+import typing
+import uuid
 from logging import root
+
 import acme.jax.variable_utils
+import anytree
 import chex
 import dm_env
-import typing
-import random
+import numpy as np
+from anytree.exporter import DotExporter, UniqueDotExporter
 
 
 def print_traj_in_env(env):
@@ -18,3 +24,62 @@ def print_traj_in_env(env):
             print(env.environment.environment.get_state.observation_string(0))
             print("reward:", timestep.reward)
             break
+
+
+def convert_timestep(timestep):
+    return timestep._replace(observation=timestep.observation[0])
+
+
+def frame_to_str_gen(frame):
+    for irow, row in enumerate(frame):
+        for val in row:
+            if np.isclose(val, 0.0):
+                yield "."
+                continue
+            assert np.isclose(val, 1), val
+            if irow == len(frame) - 1:
+                yield "X"
+            else:
+                yield "O"
+        yield "\n"
+
+
+def frame_to_str(frame):
+    return "".join(frame_to_str_gen(frame))
+
+
+def get_uuid():
+    return uuid.uuid4().hex[:8]
+
+
+def convert_to_anytree(policy_tree_root, anytree_root=None, action="_"):
+    anytree_child = anytree.Node(
+        id=get_uuid(),
+        name=action,
+        parent=anytree_root,
+        prior=policy_tree_root.prior,
+        reward=np.round(np.array(policy_tree_root.network_output.reward).item(), 3),
+        value=np.round(np.array(policy_tree_root.network_output.value).item(), 3),
+    )
+    for next_action, policy_tree_child in policy_tree_root.children:
+        convert_to_anytree(policy_tree_child, anytree_child, next_action)
+    return anytree_child
+
+
+def nodeattrfunc(node):
+    return f'"reward: {node.reward:.3f}\nvalue: {node.value:.3f}"'
+
+
+def edgeattrfunc(parent, child):
+    return f'label="{child.name} ({child.prior:.3f})"'
+
+
+_partial_exporter = functools.partial(
+    UniqueDotExporter,
+    nodenamefunc=lambda node: node.id,
+    nodeattrfunc=lambda node: f"label={nodeattrfunc(node)}",
+)
+
+
+def anytree_to_png(anytree_root, file_path):
+    _partial_exporter(anytree_root).to_picture(file_path)

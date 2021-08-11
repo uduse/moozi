@@ -4,6 +4,7 @@ import random
 import typing
 from typing import NamedTuple, Optional
 
+import anytree
 import acme
 import acme.jax.utils
 import acme.wrappers
@@ -54,7 +55,7 @@ env_spec = acme.specs.make_environment_spec(env)
 # %%
 seed = 0
 master_key = jax.random.PRNGKey(seed)
-max_replay_size = 10000
+max_replay_size = 100000
 max_episode_length = env.environment.environment.game.max_game_length()
 num_unroll_steps = 1
 num_stacked_frames = 1
@@ -121,7 +122,7 @@ variable_client = VariableClient(learner, None)
 
 # %%
 master_key, new_key = jax.random.split(master_key)
-policy = mz.policies.SingleRollMonteCarlo(network, variable_client)
+policy = mz.policies.SingleRollMonteCarlo(network, variable_client, num_unroll_steps=num_unroll_steps)
 actor = mz.MuZeroActor(
     env_spec,
     policy,
@@ -135,7 +136,7 @@ actor = mz.MuZeroActor(
 )
 
 # %%
-obs_ratio = 50
+obs_ratio = 100
 min_observations = 0
 agent = acme_agent.Agent(
     actor=actor,
@@ -174,87 +175,29 @@ loop.run(num_episodes=num_episodes)
 # loop = OpenSpielEnvironmentLoop(environment=env, actors=[actor], logger=NoOpLogger())
 # loop.run_episode()
 
-# %%
-def convert_timestep(timestep):
-    return timestep._replace(observation=timestep.observation[0])
-
-def frame_to_str_gen(frame):
-    for irow, row in enumerate(frame):
-        for val in row:
-            if np.isclose(val, 0.0):
-                yield "."
-                continue
-            assert np.isclose(val, 1), val
-            if irow == len(frame) - 1:
-                yield "X"
-            else:
-                yield "O"
-        yield "\n"
-
-
-def frame_to_str(frame):
-    return "".join(frame_to_str_gen(frame))
-
 
 # %%
-import anytree
-import uuid
-
-
-def get_uuid():
-    return uuid.uuid4().hex[:8]
-
-
-# %%
-def convert_to_anytree(policy_tree_root, anytree_root=None, action="_"):
-    anytree_child = anytree.Node(
-        id=get_uuid(),
-        name=action,
-        parent=anytree_root,
-        prior=policy_tree_root.prior,
-        reward=np.round(np.array(policy_tree_root.network_output.reward).item(), 3),
-        value=np.round(np.array(policy_tree_root.network_output.value).item(), 3),
-    )
-    for next_action, policy_tree_child in policy_tree_root.children:
-        convert_to_anytree(policy_tree_child, anytree_child, next_action)
-    return anytree_child
-
-
-# %%
-policy_result_tree = actor.m["policy_results"].get()[0].extras["tree"]
-anytree_root = convert_to_anytree(policy_result_tree)
+policy_result_tree = actor.m["policy_results"].get()[-2].extras["tree"]
+anytree_root = mz.utils.convert_to_anytree(policy_result_tree)
 print(anytree.RenderTree(anytree_root))
 
+last_frame = actor.m["last_frames"].get()[-2]
 
-# %%
-from anytree.exporter import DotExporter, UniqueDotExporter
-
-
-def nodeattrfunc(node):
-    return (
-        f'"reward: {node.reward:.3f}\nvalue: {node.value:.3f}"'
-    )
-    
-def edgeattrfunc(parent, child):
-    return f"label=\"{child.name} ({child.prior:.3f})\""
-
-ex = UniqueDotExporter(
-    anytree_root,
-    nodenamefunc=lambda node: node.id,
-    nodeattrfunc=lambda node: f"label={nodeattrfunc(node)}",
-    edgeattrfunc=edgeattrfunc,
-)
-ex.to_picture("./policy_tree.png")
+print(mz.utils.frame_to_str(last_frame.reshape(3, 3)))
+mz.utils.anytree_to_png(anytree_root, "./policy_tree.png")
 from IPython.display import Image
-
 Image("./policy_tree.png")
 
+
+# %%
+np.mean(actor.m["rolling_rewards"].get()[-100:])
+0.57
 
 # %%
 for i in range(len(actor.m["last_frames"])):
     frame = actor.m["last_frames"].get()[i]
     frame = frame.reshape((3, 3)).tolist()
-    print(frame_to_str(frame))
+    print(mz.utils.frame_to_str(frame))
     if i < len(actor.m["policy_results"].get()):
         policy_result = actor.m["policy_results"].get()[i]
         probs = np.array(policy_result.extras["action_probs"])
@@ -268,7 +211,7 @@ for i in range(len(actor.m["last_frames"])):
         )
         policy_result.extras["action_probs"] = probs.tolist()
     print("\n")
-    
+
 
 # %%
 learner.close()

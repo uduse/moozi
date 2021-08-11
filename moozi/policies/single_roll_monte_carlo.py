@@ -43,7 +43,7 @@ class SingleRollMonteCarlo(Policy):
         self,
         network: NeuralNetwork,
         variable_client: VariableClient,
-        num_unroll_steps: int = 5,
+        num_unroll_steps: int,
         epsilon: float = 0.1,
     ):
         @jax.jit

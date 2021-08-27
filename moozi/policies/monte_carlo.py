@@ -9,7 +9,7 @@ from acme.jax.variable_utils import VariableClient
 from jax.ops import index_add, index
 from moozi.nn import NeuralNetwork, NeuralNetworkOutput
 
-from .policy import Policy, PolicyFeed, PolicyResult
+from .policy import PolicyFn, PolicyFeed, PolicyResult
 
 # class Node(object):
 #     def __init__(self):
@@ -38,7 +38,7 @@ class Node(NamedTuple):
     children: list
 
 
-class SingleRollMonteCarlo(Policy):
+class SingleRollMonteCarlo(PolicyFn):
     def __init__(
         self,
         network: NeuralNetwork,
@@ -110,7 +110,7 @@ class SingleRollMonteCarlo(Policy):
             action = rlax.categorical_sample(new_key, legal_action_probs)
 
             return PolicyResult(
-                action=action,
+                action_probs=action,
                 extras={
                     "actions_reward_sum": actions_reward_sum,
                     "action_probs": action_probs,
@@ -131,7 +131,7 @@ class SingleRollMonteCarlo(Policy):
         self._variable_client.update(wait=wait)
 
 
-class MonteCarlo(Policy):
+class MonteCarlo(PolicyFn):
     def __init__(
         self,
         network: NeuralNetwork,
@@ -204,7 +204,7 @@ class MonteCarlo(Policy):
             action = rlax.categorical_sample(new_key, legal_action_probs)
 
             return PolicyResult(
-                action=action,
+                action_probs=action,
                 extras={
                     "actions_reward_sum": actions_reward_sum,
                     "action_probs": action_probs,

@@ -16,7 +16,7 @@ from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 from acme.jax.variable_utils import VariableClient
 from acme.utils import tree_utils
 from acme.wrappers.open_spiel_wrapper import OLT
-from moozi.policies import PolicyFeed, Policy
+from moozi.policies import PolicyFeed, PolicyFn
 
 
 class SimpleQueue(object):
@@ -47,19 +47,18 @@ class SimpleQueue(object):
 
 class MuZeroActor(BaseActor):
     r"""
-
     # NOTE: acme's actor's batching behavior is inconsistent
     # https://github.com/deepmind/acme/blob/aba3f195afd3e9774e2006ec9b32cb76048b7fe6/acme/agents/jax/actors.py#L82
     # TODO: replace vmap with manual batching?
     # https://github.com/deepmind/acme/blob/926b17ad116578801a0fbbe73c4ddc276a28e23e/acme/agents/jax/actors.py#L76
     # self._policy_fn = jax.jit(jax.vmap(_policy_fn, in_axes=[None, 0, 0, None]))
-
     """
 
     def __init__(
         self,
         env_spec: specs.EnvironmentSpec,
-        policy: Policy,
+        variable_client: VariableClient,
+        policy_fn: PolicyFn,
         adder: mz.replay.Adder,
         random_key,
         num_stacked_frames: int = 8,
@@ -67,11 +66,11 @@ class MuZeroActor(BaseActor):
         name: Optional[str] = None,
     ):
         self._env_spec = env_spec
-        self._policy = policy
+        self._variable_client = variable_client
+        self._policy = policy_fn
         self._adder = adder
         self._loggers = loggers or []
         self._name = name or self.__class__.__name__
-        self._policy = policy
         self._num_stacked_frames = num_stacked_frames
 
         def _init_memory():
@@ -91,27 +90,31 @@ class MuZeroActor(BaseActor):
 
     def select_action(self, observation: OLT) -> int:
 
-        last_frames = self._memory["last_frames"].get()[-self._num_stacked_frames :]
+        last_frames = self.m["last_frames"].get()[-self._num_stacked_frames :]
         while len(last_frames) < self._num_stacked_frames:
             padding = np.zeros_like(observation.observation)
             last_frames.append(padding)
         obs_stacked_frames = jnp.array(last_frames)
 
-        key, new_key = jax.random.split(self._memory["random_key"])
-        self._memory["random_key"] = key
+        key, new_key = jax.random.split(self.m["random_key"])
+        self.m["random_key"] = key
         policy_feed = PolicyFeed(
             stacked_frames=obs_stacked_frames,
             legal_actions_mask=jnp.array(observation.legal_actions),
             random_key=new_key,
         )
-        result = self._policy.run(policy_feed)
-        self._memory["policy_results"].put(result)
-        self._memory["action_probs"].put(result.extras["action_probs"])
-        return result.action
+        policy_result = self._policy(self._variable_client.params, policy_feed)
+        self.m["policy_results"].put(policy_result)
+        action_space_size = self._env_spec.actions.num_values
+        dummy_action_probs = np.zeros(action_space_size, dtype=np.float32)
+        self.m["action_probs"].put(
+            policy_result.extras.get("action_probs", dummy_action_probs)
+        )
+        return policy_result.action
 
     def observe_first(self, timestep: dm_env.TimeStep):
         if isinstance(timestep.observation, OLT):
-            self._memory["last_frames"].put(timestep.observation.observation)
+            self.m["last_frames"].put(timestep.observation.observation)
         else:
             raise NotImplementedError
         observation = mz.replay.Observation.from_env_timestep(timestep)
@@ -119,14 +122,14 @@ class MuZeroActor(BaseActor):
 
     def observe(self, action: chex.Array, next_timestep: dm_env.TimeStep):
         if isinstance(next_timestep.observation, OLT):
-            self._memory["last_frames"].put(next_timestep.observation.observation)
+            self.m["last_frames"].put(next_timestep.observation.observation)
         else:
             raise NotImplementedError
         root_value, action_probs = self._get_last_search_stats()
         last_reflection = mz.replay.Reflection(action, root_value, action_probs)
         next_observation = mz.replay.Observation.from_env_timestep(next_timestep)
-        self._memory["rolling_rewards"].put(next_observation.reward)
-        rolling_rewards = np.mean(self._memory["rolling_rewards"].get())
+        self.m["rolling_rewards"].put(next_observation.reward)
+        rolling_rewards = np.mean(self.m["rolling_rewards"].get())
         data = mz.logging.JAXBoardStepData(
             scalars={"rolling_rewards": rolling_rewards}, histograms={}
         )
@@ -134,9 +137,9 @@ class MuZeroActor(BaseActor):
         self._adder.add(last_reflection, next_observation)
 
     def _get_last_search_stats(self):
-        action_space_size = self._env_spec.actions.num_values
-        latest_policy_extras = self._memory["policy_results"].get()[-1].extras
+        latest_policy_extras = self.m["policy_results"].get()[-1].extras
         root_value = latest_policy_extras.get("root_value", np.float32(0))
+        action_space_size = self._env_spec.actions.num_values
         dummy_action_probs = np.zeros(action_space_size, dtype=np.float32)
         action_probs = latest_policy_extras.get("action_probs", dummy_action_probs)
         return root_value, action_probs
@@ -146,9 +149,8 @@ class MuZeroActor(BaseActor):
             if isinstance(logger, mz.logging.JAXBoardLogger):
                 logger.write(data)
 
-    # override
     def update(self, wait: bool = False):
-        self._policy.update(wait)
+        self._variable_client.update(wait)
 
     def close(self):
         for logger in self._loggers:
@@ -159,6 +161,3 @@ class MuZeroActor(BaseActor):
     @property
     def m(self):
         return self._memory
-
-    def __del__(self):
-        self.close()

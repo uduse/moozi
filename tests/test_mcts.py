@@ -36,3 +36,6 @@
 #     mcts.expand_node(root, Player(0), legal_actions, network_output)
 #     action_history = ActionHistory([], DIM_ACTIONS)
 #     mcts.run_mcts(config, root, action_history, network)
+
+def test_mcts():
+    

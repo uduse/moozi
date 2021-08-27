@@ -1,3 +1,3 @@
-from .policy import PolicyFeed, Policy, RandomPolicy, PriorPolicy
-from .monte_carlo import MonteCarlo
-from .single_roll_monte_carlo import SingleRollMonteCarlo
+from .policy import *
+# from .monte_carlo import *
+from .single_roll_monte_carlo import make_single_roll_monte_carlo_fn

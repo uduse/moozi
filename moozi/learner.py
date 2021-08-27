@@ -79,12 +79,6 @@ class SGDLearner(acme.Learner):
             params=params, opt_state=optimizer.init(params), steps=0, rng_key=key_state
         )
 
-    # def _get_default_loggers(self):
-    #     return [
-    #         acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
-    #         mz.logging.JAXBoardLogger(self._name, time_delta=5.0),
-    #     ]
-
     def _make_sgd_step_fn(
         self, network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, optimizer
     ):
@@ -156,6 +150,3 @@ class SGDLearner(acme.Learner):
             if isinstance(logger, mz.logging.JAXBoardLogger):
                 print(logger._name, "closed")
                 logger.close()
-
-    def __del__(self):
-        self.close()

@@ -67,17 +67,18 @@ def convert_to_anytree(policy_tree_root, anytree_root=None, action="_"):
 
 
 def nodeattrfunc(node):
-    return f'"reward: {node.reward:.3f}\nvalue: {node.value:.3f}"'
+    return f'label="value: {node.value:.3f}"'
 
 
 def edgeattrfunc(parent, child):
-    return f'label="{child.name} ({child.prior:.3f})"'
+    return f'label="action: {child.name} \nprob: {child.prior:.3f}\nreward: {child.reward:.3f}"'
 
 
 _partial_exporter = functools.partial(
     UniqueDotExporter,
     nodenamefunc=lambda node: node.id,
-    nodeattrfunc=lambda node: f"label={nodeattrfunc(node)}",
+    nodeattrfunc=nodeattrfunc,
+    edgeattrfunc=edgeattrfunc,
 )
 
 

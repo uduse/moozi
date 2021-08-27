@@ -127,7 +127,7 @@ class MuZeroLoss(LossFn):
 
         for i in range(self._num_unroll_steps):
             is_valid_action = batch.action.take(i, axis=1) != -1
-            step_loss_mask = is_valid_action
+            # step_loss_mask = is_valid_action
 
             network_output = network.recurrent_inference(
                 params, network_output.hidden_state, batch.action.take(0, axis=1)
@@ -135,17 +135,17 @@ class MuZeroLoss(LossFn):
 
             losses[f"reward_loss_{str(i + 1)}"] = (
                 vmap(mse)(batch.last_reward.take(i + 1, axis=1), network_output.reward)
-                * step_loss_mask
+                # * step_loss_mask
             )
             losses[f"value_loss_{str(i + 1)}"] = (
                 vmap(mse)(batch.value.take(i + 1, axis=1), network_output.value)
-                * step_loss_mask
+                # * step_loss_mask
             )
             losses[f"action_probs_loss_{str(i + 1)}"] = (
                 vmap(rlax.categorical_cross_entropy)(
                     batch.action_probs.take(i + 1, axis=1), network_output.policy_logits
                 )
-                * step_loss_mask
+                # * step_loss_mask
             )
 
         losses["l2_loss"] = jnp.reshape(params_l2_loss(params) * self._weight_decay, (1,))

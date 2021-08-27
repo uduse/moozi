@@ -34,6 +34,7 @@ moozi = {editable = true, path = "."}
 rope = "*"
 anytree = "*"
 debugpy = "*"
+ray = "*"
 
 [dev-packages]
 

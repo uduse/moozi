@@ -88,10 +88,10 @@ def make_single_roll_monte_carlo_fn(
     return _policy_fn
 
 
-def run(self, feed: PolicyFeed) -> PolicyResult:
-    params = self._variable_client.params
-    return self._policy_fn(params, feed)
+# def run(self, feed: PolicyFeed) -> PolicyResult:
+#     params = self._variable_client.params
+#     return self._policy_fn(params, feed)
 
 
-def update(self, wait: bool = False) -> None:
-    self._variable_client.update(wait=wait)
+# def update(self, wait: bool = False) -> None:
+#     self._variable_client.update(wait=wait)

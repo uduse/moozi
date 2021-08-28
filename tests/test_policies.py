@@ -1,13 +1,13 @@
-from acme.jax.utils import add_batch_dim
-from acme.jax.variable_utils import VariableClient
 import chex
 import jax
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
 import pytest
 import rlax
-from moozi.policies import PolicyFeed, make_single_roll_monte_carlo_fn, policy
+from acme.jax.utils import add_batch_dim
+from acme.jax.variable_utils import VariableClient
 from moozi.nn import NeuralNetwork
+from moozi.policies import PolicyFeed, make_single_roll_monte_carlo_fn, policy
 
 
 @pytest.fixture
@@ -50,7 +50,9 @@ def policy_feed(env, num_stacked_frames, random_key) -> PolicyFeed:
 #     assert action_is_legal
 
 
-def test_monte_carlo_sanity(policy_feed: PolicyFeed, network: NeuralNetwork, params):
+def test_single_roll_monte_carlo(
+    policy_feed: PolicyFeed, network: NeuralNetwork, params
+):
     single_roll_monte_carlo_fn = make_single_roll_monte_carlo_fn(
         network=network, num_unroll_steps=3
     )
@@ -62,3 +64,22 @@ def test_monte_carlo_sanity(policy_feed: PolicyFeed, network: NeuralNetwork, par
 
     action = rlax.categorical_sample(policy_feed.random_key, action_probs)
     assert action in range(policy_feed.legal_actions_mask.shape[0])
+
+
+import copy
+
+import moozi.policies.monte_carlo_tree_search as mcts
+
+
+def test_mcts_backpropagate(policy_feed: PolicyFeed, network: NeuralNetwork, params):
+    nn_output = network.initial_inference_unbatched(params, policy_feed.stacked_frames)
+    root = mcts.make_root_node(nn_output.hidden_state)
+    child = copy.deepcopy(root)._replace(parent=root)
+    child_child = copy.deepcopy(child)._replace(parent=child)
+    mcts.backpropagate(child_child, value=1.0, discount=0.99)
+
+
+# def test_mcts(policy_feed, network: NeuralNetwork, params):
+#     mcts = MonteCarloTreeSearch(network, num_simulations=10)
+#     mcts_result = mcts(params, policy_feed)
+#     print(mcts_result)

@@ -37,5 +37,8 @@
 #     action_history = ActionHistory([], DIM_ACTIONS)
 #     mcts.run_mcts(config, root, action_history, network)
 
-def test_mcts():
-    
+from moozi.policies.monte_carlo_tree_search import MonteCarloTreeSearch
+
+
+def test_mcts(policy_feed):
+    mcts = MonteCarloTreeSearch()

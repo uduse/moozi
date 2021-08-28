@@ -1,161 +1,142 @@
 # %%
-import functools
-import random
-import typing
-from typing import NamedTuple, Optional
-
-import acme
-import acme.jax.utils
-import acme.wrappers
+import copy
 import chex
-import dm_env
-import jax
+import math
+from typing import Any, Dict, NamedTuple, Optional
+
 import jax.numpy as jnp
-import moozi as mz
 import numpy as np
-import open_spiel
-import optax
-import reverb
-import tree
-from absl.testing import absltest, parameterized
-from acme import datasets as acme_datasets
-from acme import specs as acme_specs
-from acme.adders.reverb import DEFAULT_PRIORITY_TABLE, EpisodeAdder
-from acme.adders.reverb import test_utils as acme_test_utils
-from acme.adders.reverb.base import ReverbAdder, Trajectory
-from acme.agents import agent as acme_agent
-from acme.agents import replay as acme_replay
-from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironmentLoop
-from acme.jax.variable_utils import VariableClient
-from acme.utils import tree_utils
-from acme.utils.loggers.base import NoOpLogger
-from moozi.replay import Trajectory, make_replay
-from nptyping import NDArray
-from reverb import rate_limiters
-from reverb.trajectory_writer import TrajectoryColumn
+from moozi.nn import NeuralNetwork, NeuralNetworkOutput
+
+from moozi.policies.policy import PolicyFeed, PolicyFn, PolicyResult
+
+# root = Node(0)
+# current_observation = game.make_image(-1)
+# expand_node(
+#     root,
+#     game.to_play(),
+#     game.legal_actions(),
+#     network.initial_inference(current_observation),
+# )
+# add_exploration_noise(config, root)
+
+# # We then run a Monte Carlo Tree Search using only action sequences and the
+# # model learned by the network.
+#     run_mcts(config, root, game.action_history(), network)
+
 
 # %%
-use_jit = True
-if use_jit:
-    jax.config.update("jax_disable_jit", not use_jit)
+@chex.dataclass
+class Node:
+    prior: float
+    parent: Any  # Optional[Node]
+    children: dict
+    value_sum: float
+    visit_count: int
+    last_reward: float
+    hidden_state: jnp.ndarray
 
-platform = "gpu"
-jax.config.update("jax_platform_name", platform)
+    @property
+    def value(self) -> float:
+        assert self.visit_count > 0
+        return self.value_sum / self.visit_count
+
+
+def ucb_score(parent: Node, child: Node):
+    pb_c_base = 19652.0
+    pb_c_init = 1.25
+    # TODO: obviously this should be a parameter
+    discount = 0.99
+
+    pb_c = jnp.log((parent.visit_count + pb_c_base + 1) / pb_c_base) + pb_c_init
+    pb_c *= jnp.sqrt(parent.visit_count) / (child.visit_count + 1)
+    prior_score = pb_c * child.prior
+
+    if child.visit_count > 0:
+        value_score = child.last_reward + discount * get_value(child)
+    else:
+        value_score = 0.0
+    return prior_score + value_score
+
 
 # %%
-raw_env = open_spiel.python.rl_environment.Environment("catch(columns=7,rows=5)")
-env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
-env = acme.wrappers.SinglePrecisionWrapper(env)
-env_spec = acme.specs.make_environment_spec(env)
-
-# %%
-seed = 0
-master_key = jax.random.PRNGKey(seed)
-max_replay_size = 50000
-max_episode_length = env.environment.environment.game.max_game_length()
-num_unroll_steps = 2
-num_stacked_frames = 1
-num_td_steps = 100
-batch_size = 2048
-discount = 0.99
-dim_action = env_spec.actions.num_values
-frame_shape = env_spec.observations.observation.shape
-
-stacked_frame_shape = (num_stacked_frames,) + frame_shape
-
-# %%
-reverb_replay = make_replay(
-    env_spec, max_episode_length=max_episode_length, batch_size=batch_size
+node = Node(
+    prior=0.0,
+    parent=None,
+    children={},
+    value_sum=0.0,
+    visit_count=0,
+    last_reward=0.0,
+    hidden_state=np.array(0),
 )
-
 # %%
-dim_repr = 16
-nn_spec = mz.nn.NeuralNetworkSpec(
-    stacked_frames_shape=stacked_frame_shape,
-    dim_repr=dim_repr,
-    dim_action=dim_action,
-    repr_net_sizes=(128, 128),
-    pred_net_sizes=(128, 128),
-    dyna_net_sizes=(128, 128),
-)
-network = mz.nn.get_network(nn_spec)
-lr = 5e-4
-optimizer = optax.adam(lr)
-print(nn_spec)
 
 
-# %%
-master_key, new_key = jax.random.split(master_key)
-params = network.init(new_key)
+def expand_node(node: Node):
+    pass
 
-# %%
-# master_key, new_key = jax.random.split(master_key)
-data_iterator = mz.replay.post_process_data_iterator(
-    åeverb_replay.data_iterator,
-    batch_size,
-    discount,
-    num_unroll_steps,
-    num_td_steps,
-    num_stacked_frames,
-)
 
-# %%
-weight_decay = 1e-4
-entropy_reg = 0.5
-learner = mz.learner.SGDLearner(
-    network,
-    loss_fn=mz.loss.OneStepAdvantagePolicyGradientLoss(weight_decay, entropy_reg),
-    optimizer=optimizer,
-    data_iterator=data_iterator,
-    random_key=new_key,
-    loggers=[
-        mz.logging.JAXBoardLogger("learner", time_delta=5.0),
-        acme.utils.loggers.TerminalLogger(time_delta=5.0, print_fn=print),
-    ],
-)
-variable_client = VariableClient(learner, None)
+def select_child(node: Node):
+    pass
 
-# %%
-master_key, new_key = jax.random.split(master_key)
-policy = mz.policies.SingleRollMonteCarlo(
-    network, variable_client, num_unroll_steps=num_unroll_steps
-)
-actor = mz.MuZeroActor(
-    env_spec,
-    policy,
-    reverb_replay.adder,
-    new_key,
-    num_stacked_frames=num_stacked_frames,
-    loggers=[
-        mz.logging.JAXBoardLogger("actor", time_delta=5.0),
-    ],
-)
 
-# %%
-obs_ratio = 100
-min_observations = 0
-agent = acme_agent.Agent(
-    actor=actor,
-    learner=learner,
-    min_observations=min_observations,
-    observations_per_step=int(obs_ratio),
-)
+def is_expanded(node: Node):
+    return node.visit_count > 0
 
-# %%
-loop = OpenSpielEnvironmentLoop(environment=env, actors=[agent], logger=NoOpLogger())
-loop.run(num_episodes=100_000)
 
-# %%
-learner.close()
-actor.close()
+# def copy_node(node: Node) -> Node:
+#     return Node(
+#         prior=copy.deepcopy(node.prior),
+#         parent=copy.deepcopy(node.parent),
+#         children=copy.deepcopy(node.children),
+#         value_sum=copy.deepcopy(node.value_sum),
+#         visit_count=copy.deepcopy(node.visit_count),
+#         last_reward=copy.deepcopy(node.last_reward),
+#         hidden_state=copy.deepcopy(node.hidden_state),
+#     )
 
-# %%
-params = {"x": jnp.ones((3, 3))}
 
-def func(params, y, z):
-    return jnp.sum(jax.tree_flatten(params)) * jnp.mean(z @ y)
+def backpropagate(leaf: Node, value: float, discount: float):
+    node = leaf
+    while node.parent:
+        node = node.parent
+        node.value_sum += value
+        node.visit_count += 1
+        value = node.last_reward + value * discount
 
-func = jnp.vectorize(func, signature="(),(m,n),(n,m)->()")
-y = jnp.ones((4, 3)) * 2
-z = jnp.ones((3, 4)) * 2
-func(params, y, z)
+
+def make_root_node(hidden_state: jnp.ndarray) -> Node:
+    return Node(
+        prior=0.0,
+        parent=None,
+        children={},
+        value_sum=0.0,
+        last_reward=0.0,
+        visit_count=0,
+        hidden_state=hidden_state,
+    )
+
+
+class MonteCarloTreeSearchResult(NamedTuple):
+    action_probs: jnp.ndarray
+
+
+class MonteCarloTreeSearch(object):
+    def __init__(self, network: NeuralNetwork, num_simulations: int) -> None:
+        super().__init__()
+        self._network = network
+        self._num_simulations = num_simulations
+
+    def __call__(self, params, feed: PolicyFeed) -> PolicyResult:
+        root_nn_output = self._network.initial_inference_unbatched(
+            params, feed.stacked_frames
+        )
+        root = make_root_node(root_nn_output.hidden_state)
+        for _ in range(self._num_simulations):
+            node = root
+            while is_expanded(node):
+                node = select_child(node)
+            expand_node(node)
+            backpropagate()
+
+        return PolicyResult(action=jnp.array(0), extras={})

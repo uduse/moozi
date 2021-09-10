@@ -27,5 +27,6 @@
     "testExplorer.gutterDecoration": true,
     // "python.testing.autoTestDiscoverOnSaveEnabled": true,
     "pythonTestExplorer.testFramework": "pytest",
-    "python.linting.mypyEnabled": true
+    "python.linting.mypyEnabled": true,
+    "cSpell.enabled": false
 }

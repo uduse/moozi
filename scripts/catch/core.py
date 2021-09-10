@@ -51,8 +51,8 @@ print(jax.devices())
 
 # %%
 # env_columns, env_rows = 3, 3
-env_columns, env_rows = 5, 5
-# env_columns, env_rows = 7, 5
+# env_columns, env_rows = 5, 5
+env_columns, env_rows = 6, 6
 raw_env = open_spiel.python.rl_environment.Environment(
     f"catch(columns={env_columns},rows={env_rows})"
 )
@@ -64,9 +64,9 @@ env_spec = acme.specs.make_environment_spec(env)
 seed = 0
 master_key = jax.random.PRNGKey(seed)
 
-max_replay_size = 10000
+max_replay_size = 100000
 max_episode_length = env.environment.environment.game.max_game_length()
-num_unroll_steps = 2
+num_unroll_steps = 3
 num_stacked_frames = 1
 num_td_steps = 100
 batch_size = 256
@@ -87,6 +87,28 @@ nn_spec = mz.nn.NeuralNetworkSpec(
     dyna_net_sizes=(128, 128),
 )
 network = mz.nn.get_network(nn_spec)
-lr = 1e-3
+lr = 2e-3
 optimizer = optax.adam(lr)
 print(nn_spec)
+
+
+def convert_timestep(timestep):
+    return timestep._replace(observation=timestep.observation[0])
+
+
+def frame_to_str_gen(frame):
+    for irow, row in enumerate(frame):
+        for val in row:
+            if np.isclose(val, 0.0):
+                yield "."
+                continue
+            assert np.isclose(val, 1), val
+            if irow == len(frame) - 1:
+                yield "X"
+            else:
+                yield "O"
+        yield "\n"
+
+
+def frame_to_str(frame):
+    return "".join(frame_to_str_gen(frame))

@@ -130,6 +130,9 @@ class SGDLearner(acme.Learner):
         result = self._counter.increment(steps=1)
         result.update(step_data.scalars)
 
+        self._log(result, step_data)
+
+    def _log(self, result, step_data):
         for logger in self._loggers:
             if isinstance(logger, acme.utils.loggers.TerminalLogger):
                 logger.write(result)

@@ -89,7 +89,6 @@ class MuZeroActor(BaseActor):
         self._memory = self._init_memory_fn()
 
     def select_action(self, observation: OLT) -> int:
-
         last_frames = self.m["last_frames"].get()[-self._num_stacked_frames :]
         while len(last_frames) < self._num_stacked_frames:
             padding = np.zeros_like(observation.observation)
@@ -128,13 +127,22 @@ class MuZeroActor(BaseActor):
         root_value, action_probs = self._get_last_search_stats()
         last_reflection = mz.replay.Reflection(action, root_value, action_probs)
         next_observation = mz.replay.Observation.from_env_timestep(next_timestep)
-        self.m["rolling_rewards"].put(next_observation.reward)
-        rolling_rewards = np.mean(self.m["rolling_rewards"].get())
+        rolling_reward = self._update_rolling_reward(next_observation)
         data = mz.logging.JAXBoardStepData(
-            scalars={"rolling_rewards": rolling_rewards}, histograms={}
+            scalars={"rolling_rewards": rolling_reward}, histograms={}
         )
         self._log(data)
         self._adder.add(last_reflection, next_observation)
+
+    def _update_rolling_reward(self, next_observation):
+        if next_observation.is_last:
+            self.m["rolling_rewards"].put(next_observation.reward)
+        rolling_rewards = self.m["rolling_rewards"].get()
+        if rolling_rewards:
+            rolling_rewards = np.mean(rolling_rewards)
+        else:
+            rolling_rewards = 0.0
+        return rolling_rewards
 
     def _get_last_search_stats(self):
         latest_policy_extras = self.m["policy_results"].get()[-1].extras

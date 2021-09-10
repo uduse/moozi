@@ -1,9 +1,7 @@
-- model: main
-  default: true
+- model: catch
   operations:
-    run:
-      # default: true
-      main: scripts.main
+    train:
+      main: scripts.catch.train
       output-scalars: off
       flags-import: all
       sourcecode:
@@ -11,6 +9,20 @@
         - "*.yml"
         - exclude:
             dir: local_deps
+
+# - model: main
+#   default: true
+#   operations:
+#     run:
+#       # default: true
+#       main: scripts.main
+#       output-scalars: off
+#       flags-import: all
+#       sourcecode:
+#         - "*.py"
+#         - "*.yml"
+#         - exclude:
+#             dir: local_deps
 
 - model: pg
   descript: Policy Gradient method on the game of Catch

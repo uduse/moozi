@@ -64,8 +64,8 @@ class Node(object):
 
     def add_exploration_noise(self):
         # TODO: adjustable later
-        dirichlet_alpha = 0.25
-        frac = 0.25
+        dirichlet_alpha = 0.2
+        frac = 0.2
 
         actions = list(self.children.keys())
         noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
@@ -88,6 +88,12 @@ class Node(object):
         for action, child in self.children.items():
             visit_counts[action] = child.visit_count
         return visit_counts
+        
+    def get_children_values(self):
+        values = {}
+        for action, child in self.children.items():
+            values[action] = child.value
+        return values
 
     def select_leaf(self):
         node = self
@@ -163,9 +169,9 @@ def anytree_to_json(anytree_root, file_path):
         f.write(json_s)
 
 
-class MonteCarloTreeSearchResult(NamedTuple):
-    visit_counts: jnp.ndarray
-    tree: Node
+# class MonteCarloTreeSearchResult(NamedTuple):
+#     visit_counts: jnp.ndarray
+#     tree: Node
 
 
 class MonteCarloTreeSearch(object):
@@ -184,14 +190,16 @@ class MonteCarloTreeSearch(object):
         self._recurr_inf = jax.jit(network.recurrent_inference_unbatched, backend="cpu")
         self._all_actions_mask = np.ones((dim_action,), dtype=np.int32)
 
-    def __call__(self, params, feed: PolicyFeed) -> MonteCarloTreeSearchResult:
+    def __call__(self, params, feed: PolicyFeed) -> Node:
         root = self.get_root(params, feed)
 
         for _ in range(self._num_simulations):
             self.simulate(params, root)
 
-        visit_counts = root.get_children_visit_counts()
-        return MonteCarloTreeSearchResult(visit_counts=visit_counts, tree=root)
+        return root
+
+        # visit_counts = root.get_children_visit_counts()
+        # return MonteCarloTreeSearchResult(visit_counts=visit_counts, tree=root)
 
     def get_root(self, params, feed: PolicyFeed) -> Node:
         root_nn_output = self._init_inf(params, feed.stacked_frames)

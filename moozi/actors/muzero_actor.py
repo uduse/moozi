@@ -67,7 +67,7 @@ class MuZeroActor(BaseActor):
     ):
         self._env_spec = env_spec
         self._variable_client = variable_client
-        self._policy = policy_fn
+        self._policy_fn = policy_fn
         self._adder = adder
         self._loggers = loggers or []
         self._name = name or self.__class__.__name__
@@ -102,7 +102,7 @@ class MuZeroActor(BaseActor):
             legal_actions_mask=jnp.array(observation.legal_actions),
             random_key=new_key,
         )
-        policy_result = self._policy(self._variable_client.params, policy_feed)
+        policy_result = self._policy_fn(self._variable_client.params, policy_feed)
         self.m["policy_results"].put(policy_result)
         action_space_size = self._env_spec.actions.num_values
         dummy_action_probs = np.zeros(action_space_size, dtype=np.float32)

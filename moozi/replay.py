@@ -269,6 +269,7 @@ def make_replay(
     min_replay_size: int = 1,
     prefetch_size: int = 4,
     replay_table_name: str = DEFAULT_PRIORITY_TABLE,
+    port: int = None,
 ) -> ReverbReplay:
 
     signature = mz.replay.make_signature(env_spec, max_episode_length)
@@ -281,7 +282,7 @@ def make_replay(
         rate_limiter=reverb.rate_limiters.MinSize(min_replay_size),
         signature=signature,
     )
-    server = reverb.Server([replay_table], port=None)
+    server = reverb.Server([replay_table], port=port)
 
     # The adder is used to insert observations into replay.
     address = f"localhost:{server.port}"

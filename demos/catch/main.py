@@ -1,12 +1,11 @@
 # %%
 import functools
-from moozi.actors.evaluator import Evaluator
+import os
 import pickle
 import random
 import typing
-from typing import NamedTuple, Optional
 from pathlib import Path
-import os
+from typing import NamedTuple, Optional
 
 import acme
 import acme.jax.utils
@@ -36,8 +35,8 @@ from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironm
 from acme.jax.variable_utils import VariableClient
 from acme.utils import tree_utils
 from acme.utils.loggers.base import NoOpLogger
-from IPython.display import Image
-from IPython.display import display
+from IPython.display import Image, display
+from moozi.actors.evaluator import Evaluator
 from moozi.nn import NeuralNetwork, NeuralNetworkOutput
 from moozi.policies.policy import PolicyFeed, PolicyResult
 from moozi.replay import Trajectory, make_replay
@@ -46,7 +45,79 @@ from reverb import rate_limiters
 from reverb.trajectory_writer import TrajectoryColumn
 
 # %%
-from .core import *
+use_jit = True
+if use_jit:
+    jax.config.update("jax_disable_jit", not use_jit)
+
+platform = "gpu"
+jax.config.update("jax_platform_name", platform)
+
+print(jax.devices())
+
+# %%
+# env_columns, env_rows = 3, 3
+# env_columns, env_rows = 5, 5
+env_columns, env_rows = 6, 6
+raw_env = open_spiel.python.rl_environment.Environment(
+    f"catch(columns={env_columns},rows={env_rows})"
+)
+env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
+env = acme.wrappers.SinglePrecisionWrapper(env)
+env_spec = acme.specs.make_environment_spec(env)
+
+# %%
+seed = 0
+master_key = jax.random.PRNGKey(seed)
+
+max_replay_size = 100000
+max_episode_length = env.environment.environment.game.max_game_length()
+num_unroll_steps = 3
+num_stacked_frames = 1
+num_td_steps = 100
+batch_size = 256
+discount = 0.99
+
+
+# %%
+dim_repr = 64
+dim_action = env_spec.actions.num_values
+frame_shape = env_spec.observations.observation.shape
+stacked_frame_shape = (num_stacked_frames,) + frame_shape
+nn_spec = mz.nn.NeuralNetworkSpec(
+    stacked_frames_shape=stacked_frame_shape,
+    dim_repr=dim_repr,
+    dim_action=dim_action,
+    repr_net_sizes=(128, 128),
+    pred_net_sizes=(128, 128),
+    dyna_net_sizes=(128, 128),
+)
+network = mz.nn.get_network(nn_spec)
+lr = 2e-3
+optimizer = optax.adam(lr)
+print(nn_spec)
+
+
+def convert_timestep(timestep):
+    return timestep._replace(observation=timestep.observation[0])
+
+
+def frame_to_str_gen(frame):
+    for irow, row in enumerate(frame):
+        for val in row:
+            if np.isclose(val, 0.0):
+                yield "."
+                continue
+            assert np.isclose(val, 1), val
+            if irow == len(frame) - 1:
+                yield "X"
+            else:
+                yield "O"
+        yield "\n"
+
+
+def frame_to_str(frame):
+    return "".join(frame_to_str_gen(frame))
+
 
 # %%
 reverb_replay = make_replay(
@@ -227,9 +298,9 @@ def report_evaluation(
     with open(path / "output.txt", "w") as f:
         f.write(output_string)
 
-    with open(path / "weights.pkl", "wb") as f:
-        s = pickle.dumps(evaluator._variable_client.params, protocol=pickle.HIGHEST_PROTOCOL)
-        f.write(s)
+    with open(path / "weights.pkl", "w") as f:
+        params = evaluator._variable_client.params
+        f.write(str(pickle.dumps(params)))
 
 
 # %%
@@ -239,30 +310,10 @@ return_samples = 30
 for epoch in tqdm.notebook.tqdm(range(epochs)):
     for _ in range(episodes_per_epoch):
         loop.run_episode()
-    report_evaluation(env, evaluator, "evaluation/" + str(epoch), return_samples=return_samples)
+    report_evaluation(
+        env, evaluator, "evaluation/" + str(epoch), return_samples=return_samples
+    )
 
 # %%
 actor.close()
 learner.close()
-
-# %%
-# print(frame_to_str(evaluator.m["last_frames"].get()[-5].reshape(5, 5)))
-
-# # %%
-# eval_loop.run_episode()
-# last_policy_result = evaluator.m["policy_results"].get()[-5]
-# anytree_root = mz.policies.monte_carlo_tree_search.convert_to_anytree(
-#     last_policy_result.extras["tree"]
-# )
-# mz.policies.monte_carlo_tree_search.anytree_to_png(anytree_root, "policy_tree.png")
-# Image("./policy_tree.png")
-
-# # %%
-# # num_episodes = 1000
-# num_episodes = 100000
-# eval_frequency = 1000
-# for i in range(num_episodes):
-#     loop.run_episode()
-#     if i % eval_frequency == 0:
-#         with open(f"{i}.pickle", "wb") as f:
-#             pickle.dump(variable_client.params, f)

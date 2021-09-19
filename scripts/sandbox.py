@@ -1,7 +1,16 @@
 # %%
+import copy
+import dataclasses
+import inspect
+import functools
+import enum
+import types
+import collections
+
+from acme.jax.networks.base import Value
 from moozi.utils import SimpleQueue
 from time import time
-from typing import Callable, Dict, List, NamedTuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional
 from acme.agents.jax.impala.types import Observation
 import numpy as np
 import acme
@@ -15,9 +24,6 @@ import tree
 
 # %%
 # ray.init(ignore_reinit_error=True)
-
-# %%
-
 
 # %%
 def _pad_frames(self, frames: List[np.ndarray]):
@@ -71,58 +77,113 @@ class PlayerShell(object):
 
 
 # %%
-# InteractionWorker.remote(env_factory)
+from enum import Enum, auto
+
+
+# class ArtifactKeys(Enum):
+#     env_state = auto()
+
+#     to_play = auto()
+#     is_first = auto()
+#     is_last = auto()
+#     last_reward = auto()
+#     action = auto()
+
+#     last_frames = auto()
+
+
+@dataclasses.dataclass
+class Artifact:
+    env_state: dm_env.Environment = None
+
+    # env obs
+    timestep: dm_env.TimeStep = None
+    to_play: int = 0
+
+    action: int = 0
+
+    # player
+    last_frames: Optional[SimpleQueue] = None
+
+    @property
+    def keys(self):
+        return list(self.__dict__.keys())
+
+    def read_view(self, keys: List[str]):
+        return {key: getattr(self, key) for key in keys}
+
+    def write_view(self, items: Dict[str, Any]):
+        for key, val in items.items():
+            setattr(self, key, val)
+
+
+def law(*args, read="auto", write="auto"):
+    def _wrapper(law):
+        @functools.wraps(law)
+        def _apply_law(artifact: "Artifact"):
+            if read == "auto":
+                keys = list(inspect.signature(law).parameters.keys())
+                if not (set(keys) <= set(artifact.keys)):
+                    raise ValueError(f"{str(keys)} not in {str(artifact.keys)})")
+            elif isinstance(read, list):
+                keys = read
+            else:
+                raise ValueError
+
+            partial_artifact = artifact.read_view(keys)
+            updates = law(**partial_artifact)
+
+            if write == "auto":
+                pass
+            elif isinstance(write, list):
+                if (not write) and (not updates):
+                    pass
+                elif write != list(updates.keys()):
+                    raise ValueError("write_view keys mismatch.")
+            else:
+                raise ValueError
+
+            if updates:
+                artifact.write_view(updates)
+
+            return updates
+
+        return _apply_law
+
+    if len(args) == 1 and callable(args[0]):
+        return law()(args[0])
+    else:
+        return _wrapper
+
+
+@law(write=["env_state", "timestep"])
+def environment_law(
+    env_state: dm_env.Environment, timestep: dm_env.TimeStep, action: int
+):
+    if timestep is None or timestep.last():
+        timestep = env_state.reset()
+    else:
+        timestep = env_state.step([action])
+    return {"env_state": env_state, "timestep": timestep}
+
+
+@law
+def timestep_viewer(timestep):
+    print(timestep)
+
+
+def universe_loop(artifact, laws, copy=False):
+    if copy:
+        artifact = copy.deepcopy(artifact)
+    for law in laws:
+        law(artifact)
+
 
 # %%
-class Law(object):
-    def read(self):
-        pass
+env_state = env_factory()[0]
+artifact = Artifact(env_state=env_state)
 
-    def write(self):
-        pass
+for _ in range(5):
+    universe_loop(artifact, [environment_law, timestep_viewer])
 
-
-class EnvironmentLaw(Law):
-    def __init__(self) -> None:
-        super().__init__()
-
-
-class UniverseLoop(object):
-    def __init__(self, materia: dict, laws: List[Law]):
-        self._materia = materia
-        self._laws = laws
-
-
-# # %%
-
-
-class EnvironmentMateria(NamedTuple):
-    state: dm_env.Environment
-    to_play: int
-    is_first: bool
-    is_last: bool
-
-
-class PlayerMateria(NamedTuple):
-    last_frames: SimpleQueue
-
-
-class Materia(NamedTuple):
-    env: EnvironmentMateria
-
-
-# materia = {
-#     "env": {
-#         "state": None,
-#         "to_play"
-#     },
-#     "players": [{"last_frames": None}],
-# }
-
-
-def environment_law(read):
-    return {}
-
-
-laws = []
-UniverseLoop(materia, laws)
+# %%

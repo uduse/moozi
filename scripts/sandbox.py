@@ -1,162 +1,180 @@
 # %%
+import collections
 import copy
 import dataclasses
-import inspect
-import functools
 import enum
+import functools
+import inspect
 import types
-import collections
-
-from acme.jax.networks.base import Value
-from moozi.utils import SimpleQueue
 from time import time
-from typing import Any, Callable, Dict, List, NamedTuple, Optional
-from acme.agents.jax.impala.types import Observation
-import numpy as np
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Union
+
 import acme
 import dm_env
+import jax
 import moozi as mz
+import numpy as np
 import open_spiel
 import ray
-from acme.wrappers.open_spiel_wrapper import OpenSpielWrapper
-from acme.wrappers import SinglePrecisionWrapper
 import tree
+from acme.agents.jax.impala.types import Observation
+from acme.jax.networks.base import Value
+from acme.wrappers import SinglePrecisionWrapper
+from acme.wrappers.open_spiel_wrapper import OpenSpielWrapper
+from moozi.utils import SimpleQueue
 
 # %%
-# ray.init(ignore_reinit_error=True)
+ray.init(ignore_reinit_error=True)
 
 # %%
-def _pad_frames(self, frames: List[np.ndarray]):
-    orig_obs_shape = self._env.observation_spec().observation.shape
-    while len(frames) < self._num_stacked_frames:
-        padding = np.zeros(orig_obs_shape)
-        frames.append(padding)
-    return np.array(frames)
+# def env_factory():
+#     env_columns, env_rows = 5, 5
+#     raw_env = open_spiel.python.rl_environment.Environment(
+#         f"catch(columns={env_columns},rows={env_rows})"
+#     )
+#     env = OpenSpielWrapper(raw_env)
+#     env = SinglePrecisionWrapper(env)
+#     env_spec = acme.specs.make_environment_spec(env)
+#     return env, env_spec
 
 
 def env_factory():
-    env_columns, env_rows = 2, 2
-    raw_env = open_spiel.python.rl_environment.Environment(
-        f"catch(columns={env_columns},rows={env_rows})"
-    )
+    raw_env = open_spiel.python.rl_environment.Environment(f"tic_tac_toe")
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
     env_spec = acme.specs.make_environment_spec(env)
     return env, env_spec
 
 
-# %%
-env, env_spec = env_factory()
-
-# %%
-timestep = env.reset()
-
-# %%
-s = env.observation_spec()
-
-# %%
-EnvFactory = Callable[[], dm_env.Environment]
+# @ray.remote
+# class InteractionWorker(object):
+#     def __init__(self, env_factory: EnvFactory, player_shells_factory):
+#         self._env = env_factory()
+#         self._player_shells = player_shells_factory()
 
 
-@ray.remote
-class InteractionWorker(object):
-    def __init__(self, env_factory: EnvFactory, player_shells_factory):
-        self._env = env_factory()
-        self._player_shells = player_shells_factory()
+# class ObservationStackingLayer(object):
+#     def __init__(self, num_stacked_frames: int):
+#         self._num_stacked_frames = num_stacked_frames
+#         self._stacked_frames = mz.utils.SimpleQueue(num_stacked_frames)
 
 
-class ObservationStackingLayer(object):
-    def __init__(self, num_stacked_frames: int):
-        self._num_stacked_frames = num_stacked_frames
-        self._stacked_frames = mz.utils.SimpleQueue(num_stacked_frames)
-
-
-class PlayerShell(object):
-    def __init__(self):
-        pass
+# class PlayerShell(object):
+#     def __init__(self):
+#         pass
 
 
 # %%
-from enum import Enum, auto
 
-
-# class ArtifactKeys(Enum):
-#     env_state = auto()
-
-#     to_play = auto()
-#     is_first = auto()
-#     is_last = auto()
-#     last_reward = auto()
-#     action = auto()
-
-#     last_frames = auto()
-
-
+# %%
 @dataclasses.dataclass
 class Artifact:
+    # meta
+    num_ticks: int = 0
+
+    # environment
     env_state: dm_env.Environment = None
-
-    # env obs
     timestep: dm_env.TimeStep = None
-    to_play: int = 0
-
-    action: int = 0
+    to_play: int = -1
+    action: int = -1
 
     # player
     last_frames: Optional[SimpleQueue] = None
 
-    @property
-    def keys(self):
-        return list(self.__dict__.keys())
 
-    def read_view(self, keys: List[str]):
-        return {key: getattr(self, key) for key in keys}
+class _Link(object):
+    def __init__(
+        self,
+        func: Callable[..., Optional[dict]],
+        to_read: Union[List[str], str] = "auto",
+        to_write: Union[List[str], str] = "auto",
+    ) -> None:
+        self._func = func
+        self._to_read = to_read
+        self._to_write = to_write
 
-    def write_view(self, items: Dict[str, Any]):
-        for key, val in items.items():
-            setattr(self, key, val)
+        functools.update_wrapper(self, func)
 
+    @staticmethod
+    def _read_artifact(artifact, keys_to_read: List[str]):
+        return {key: getattr(artifact, key) for key in keys_to_read}
 
-def law(*args, read="auto", write="auto"):
-    def _wrapper(law):
-        @functools.wraps(law)
-        def _apply_law(artifact: "Artifact"):
-            if read == "auto":
-                keys = list(inspect.signature(law).parameters.keys())
-                if not (set(keys) <= set(artifact.keys)):
-                    raise ValueError(f"{str(keys)} not in {str(artifact.keys)})")
-            elif isinstance(read, list):
-                keys = read
-            else:
-                raise ValueError
+    @staticmethod
+    def _update_artifact(artifact, updates: Dict[str, Any]):
+        for key, val in updates.items():
+            setattr(artifact, key, val)
 
-            partial_artifact = artifact.read_view(keys)
-            updates = law(**partial_artifact)
+    @staticmethod
+    def _artifact_has_keys(artifact, keys: List[str]) -> bool:
+        return set(keys) <= set(artifact.__dict__.keys())
 
-            if write == "auto":
+    def __call__(self, artifact: Artifact):
+        keys_to_read = self._get_keys_to_read(artifact)
+        artifact_window = _Link._read_artifact(artifact, keys_to_read)
+        updates = self._func(**artifact_window)
+        if not updates:
+            updates = {}
+        self._validate_updates(artifact, updates)
+        _Link._update_artifact(artifact, updates)
+        return updates
+
+    def _validate_updates(self, artifact, updates):
+        if not _Link._artifact_has_keys(artifact, list(updates.keys())):
+            raise ValueError
+
+        if self._to_write == "auto":
+            pass
+        elif isinstance(self._to_write, list):
+            update_nothing = (not self._to_write) and (not updates)
+            if update_nothing:
                 pass
-            elif isinstance(write, list):
-                if (not write) and (not updates):
-                    pass
-                elif write != list(updates.keys()):
-                    raise ValueError("write_view keys mismatch.")
-            else:
-                raise ValueError
+            elif self._to_write != list(updates.keys()):
+                raise ValueError("write_view keys mismatch.")
+        else:
+            raise ValueError("`to_write` type not accepted.")
 
-            if updates:
-                artifact.write_view(updates)
+    def _get_keys_to_read(self, artifact):
+        if self._to_read == "auto":
+            keys = list(inspect.signature(self._func).parameters.keys())
+            if not _Link._artifact_has_keys(artifact, keys):
+                raise ValueError(f"{str(keys)} not in {str(artifact.__dict__.keys())})")
+        elif isinstance(self._to_read, list):
+            keys = self._to_read
+        else:
+            raise ValueError("`to_read` type not accepted.")
+        return keys
 
-            return updates
 
-        return _apply_law
-
-    if len(args) == 1 and callable(args[0]):
-        return law()(args[0])
+def link(*args, **kwargs):
+    if len(args) == 1 and not kwargs and callable(args[0]):
+        func = args[0]
+        return _Link(func, to_read="auto", to_write="auto")
     else:
-        return _wrapper
+        func = functools.partial(_Link, **kwargs)
+        return func
 
 
-@law(write=["env_state", "timestep"])
+@link
+def print_timestep(timestep):
+    print(timestep)
+
+
+@link
+def random_action_law(timestep: dm_env.TimeStep):
+    if not timestep.last():
+        legal_actions = timestep.observation[0].legal_actions
+        random_action = np.random.choice(np.flatnonzero(legal_actions == 1))
+        return {"action": random_action}
+    else:
+        return {"action": -1}
+
+
+def tick(artifact, linked_laws):
+    for law in linked_laws:
+        law(artifact)
+
+
+@link
 def environment_law(
     env_state: dm_env.Environment, timestep: dm_env.TimeStep, action: int
 ):
@@ -167,23 +185,96 @@ def environment_law(
     return {"env_state": env_state, "timestep": timestep}
 
 
-@law
-def timestep_viewer(timestep):
-    print(timestep)
+@link
+def increment_tick(num_ticks):
+    return {"num_ticks": num_ticks + 1}
 
 
-def universe_loop(artifact, laws, copy=False):
-    if copy:
-        artifact = copy.deepcopy(artifact)
-    for law in laws:
-        law(artifact)
+class UniverseWorker(object):
+    def __init__(self, artifact_factory, laws_factory):
+        self._artifact = artifact_factory()
+        self._laws = laws_factory()
+
+    def tick(self):
+        tick(self._artifact, self._laws)
+
+    def loop(self):
+        import time
+
+        while True:
+            time.sleep(1)
+            self.tick()
+
+    def artifact(self):
+        return self._artifact
+
+    def laws(self):
+        return self._laws
+
+def make_player_shell(player: int):
+    
+
+# %%
+def artifact_factory():
+    artifact = Artifact()
+    artifact.env_state = env_factory()[0]
+    return artifact
+
+
+def laws_factory():
+    return [
+        environment_law,
+        random_action_law,
+        link(lambda timestep: print("reward:", timestep.reward)),
+        make_say_hello(0),
+        make_say_hello(1),
+        increment_tick,
+    ]
 
 
 # %%
-env_state = env_factory()[0]
-artifact = Artifact(env_state=env_state)
-
-for _ in range(5):
-    universe_loop(artifact, [environment_law, timestep_viewer])
+worker = UniverseWorker(artifact_factory, laws_factory)
+remote_worker_fn = lambda: ray.remote(UniverseWorker).remote(
+    artifact_factory, laws_factory
+)
+remote_worker = remote_worker_fn()
 
 # %%
+ref = remote_worker.tick.remote()
+
+# %%
+ray.get(ref)
+# ray.kill(remote_worker)
+# %%
+# ray.get(remote_worker.artifact.remote())
+
+# %%
+
+# %%
+raw_env = open_spiel.python.rl_environment.Environment(f"tic_tac_toe")
+env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
+env = acme.wrappers.SinglePrecisionWrapper(env)
+env_spec = acme.specs.make_environment_spec(env)
+
+# %%
+num_stacked_frames = 1
+dim_repr = 64
+dim_action = env_spec.actions.num_values
+frame_shape = env_spec.observations.observation.shape
+stacked_frame_shape = (num_stacked_frames,) + frame_shape
+nn_spec = mz.nn.NeuralNetworkSpec(
+    stacked_frames_shape=stacked_frame_shape,
+    dim_repr=dim_repr,
+    dim_action=dim_action,
+    repr_net_sizes=(128, 128),
+    pred_net_sizes=(128, 128),
+    dyna_net_sizes=(128, 128),
+)
+network = mz.nn.get_network(nn_spec)
+# %%
+
+master_key = jax.random.PRNGKey(0)
+network.init(master_key)
+# %%
+
+

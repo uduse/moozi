@@ -11,7 +11,6 @@ from . import replay
 from . import loss
 from . import jaxboard
 from . import logging
-from .actors import MuZeroActor
 from . import learner
 from . import agent
 

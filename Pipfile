@@ -34,10 +34,18 @@ moozi = {editable = true, path = "."}
 rope = "*"
 anytree = "*"
 debugpy = "*"
-ray = "*"
+ray = {extras = ["default"], version = "*"}
 snakeviz = "*"
+aiohttp = "==3.7"
+matplotlib = "*"
+typing-extensions = "*"
+trio = "*"
 
 [dev-packages]
+mypy = "*"
+ipykernel = "*"
+black = "*"
+scikit-image = "*"
 
 [requires]
 python_version = "3.8"

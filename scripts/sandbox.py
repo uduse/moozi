@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, NamedTuple, Optional, Union
 import acme
 import dm_env
 import jax
+from matplotlib import artist
 import moozi as mz
 import numpy as np
 import open_spiel
@@ -46,24 +47,6 @@ def env_factory():
     return env, env_spec
 
 
-# @ray.remote
-# class InteractionWorker(object):
-#     def __init__(self, env_factory: EnvFactory, player_shells_factory):
-#         self._env = env_factory()
-#         self._player_shells = player_shells_factory()
-
-
-# class ObservationStackingLayer(object):
-#     def __init__(self, num_stacked_frames: int):
-#         self._num_stacked_frames = num_stacked_frames
-#         self._stacked_frames = mz.utils.SimpleQueue(num_stacked_frames)
-
-
-# class PlayerShell(object):
-#     def __init__(self):
-#         pass
-
-
 # %%
 
 # %%
@@ -82,18 +65,32 @@ class Artifact:
     last_frames: Optional[SimpleQueue] = None
 
 
-class _Link(object):
+class _Link:
     def __init__(
         self,
-        func: Callable[..., Optional[dict]],
+        callable_obj: Callable[..., Optional[Dict[str, Any]]],
         to_read: Union[List[str], str] = "auto",
         to_write: Union[List[str], str] = "auto",
     ) -> None:
-        self._func = func
+        self._callable_obj = callable_obj
         self._to_read = to_read
         self._to_write = to_write
 
-        functools.update_wrapper(self, func)
+    def __call__(self, artifact: Artifact):
+        keys_to_read = self._get_keys_to_read(artifact)
+        artifact_window = _Link._read_artifact(artifact, keys_to_read)
+        updates = self._callable_obj(**artifact_window)
+        if not updates:
+            updates = {}
+        self._validate_updates(artifact, updates)
+        _Link._update_artifact(artifact, updates)
+        return updates
+
+    def __getattribute__(self, name: str) -> Any:
+        try:
+            return super().__getattribute__(name)
+        except AttributeError:
+            return getattr(self._callable_obj, name)
 
     @staticmethod
     def _read_artifact(artifact, keys_to_read: List[str]):
@@ -107,16 +104,6 @@ class _Link(object):
     @staticmethod
     def _artifact_has_keys(artifact, keys: List[str]) -> bool:
         return set(keys) <= set(artifact.__dict__.keys())
-
-    def __call__(self, artifact: Artifact):
-        keys_to_read = self._get_keys_to_read(artifact)
-        artifact_window = _Link._read_artifact(artifact, keys_to_read)
-        updates = self._func(**artifact_window)
-        if not updates:
-            updates = {}
-        self._validate_updates(artifact, updates)
-        _Link._update_artifact(artifact, updates)
-        return updates
 
     def _validate_updates(self, artifact, updates):
         if not _Link._artifact_has_keys(artifact, list(updates.keys())):
@@ -133,9 +120,13 @@ class _Link(object):
         else:
             raise ValueError("`to_write` type not accepted.")
 
+    def _wrapped_func_keys(self):
+        return set(inspect.signature(self._callable_obj).parameters.keys())
+
     def _get_keys_to_read(self, artifact):
         if self._to_read == "auto":
-            keys = list(inspect.signature(self._func).parameters.keys())
+            keys = self._wrapped_func_keys()
+            keys = keys - {"self"}  ## TODO?
             if not _Link._artifact_has_keys(artifact, keys):
                 raise ValueError(f"{str(keys)} not in {str(artifact.__dict__.keys())})")
         elif isinstance(self._to_read, list):
@@ -145,12 +136,22 @@ class _Link(object):
         return keys
 
 
+class _LinkClassWrapper:
+    def __init__(self, class_) -> None:
+        self._class = class_
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return link(self._class(*args, **kwargs))
+
+
 def link(*args, **kwargs):
-    if len(args) == 1 and not kwargs and callable(args[0]):
+    if len(args) == 1 and not kwargs and inspect.isclass(args[0]):
+        return _LinkClassWrapper(args[0])
+    elif len(args) == 1 and not kwargs and callable(args[0]):
         func = args[0]
         return _Link(func, to_read="auto", to_write="auto")
     else:
-        func = functools.partial(_Link, **kwargs)
+        func = functools.partial(_Link, *args, **kwargs)
         return func
 
 
@@ -190,7 +191,7 @@ def increment_tick(num_ticks):
     return {"num_ticks": num_ticks + 1}
 
 
-class UniverseWorker(object):
+class UniverseWorker:
     def __init__(self, artifact_factory, laws_factory):
         self._artifact = artifact_factory()
         self._laws = laws_factory()
@@ -211,8 +212,6 @@ class UniverseWorker(object):
     def laws(self):
         return self._laws
 
-def make_player_shell(player: int):
-    
 
 # %%
 def artifact_factory():
@@ -226,55 +225,40 @@ def laws_factory():
         environment_law,
         random_action_law,
         link(lambda timestep: print("reward:", timestep.reward)),
-        make_say_hello(0),
-        make_say_hello(1),
         increment_tick,
     ]
 
 
 # %%
-worker = UniverseWorker(artifact_factory, laws_factory)
-remote_worker_fn = lambda: ray.remote(UniverseWorker).remote(
-    artifact_factory, laws_factory
-)
-remote_worker = remote_worker_fn()
+@link
+class C:
+    def __init__(self, index) -> None:
+        self._index = index
 
-# %%
-ref = remote_worker.tick.remote()
-
-# %%
-ray.get(ref)
-# ray.kill(remote_worker)
-# %%
-# ray.get(remote_worker.artifact.remote())
-
-# %%
-
-# %%
-raw_env = open_spiel.python.rl_environment.Environment(f"tic_tac_toe")
-env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
-env = acme.wrappers.SinglePrecisionWrapper(env)
-env_spec = acme.specs.make_environment_spec(env)
-
-# %%
-num_stacked_frames = 1
-dim_repr = 64
-dim_action = env_spec.actions.num_values
-frame_shape = env_spec.observations.observation.shape
-stacked_frame_shape = (num_stacked_frames,) + frame_shape
-nn_spec = mz.nn.NeuralNetworkSpec(
-    stacked_frames_shape=stacked_frame_shape,
-    dim_repr=dim_repr,
-    dim_action=dim_action,
-    repr_net_sizes=(128, 128),
-    pred_net_sizes=(128, 128),
-    dyna_net_sizes=(128, 128),
-)
-network = mz.nn.get_network(nn_spec)
-# %%
-
-master_key = jax.random.PRNGKey(0)
-network.init(master_key)
-# %%
+    def __call__(self, num_ticks) -> Any:
+        print(f"{self._index} : {num_ticks}")
 
 
+# %%
+worker = UniverseWorker(artifact_factory, lambda: [C(0), C(1), increment_tick])
+worker.tick()
+worker.tick()
+worker.tick()
+worker.tick()
+
+
+# %%
+c = C(100)
+
+# %%
+a = artifact_factory()
+c(a)
+
+# %%
+
+# %%
+import trio
+
+# %%
+# with trio.open_nursery() as nursery:
+#     nursery

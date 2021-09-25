@@ -200,7 +200,7 @@ def eval_policy_fn(params, feed: PolicyFeed) -> PolicyResult:
 
 
 # %%
-actor = mz.MuZeroActor(
+actor = mz.PlayerShell(
     env_spec,
     variable_client,
     train_policy_fn,

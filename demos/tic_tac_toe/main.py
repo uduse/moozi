@@ -150,7 +150,7 @@ train_policy_fn = functools.partial(
     mz.policies.monte_carlo_tree_search.train_policy_fn, mcts
 )
 
-actor = mz.MuZeroActor(
+actor = mz.PlayerShell(
     env_spec,
     variable_client,
     train_policy_fn,

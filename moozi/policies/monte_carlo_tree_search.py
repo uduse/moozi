@@ -16,20 +16,6 @@ from moozi.policies.policy import PolicyFeed, PolicyFn, PolicyResult
 _safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")
 
 
-def _single_player_gen(player=0):
-    while True:
-        yield player
-
-
-def _alternate_player_gen(player=0):
-    while True:
-        yield player
-        if player == 0:
-            player = 1
-        elif player == 1:
-            player = 0
-
-
 @dataclass
 class Node(object):
     prior: float
@@ -52,9 +38,7 @@ class Node(object):
     def is_expanded(self) -> bool:
         return len(self.children) > 0
 
-    def expand_node(
-        self, network_output: NeuralNetworkOutput, legal_actions_mask, to_play: int
-    ):
+    def expand_node(self, network_output: NeuralNetworkOutput, legal_actions_mask):
         self.hidden_state = network_output.hidden_state
         self.reward = float(network_output.reward)
         action_probs = np.array(_safe_epsilon_softmax(network_output.policy_logits))
@@ -63,7 +47,6 @@ class Node(object):
         for action, prob in enumerate(action_probs):
             self.children[action] = Node(
                 prior=prob,
-                player=to_play,
                 parent=self,
                 children={},
                 value_sum=0.0,
@@ -90,13 +73,10 @@ class Node(object):
         for a, n in zip(actions, noise):
             self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
 
-    def backpropagate(self, value: float, discount: float, to_play: int):
+    def backpropagate(self, value: float, discount: float):
         node = self
         while True:
-            if node.player == to_play:
-                node.value_sum += value
-            else:
-                node.value_sum -= value
+            node.value_sum += value
             node.visit_count += 1
             value = node.reward + value * discount
             if node.parent:
@@ -190,11 +170,6 @@ def anytree_to_json(anytree_root, file_path):
         f.write(json_s)
 
 
-# class MonteCarloTreeSearchResult(NamedTuple):
-#     visit_counts: jnp.ndarray
-#     tree: Node
-
-
 class MonteCarloTreeSearch(object):
     def __init__(
         self,
@@ -202,7 +177,6 @@ class MonteCarloTreeSearch(object):
         num_simulations: int,
         discount: float,
         dim_action: int,
-        player_mode: str = "single",
     ) -> None:
         super().__init__()
         # self._network = network
@@ -211,26 +185,19 @@ class MonteCarloTreeSearch(object):
         self._init_inf = jax.jit(network.initial_inference_unbatched, backend="cpu")
         self._recurr_inf = jax.jit(network.recurrent_inference_unbatched, backend="cpu")
         self._all_actions_mask = np.ones((dim_action,), dtype=np.int32)
-        if player_mode == "single":
-            self._player_gen_fn = _single_player_gen
-        elif player_mode == "alternate":
-            self._player_gen_fn = _alternate_player_gen
-        else:
-            raise ValueError(f"Unknown player mode: {player_mode}")
 
     def __call__(self, params, feed: PolicyFeed) -> Node:
-        player_gen = self._player_gen_fn(feed.to_play)
         root = self.get_root(params, feed)
 
         for _ in range(self._num_simulations):
-            self.simulate_once(params, root, to_play=next(player_gen))
+            self.simulate_once(params, root)
 
         return root
 
     def get_root(self, params, feed: PolicyFeed) -> Node:
         root_nn_output = self._init_inf(params, feed.stacked_frames)
         root = Node(0)
-        root.expand_node(root_nn_output, feed.legal_actions_mask, to_play=feed.to_play)
+        root.expand_node(root_nn_output, feed.legal_actions_mask)
         root.add_exploration_noise()
         return root
 
@@ -238,13 +205,12 @@ class MonteCarloTreeSearch(object):
         self,
         params,
         root: Node,
-        to_play: int,
     ):
         action, node = root.select_leaf()
         assert node.parent
         nn_output = self._recurr_inf(params, node.parent.hidden_state, action)
-        node.expand_node(nn_output, self._all_actions_mask, to_play)
-        node.backpropagate(float(nn_output.value), self._discount, to_play)
+        node.expand_node(nn_output, self._all_actions_mask)
+        node.backpropagate(float(nn_output.value), self._discount)
 
     @property
     def all_actions_mask(self):

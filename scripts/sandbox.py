@@ -8,51 +8,48 @@ import functools
 import inspect
 import types
 import time
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Union
+from typing import Any, Callable, Coroutine, Dict, List, NamedTuple, Optional, Union
 
+import attr
 import trio
 import acme
 import dm_env
 import jax
-from matplotlib import artist
 import moozi as mz
 import numpy as np
 import open_spiel
-import ray
+
+# import ray
 import tree
-from acme.agents.jax.impala.types import Observation
-from acme.jax.networks.base import Value
 from acme.wrappers import SinglePrecisionWrapper
 from acme.wrappers.open_spiel_wrapper import OpenSpielWrapper
 from moozi.utils import SimpleQueue
 
 # %%
-ray.init(ignore_reinit_error=True)
+# ray.init(ignore_reinit_error=True)
 
 # %%
-# def env_factory():
-#     env_columns, env_rows = 5, 5
-#     raw_env = open_spiel.python.rl_environment.Environment(
-#         f"catch(columns={env_columns},rows={env_rows})"
-#     )
-#     env = OpenSpielWrapper(raw_env)
-#     env = SinglePrecisionWrapper(env)
-#     env_spec = acme.specs.make_environment_spec(env)
-#     return env, env_spec
-
-
 def env_factory():
-    raw_env = open_spiel.python.rl_environment.Environment(f"tic_tac_toe")
+    env_columns, env_rows = 5, 5
+    raw_env = open_spiel.python.rl_environment.Environment(
+        f"catch(columns={env_columns},rows={env_rows})"
+    )
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
     env_spec = acme.specs.make_environment_spec(env)
     return env, env_spec
 
 
-# %%
+# def make_env():
+#     raw_env = open_spiel.python.rl_environment.Environment(f"tic_tac_toe")
+#     env = OpenSpielWrapper(raw_env)
+#     env = SinglePrecisionWrapper(env)
+#     env_spec = acme.specs.make_environment_spec(env)
+#     return env, env_spec
+
 
 # %%
-@dataclasses.dataclass
+@attr.s(auto_attribs=True)
 class Artifact:
     # meta
     num_ticks: int = 0
@@ -67,32 +64,25 @@ class Artifact:
     last_frames: Optional[SimpleQueue] = None
 
 
-class _Link:
-    def __init__(
-        self,
-        callable_obj: Callable[..., Optional[Dict[str, Any]]],
-        to_read: Union[List[str], str] = "auto",
-        to_write: Union[List[str], str] = "auto",
-    ) -> None:
-        self._callable_obj = callable_obj
-        self._to_read = to_read
-        self._to_write = to_write
+# %%
+@attr.s(auto_attribs=True)
+class Link:
+    callable_obj: Any
+    to_read: Union[List[str], str] = "auto"
+    to_write: Union[List[str], str] = "auto"
 
-    def __call__(self, artifact: Artifact):
+    async def __call__(self, artifact: object):
         keys_to_read = self._get_keys_to_read(artifact)
-        artifact_window = _Link._read_artifact(artifact, keys_to_read)
-        updates = self._callable_obj(**artifact_window)
+        artifact_window = Link._read_artifact(artifact, keys_to_read)
+        if inspect.iscoroutine(self.callable_obj):
+            updates = await self.callable_obj(**artifact_window)
+        else:
+            updates = self.callable_obj(**artifact_window)
         if not updates:
             updates = {}
         self._validate_updates(artifact, updates)
-        _Link._update_artifact(artifact, updates)
+        Link._update_artifact(artifact, updates)
         return updates
-
-    def __getattribute__(self, name: str) -> Any:
-        try:
-            return super().__getattribute__(name)
-        except AttributeError:
-            return getattr(self._callable_obj, name)
 
     @staticmethod
     def _read_artifact(artifact, keys_to_read: List[str]):
@@ -108,52 +98,54 @@ class _Link:
         return set(keys) <= set(artifact.__dict__.keys())
 
     def _validate_updates(self, artifact, updates):
-        if not _Link._artifact_has_keys(artifact, list(updates.keys())):
+        if not Link._artifact_has_keys(artifact, list(updates.keys())):
             raise ValueError
 
-        if self._to_write == "auto":
+        if self.to_write == "auto":
             pass
-        elif isinstance(self._to_write, list):
-            update_nothing = (not self._to_write) and (not updates)
+        elif isinstance(self.to_write, list):
+            update_nothing = (not self.to_write) and (not updates)
             if update_nothing:
                 pass
-            elif self._to_write != list(updates.keys()):
+            elif self.to_write != list(updates.keys()):
                 raise ValueError("write_view keys mismatch.")
         else:
             raise ValueError("`to_write` type not accepted.")
 
     def _wrapped_func_keys(self):
-        return set(inspect.signature(self._callable_obj).parameters.keys())
+        return set(inspect.signature(self.callable_obj).parameters.keys())
 
     def _get_keys_to_read(self, artifact):
-        if self._to_read == "auto":
+        if self.to_read == "auto":
             keys = self._wrapped_func_keys()
             keys = keys - {"self"}  ## TODO?
-            if not _Link._artifact_has_keys(artifact, keys):
+            if not Link._artifact_has_keys(artifact, keys):
                 raise ValueError(f"{str(keys)} not in {str(artifact.__dict__.keys())})")
-        elif isinstance(self._to_read, list):
-            keys = self._to_read
+        elif isinstance(self.to_read, list):
+            keys = self.to_read
         else:
             raise ValueError("`to_read` type not accepted.")
         return keys
 
 
-class _LinkClassWrapper:
-    def __init__(self, class_) -> None:
-        self._class = class_
+# %%
+@attr.s
+class LinkClassWrapper:
+    class_: type = attr.ib()
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        return link(self._class(*args, **kwargs))
+        return link(self.class_(*args, **kwargs))
 
 
+# %%
 def link(*args, **kwargs):
     if len(args) == 1 and not kwargs and inspect.isclass(args[0]):
-        return _LinkClassWrapper(args[0])
+        return LinkClassWrapper(args[0])
     elif len(args) == 1 and not kwargs and callable(args[0]):
         func = args[0]
-        return _Link(func, to_read="auto", to_write="auto")
+        return Link(func, to_read="auto", to_write="auto")
     else:
-        func = functools.partial(_Link, *args, **kwargs)
+        func = functools.partial(Link, *args, **kwargs)
         return func
 
 
@@ -172,20 +164,17 @@ def random_action_law(timestep: dm_env.TimeStep):
         return {"action": -1}
 
 
-def tick(artifact, linked_laws):
-    for law in linked_laws:
-        law(artifact)
-
-
 @link
-def environment_law(
-    env_state: dm_env.Environment, timestep: dm_env.TimeStep, action: int
-):
-    if timestep is None or timestep.last():
-        timestep = env_state.reset()
-    else:
-        timestep = env_state.step([action])
-    return {"env_state": env_state, "timestep": timestep}
+@attr.s
+class EnvironmentLaw:
+    env_state = attr.ib()
+
+    def __call__(self, timestep: dm_env.TimeStep, action: int):
+        if timestep is None or timestep.last():
+            timestep = self.env_state.reset()
+        else:
+            timestep = self.env_state.step([action])
+        return {"timestep": timestep}
 
 
 @link
@@ -193,118 +182,165 @@ def increment_tick(num_ticks):
     return {"num_ticks": num_ticks + 1}
 
 
-class UniverseWorker:
-    def __init__(self, artifact_factory, laws_factory):
-        self._artifact = artifact_factory()
-        self._laws = laws_factory()
+@attr.s
+class Universe:
+    artifact = attr.ib()
+    laws = attr.ib()
 
-    def tick(self):
-        tick(self._artifact, self._laws)
-
-    def loop(self):
-        while True:
-            time.sleep(1)
-            self.tick()
-
-    def artifact(self):
-        return self._artifact
-
-    def laws(self):
-        return self._laws
+    async def tick(self):
+        for law in self.laws:
+            await law(self.artifact)
 
 
 # %%
-def artifact_factory():
+def make_artifact():
     artifact = Artifact()
-    artifact.env_state = env_factory()[0]
+    artifact.env_state = make_env()[0]
     return artifact
 
 
-def laws_factory():
+def make_laws():
     return [
-        environment_law,
+        EnvironmentLaw(make_env()[0]),
         random_action_law,
-        link(lambda timestep: print("reward:", timestep.reward)),
         increment_tick,
     ]
 
 
 # %%
-@link
-class C:
-    def __init__(self, index) -> None:
-        self._index = index
+async def main():
+    univeres = [Universe(make_artifact(), make_laws()) for _ in range(10)]
+    for u in univeres:
+        await u.tick()
+    # n.start_soon(u.tick)
 
-    def __call__(self, num_ticks) -> Any:
-        print(f"{self._index} : {num_ticks}")
+
+trio.run(main)
+
+# %%
+# num_simulators = 10
+# batch_size = 9
+
+
+# async def process_batch(send_responses_channels, batch):
+#     results = [(idx, c + 100) for idx, c in batch]
+#     print(f"processed {len(batch)} tasks")
+
+#     for idx, data in results:
+#         await send_responses_channels[idx].send((idx, data))
+
+
+# async def main():
+#     async with trio.open_nursery() as nursery:
+#         send_request_channel, receive_request_channel = trio.open_memory_channel(0)
+
+#         send_response_channels, receive_response_channels = [], []
+#         for i in range(num_simulators):
+#             sender, receiver = trio.open_memory_channel(0)
+#             send_response_channels.append(sender)
+#             receive_response_channels.append(receiver)
+
+#         nursery.start_soon(
+#             batching_layer, receive_request_channel, send_response_channels
+#         )
+
+#         async with send_request_channel:
+#             for i in range(num_simulators):
+#                 nursery.start_soon(
+#                     simulation_runner,
+#                     i,
+#                     send_request_channel.clone(),
+#                     receive_response_channels[i],
+#                 )
+
+#     print("all done")
+
+
+# trio.run(main)
+
+# %%
+class BatchingLayer:
+    def __init__(self, batch_size, tick_timeframe):
+        self._batch_size = batch_size
+        self._tick_timeframe = tick_timeframe
+
+        (
+            self._send_request_channel,
+            self._receive_request_channel,
+        ) = trio.open_memory_channel(0)
+
+    async def run(self):
+        async with trio.open_nursery() as nursery:
+
+            send_response_channels, receive_response_channels = [], []
+            for i in range(num_simulators):
+                sender, receiver = trio.open_memory_channel(0)
+                send_response_channels.append(sender)
+                receive_response_channels.append(receiver)
+
+            nursery.start_soon(
+                batching_layer, receive_request_channel, send_response_channels
+            )
+
+            async with send_request_channel:
+                for i in range(num_simulators):
+                    nursery.start_soon(
+                        simulation_runner,
+                        i,
+                        send_request_channel.clone(),
+                        receive_response_channels[i],
+                    )
+
+        print("all done")
+
+    async def batching_layer(self):
+        print("batch processor starting")
+        async with contextlib.AsyncExitStack() as stack:
+            for context in [receive_request_channel, *send_responses_channels]:
+                await stack.enter_async_context(context)
+
+            batch = []
+            tick_timeframe = 1
+            while True:
+                try:
+                    mode = "move on"
+                    with trio.move_on_after(tick_timeframe):
+                        while True:
+                            data = await receive_request_channel.receive()
+                            batch.append(data)
+                            if len(batch) >= batch_size:
+                                mode = "skipped"
+                                break
+
+                    print(mode)
+                    await process_batch(send_responses_channels, batch)
+                    batch.clear()
+
+                except trio.EndOfChannel:
+                    assert len(batch) == 0
+                    break
+
+        print("batch processor closed")
 
 
 # %%
-worker = UniverseWorker(artifact_factory, lambda: [C(0), C(1), increment_tick])
-worker.tick()
-worker.tick()
-worker.tick()
-worker.tick()
+@attr.s
+class BatchingProxy:
+    _send_request_channel = attr.ib()
+    _receive_response_channel = attr.ib()
+
+    async def send(self):
+        pass
 
 
-# %%
-c = C(100)
+class Simulation:
+    def __init__(self, sender, receiver):
+        self._sender = sender
+        self._receiver = receiver
 
-# %%
-a = artifact_factory()
-c(a)
-
-# %%
-# class BatchingLayer:
-#     def __init__(self) -> None:
-#         self._q = []
-
-#     async def add(self, obs):
-#         pass
-
-#     async def run(self):
-#         self
-
-num_simulators = 10
-batch_size = 9
-
-async def batching_layer(receive_request_channel, send_responses_channels):
-    print("batch processor starting")
-    async with contextlib.AsyncExitStack() as stack:
-        for context in [receive_request_channel, *send_responses_channels]:
-            await stack.enter_async_context(context)
-
-        batch = []
-        tick_timeframe = 1
-        # last_tick_time = time.time()
-        while True:
-            try:
-                mode = 'move on'
-                with trio.move_on_after(tick_timeframe):
-                    while True:
-                        data = await receive_request_channel.receive()
-                        batch.append(data)
-                        if len(batch) >= batch_size:
-                            mode = 'skipped'
-                            break
-
-                print(mode)
-                await process_batch(send_responses_channels, batch)
-                batch.clear()
-
-            except trio.EndOfChannel:
-                assert len(batch) == 0
-                break
-
-    print("batch processor closed")
-
-
-async def process_batch(send_responses_channels, batch):
-    results = [(idx, c + 100) for idx, c in batch]
-    print(f"processed {len(batch)} tasks")
-
-    for idx, data in results:
-        await send_responses_channels[idx].send((idx, data))
+    async def run(self):
+        await trio.sleep(0.1)
+        self._sender
 
 
 async def simulation_runner(idx, send_request_channel, receive_response_channel):
@@ -324,29 +360,34 @@ async def simulation_runner(idx, send_request_channel, receive_response_channel)
 
 
 async def main():
+    num_universes = 10
+    num_ticks = 100
+    batching_layer = BatchingLayer(batch_size=10, tick_timeframe=1)
+
+    def make_artifact():
+        return Artifact()
+
+    def make_laws():
+        return [
+            EnvironmentLaw(make_env()[0]),
+            increment_tick,
+        ]
+
+    def make_universe():
+        artifact = make_artifact()
+        laws = make_laws()
+        return Universe(artifact, laws)
+
+    universes = [make_universe() for i in range(num_universes)]
+
     async with trio.open_nursery() as nursery:
-        send_request_channel, receive_request_channel = trio.open_memory_channel(0)
+        nursery.start_soon(batching_layer.run)
 
-        send_response_channels, receive_response_channels = [], []
-        for i in range(num_simulators):
-            sender, receiver = trio.open_memory_channel(0)
-            send_response_channels.append(sender)
-            receive_response_channels.append(receiver)
+        async with batching_layer:
 
-        nursery.start_soon(
-            batching_layer, receive_request_channel, send_response_channels
-        )
-
-        async with send_request_channel:
-            for i in range(num_simulators):
-                nursery.start_soon(
-                    simulation_runner,
-                    i,
-                    send_request_channel.clone(),
-                    receive_response_channels[i],
-                )
-
-    print("all done")
+            for _ in range(num_ticks):
+                for u in universes:
+                    nursery.start_soon(u.tick)
 
 
 trio.run(main)

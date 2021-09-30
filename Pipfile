@@ -40,6 +40,7 @@ aiohttp = "==3.7"
 matplotlib = "*"
 typing-extensions = "*"
 trio = "*"
+attrs = "*"
 
 [dev-packages]
 mypy = "*"

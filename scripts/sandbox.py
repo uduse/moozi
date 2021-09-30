@@ -1,4 +1,5 @@
 # %%
+import contextlib
 import collections
 import copy
 import dataclasses
@@ -6,9 +7,10 @@ import enum
 import functools
 import inspect
 import types
-from time import time
+import time
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Union
 
+import trio
 import acme
 import dm_env
 import jax
@@ -200,8 +202,6 @@ class UniverseWorker:
         tick(self._artifact, self._laws)
 
     def loop(self):
-        import time
-
         while True:
             time.sleep(1)
             self.tick()
@@ -255,10 +255,98 @@ a = artifact_factory()
 c(a)
 
 # %%
+# class BatchingLayer:
+#     def __init__(self) -> None:
+#         self._q = []
 
-# %%
-import trio
+#     async def add(self, obs):
+#         pass
 
-# %%
-# with trio.open_nursery() as nursery:
-#     nursery
+#     async def run(self):
+#         self
+
+num_simulators = 10
+batch_size = 9
+
+async def batching_layer(receive_request_channel, send_responses_channels):
+    print("batch processor starting")
+    async with contextlib.AsyncExitStack() as stack:
+        for context in [receive_request_channel, *send_responses_channels]:
+            await stack.enter_async_context(context)
+
+        batch = []
+        tick_timeframe = 1
+        # last_tick_time = time.time()
+        while True:
+            try:
+                mode = 'move on'
+                with trio.move_on_after(tick_timeframe):
+                    while True:
+                        data = await receive_request_channel.receive()
+                        batch.append(data)
+                        if len(batch) >= batch_size:
+                            mode = 'skipped'
+                            break
+
+                print(mode)
+                await process_batch(send_responses_channels, batch)
+                batch.clear()
+
+            except trio.EndOfChannel:
+                assert len(batch) == 0
+                break
+
+    print("batch processor closed")
+
+
+async def process_batch(send_responses_channels, batch):
+    results = [(idx, c + 100) for idx, c in batch]
+    print(f"processed {len(batch)} tasks")
+
+    for idx, data in results:
+        await send_responses_channels[idx].send((idx, data))
+
+
+async def simulation_runner(idx, send_request_channel, receive_response_channel):
+    print("policy runner", idx, "starting")
+
+    async with send_request_channel, receive_response_channel:
+        counter = 0
+        while counter < 5:
+            await trio.sleep(1)
+            task = (idx, counter)
+            print(task, "requesting")
+            await send_request_channel.send(task)
+            result = await receive_response_channel.receive()
+            print(result, "done")
+            counter += 1
+    print("policy runner", idx, "closed")
+
+
+async def main():
+    async with trio.open_nursery() as nursery:
+        send_request_channel, receive_request_channel = trio.open_memory_channel(0)
+
+        send_response_channels, receive_response_channels = [], []
+        for i in range(num_simulators):
+            sender, receiver = trio.open_memory_channel(0)
+            send_response_channels.append(sender)
+            receive_response_channels.append(receiver)
+
+        nursery.start_soon(
+            batching_layer, receive_request_channel, send_response_channels
+        )
+
+        async with send_request_channel:
+            for i in range(num_simulators):
+                nursery.start_soon(
+                    simulation_runner,
+                    i,
+                    send_request_channel.clone(),
+                    receive_response_channels[i],
+                )
+
+    print("all done")
+
+
+trio.run(main)

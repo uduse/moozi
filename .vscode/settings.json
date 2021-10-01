@@ -22,11 +22,7 @@
     // disable native tests to avoid redundant CodeLens
     // https://github.com/kondratyev-nv/vscode-python-test-adapter/issues/243
     "python.testing.unittestEnabled": false,
-    "python.testing.nosetestsEnabled": false,
-    "python.testing.pytestEnabled": false,
-    "testExplorer.gutterDecoration": true,
-    // "python.testing.autoTestDiscoverOnSaveEnabled": true,
-    "pythonTestExplorer.testFramework": "pytest",
+    "python.testing.pytestEnabled": true,
     "python.linting.mypyEnabled": true,
     "cSpell.enabled": false
 }

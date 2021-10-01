@@ -7,12 +7,12 @@ import anytree
 import jax
 import jax.numpy as jnp
 import numpy as np
+import ray.util.queue
 import rlax
+import trio
 from moozi.nn import NeuralNetwork, NeuralNetworkOutput, NeuralNetworkSpec, get_network
 from moozi.policies.policy import PolicyFeed, PolicyFn, PolicyResult
 
-
-# %%
 _safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")
 
 
@@ -25,7 +25,7 @@ class Node(object):
     value_sum: float = 0.0
     visit_count: int = 0
     reward: float = 0.0
-    hidden_state: Optional[np.ndarray] = None
+    hidden_state_id: Optional[int] = None
 
     @property
     def value(self) -> float:
@@ -39,7 +39,7 @@ class Node(object):
         return len(self.children) > 0
 
     def expand_node(self, network_output: NeuralNetworkOutput, legal_actions_mask):
-        self.hidden_state = network_output.hidden_state
+        self.hidden_state_id = network_output.hidden_state
         self.reward = float(network_output.reward)
         action_probs = np.array(_safe_epsilon_softmax(network_output.policy_logits))
         action_probs *= legal_actions_mask
@@ -52,7 +52,7 @@ class Node(object):
                 value_sum=0.0,
                 visit_count=0,
                 reward=0.0,
-                hidden_state=None,
+                hidden_state_id=None,
             )
 
     def select_child(self):
@@ -120,6 +120,66 @@ class Node(object):
         return prior_score + value_score
 
 
+# class Requester:
+#     def __init__(self) -> None:
+#         self._queue = ray.util.queue.Queue()
+
+#     def add(self, request):
+#         self._queue.put(request)
+        
+#     async def send(self):
+#         self._queue.
+
+
+class MonteCarloTreeSearch:
+    def __init__(
+        self,
+        requester,
+        num_simulations: int,
+        discount: float,
+        dim_action: int,
+    ) -> None:
+        super().__init__()
+        self._requester = requester
+        self._num_simulations = num_simulations
+        self._discount = discount
+        self._all_actions_mask = np.ones((dim_action,), dtype=np.int32)
+
+    async def __call__(self, feed: PolicyFeed) -> Node:
+        root = await self.get_root(feed)
+
+        for _ in range(self._num_simulations):
+            await self.simulate_once(root)
+
+        return root
+
+    async def get_root(self, feed: PolicyFeed) -> Node:
+        root_nn_output = await self._requester.initial_inference(feed.stacked_frames)
+        root = Node(0)
+        root.expand_node(root_nn_output, feed.legal_actions_mask)
+        root.add_exploration_noise()
+        return root
+
+    async def simulate_once(
+        self,
+        root: Node,
+    ):
+        action, node = root.select_leaf()
+        assert node.parent
+        nn_output = await self._requester.recurrent_inference(
+            node.parent.hidden_state_id, action
+        )
+        node.expand_node(nn_output, self._all_actions_mask)
+        node.backpropagate(float(nn_output.value), self._discount)
+
+    @property
+    def all_actions_mask(self):
+        return self._all_actions_mask
+
+    def __del__(self):
+        """TODO: relase recurrent states stored remotely."""
+
+
 def get_uuid():
     return uuid.uuid4().hex[:8]
 
@@ -170,84 +230,33 @@ def anytree_to_json(anytree_root, file_path):
         f.write(json_s)
 
 
-class MonteCarloTreeSearch(object):
-    def __init__(
-        self,
-        network: NeuralNetwork,
-        num_simulations: int,
-        discount: float,
-        dim_action: int,
-    ) -> None:
-        super().__init__()
-        # self._network = network
-        self._num_simulations = num_simulations
-        self._discount = discount
-        self._init_inf = jax.jit(network.initial_inference_unbatched, backend="cpu")
-        self._recurr_inf = jax.jit(network.recurrent_inference_unbatched, backend="cpu")
-        self._all_actions_mask = np.ones((dim_action,), dtype=np.int32)
+# def train_policy_fn(mcts: MonteCarloTreeSearch, feed: PolicyFeed) -> PolicyResult:
+#     mcts_tree = mcts(feed)
 
-    def __call__(self, params, feed: PolicyFeed) -> Node:
-        root = self.get_root(params, feed)
+#     action_probs = np.zeros_like(mcts.all_actions_mask, dtype=np.float32)
+#     for a, visit_count in mcts_tree.get_children_visit_counts().items():
+#         action_probs[a] = visit_count
+#     action_probs /= np.sum(action_probs)
 
-        for _ in range(self._num_simulations):
-            self.simulate_once(params, root)
-
-        return root
-
-    def get_root(self, params, feed: PolicyFeed) -> Node:
-        root_nn_output = self._init_inf(params, feed.stacked_frames)
-        root = Node(0)
-        root.expand_node(root_nn_output, feed.legal_actions_mask)
-        root.add_exploration_noise()
-        return root
-
-    def simulate_once(
-        self,
-        params,
-        root: Node,
-    ):
-        action, node = root.select_leaf()
-        assert node.parent
-        nn_output = self._recurr_inf(params, node.parent.hidden_state, action)
-        node.expand_node(nn_output, self._all_actions_mask)
-        node.backpropagate(float(nn_output.value), self._discount)
-
-    @property
-    def all_actions_mask(self):
-        return self._all_actions_mask
+#     action, _ = mcts_tree.select_child()
+#     return PolicyResult(
+#         action=np.array(action, dtype=np.int32),
+#         extras={"tree": mcts_tree, "action_probs": action_probs},
+#     )
 
 
-def train_policy_fn(
-    mcts: MonteCarloTreeSearch, params, feed: PolicyFeed
-) -> PolicyResult:
-    mcts_tree = mcts(params, feed)
+# def eval_policy_fn(mcts: MonteCarloTreeSearch, feed: PolicyFeed) -> PolicyResult:
+#     policy_result = train_policy_fn(mcts, feed)
 
-    action_probs = np.zeros_like(mcts.all_actions_mask, dtype=np.float32)
-    for a, visit_count in mcts_tree.get_children_visit_counts().items():
-        action_probs[a] = visit_count
-    action_probs /= np.sum(action_probs)
+#     mcts_tree = policy_result.extras["tree"]
 
-    action, _ = mcts_tree.select_child()
-    return PolicyResult(
-        action=np.array(action, dtype=np.int32),
-        extras={"tree": mcts_tree, "action_probs": action_probs},
-    )
+#     child_values = np.zeros_like(mcts.all_actions_mask, dtype=np.float32)
+#     for action, value in mcts_tree.get_children_values().items():
+#         child_values[action] = value
 
-
-def eval_policy_fn(
-    mcts: MonteCarloTreeSearch, params, feed: PolicyFeed
-) -> PolicyResult:
-    policy_result = train_policy_fn(mcts, params, feed)
-
-    mcts_tree = policy_result.extras["tree"]
-
-    child_values = np.zeros_like(mcts.all_actions_mask, dtype=np.float32)
-    for action, value in mcts_tree.get_children_values().items():
-        child_values[action] = value
-
-    policy_result.extras.update(
-        {
-            "child_values": child_values,
-        }
-    )
-    return policy_result
+#     policy_result.extras.update(
+#         {
+#             "child_values": child_values,
+#         }
+#     )
+#     return policy_result

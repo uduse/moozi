@@ -10,6 +10,8 @@ from acme import types
 from acme.core import VariableSource
 from acme.jax.variable_utils import VariableClient
 
+from pytest_trio.enable_trio_mode import *
+
 
 def update_jax_config():
     jax.config.update("jax_disable_jit", True)

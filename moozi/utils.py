@@ -113,3 +113,11 @@ _partial_exporter = functools.partial(
 
 def anytree_to_png(anytree_root, file_path):
     _partial_exporter(anytree_root).to_picture(file_path)
+
+
+def as_coroutine(func):
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+
+    return wrapper

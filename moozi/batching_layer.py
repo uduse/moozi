@@ -37,7 +37,7 @@ class BatchingLayer:
     batch_process_period: float = 1
 
     batch_buffer: list = field(default_factory=list)
-    process_fn: Callable = lambda: None
+    process_fn: Callable = lambda x: x
 
     request_channel: list = field(default_factory=lambda: trio.open_memory_channel(0))
     response_channels: dict = field(default_factory=dict)

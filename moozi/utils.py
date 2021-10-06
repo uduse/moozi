@@ -12,7 +12,7 @@ import numpy as np
 from anytree.exporter import DotExporter, UniqueDotExporter
 
 
-class SimpleQueue(object):
+class SimpleBuffer(object):
     r"""A simple FIFO queue."""
 
     def __init__(self, size: int = 1000) -> None:
@@ -36,7 +36,7 @@ class SimpleQueue(object):
     @property
     def size(self):
         return self._size
-        
+
     def clear(self):
         self._list.clear()
 

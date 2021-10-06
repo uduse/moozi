@@ -23,7 +23,7 @@ from acme.agents.jax.impala.types import Observation
 from acme.jax.networks.base import Value
 from acme.wrappers import SinglePrecisionWrapper
 from acme.wrappers.open_spiel_wrapper import OpenSpielWrapper
-from moozi.utils import SimpleQueue
+from moozi.utils import SimpleBuffer
 import pandas as pd
 
 ray.init(ignore_reinit_error=True)

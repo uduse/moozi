@@ -16,7 +16,7 @@ rlax = "*"
 nbconvert = "<6"
 guildai = "*"
 dm-acme = {editable = true, path = "./local_deps/acme"}
-black = "*"
+black = "==21.7b0"
 mypy = "*"
 numpy = "*"
 nptyping = "*"
@@ -42,6 +42,7 @@ typing-extensions = "*"
 trio = "*"
 attrs = "*"
 pytest-trio = "*"
+trio-asyncio = "*"
 
 [dev-packages]
 mypy = "*"

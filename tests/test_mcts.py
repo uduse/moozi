@@ -1,44 +1,13 @@
-# import numpy as np
-
-# import moozi
-# from moozi import *
-# from moozi.utils import NetworkOutput, Network
-
-# DIM_ACTIONS = 10
+from moozi.batching_layer import BatchingClient, BatchingLayer
+from moozi.nn import NeuralNetwork
+from moozi.policies.mcts_async import MCTSAsync
 
 
-# class TestNetwork(Network):
-#     def initial_inference(self, features) -> NetworkOutput:
-#         hidden_state = features
-#         value = np.mean(hidden_state)
-#         reward = np.std(hidden_state)
-#         policy_logits = {
-#             Action(a): hidden_state[a] for a in range(DIM_ACTIONS)
-#         }
-#         return NetworkOutput(value, reward, policy_logits, hidden_state)
+async def test_async_mcts(network: NeuralNetwork, params):
+    # async def process_fn(batch):
+    #     return network.initial_inference(batch)
 
-#     def recurrent_inference(self, hidden_state, action) -> NetworkOutput:
-#         value = np.mean(hidden_state)
-#         reward = np.std(hidden_state)
-#         policy_logits = {
-#             Action(a): hidden_state[a] for a in range(DIM_ACTIONS)
-#         }
-#         return NetworkOutput(value, reward, policy_logits, hidden_state)
+    # batching_layer = BatchingLayer(max_batch_size=5, process_fn=process_fn)
+    assert MCTSAsync
+    
 
-
-# def test_mcts():
-#     config = Config(DIM_ACTIONS, 10, 0.5, 0.1, 25, 1, 1, 1, 1e-3, 1e-4, None)
-#     root = Node(1)
-#     network = TestNetwork()
-#     legal_actions = list(map(Action, range(DIM_ACTIONS)))
-#     obs = list(range(DIM_ACTIONS))
-#     network_output = network.initial_inference(obs)
-#     mcts.expand_node(root, Player(0), legal_actions, network_output)
-#     action_history = ActionHistory([], DIM_ACTIONS)
-#     mcts.run_mcts(config, root, action_history, network)
-
-from moozi.policies.monte_carlo_tree_search import MonteCarloTreeSearch
-
-
-def test_mcts(policy_feed):
-    mcts = MonteCarloTreeSearch()

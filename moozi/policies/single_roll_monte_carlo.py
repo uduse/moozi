@@ -8,13 +8,13 @@ import rlax
 from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 from acme.jax.variable_utils import VariableClient
 from jax.ops import index_add, index
-from moozi.nn import NeuralNetwork, NeuralNetworkOutput
+from moozi.nn import NeuralNetwork, NNOutput
 
 from .policy import PolicyFn, PolicyFeed, PolicyResult
 
 
 class Node(NamedTuple):
-    network_output: NeuralNetworkOutput
+    network_output: NNOutput
     prior: jnp.ndarray
     children: list
 

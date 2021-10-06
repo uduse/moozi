@@ -1,4 +1,5 @@
 import chex
+import copy
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -64,11 +65,6 @@ def test_single_roll_monte_carlo(
 
     action = rlax.categorical_sample(policy_feed.random_key, action_probs)
     assert action in range(policy_feed.legal_actions_mask.shape[0])
-
-
-import copy
-
-import moozi.policies.monte_carlo_tree_search as mcts
 
 
 def test_mcts_backpropagate(policy_feed: PolicyFeed, network: NeuralNetwork, params):

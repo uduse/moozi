@@ -36,7 +36,7 @@ def env_spec(env):
 
 
 @pytest.fixture
-def num_stacked_frames():
+def num_frames():
     return 2
 
 

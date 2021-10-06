@@ -39,8 +39,8 @@ class Evaluator(BaseActor):
     def reset_memory(self):
         self._memory = {
             "random_key": self._seed_random_key,
-            "last_frames": mz.utils.SimpleQueue(5000),
-            "policy_results": mz.utils.SimpleQueue(5000),
+            "last_frames": mz.utils.SimpleBuffer(5000),
+            "policy_results": mz.utils.SimpleBuffer(5000),
         }
 
     def select_action(self, observation: OLT) -> int:

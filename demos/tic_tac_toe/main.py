@@ -37,7 +37,7 @@ from acme.utils import tree_utils
 from acme.utils.loggers.base import NoOpLogger
 from IPython.display import Image, display
 from moozi.actors.evaluator import Evaluator
-from moozi.nn import NeuralNetwork, NeuralNetworkOutput
+from moozi.nn import NeuralNetwork, NNOutput
 from moozi.policies.policy import PolicyFeed, PolicyResult
 from moozi.replay import Trajectory, make_replay
 from nptyping import NDArray

@@ -10,125 +10,12 @@ import numpy as np
 import ray.util.queue
 import rlax
 import trio
-from moozi.nn import NeuralNetwork, NeuralNetworkOutput, NeuralNetworkSpec, get_network
+from moozi.nn import NeuralNetwork, NNOutput, NeuralNetworkSpec, get_network
 from moozi.policies.policy import PolicyFeed, PolicyFn, PolicyResult
 
 _safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")
 
 
-@dataclass
-class Node(object):
-    prior: float
-    player: int = 0
-    parent: Optional["Node"] = None
-    children: dict = field(default_factory=dict)
-    value_sum: float = 0.0
-    visit_count: int = 0
-    reward: float = 0.0
-    hidden_state_id: Optional[int] = None
-
-    @property
-    def value(self) -> float:
-        if self.visit_count == 0:
-            return 0
-        else:
-            return self.value_sum / self.visit_count
-
-    @property
-    def is_expanded(self) -> bool:
-        return len(self.children) > 0
-
-    def expand_node(self, network_output: NeuralNetworkOutput, legal_actions_mask):
-        self.hidden_state_id = network_output.hidden_state
-        self.reward = float(network_output.reward)
-        action_probs = np.array(_safe_epsilon_softmax(network_output.policy_logits))
-        action_probs *= legal_actions_mask
-        action_probs /= np.sum(action_probs)
-        for action, prob in enumerate(action_probs):
-            self.children[action] = Node(
-                prior=prob,
-                parent=self,
-                children={},
-                value_sum=0.0,
-                visit_count=0,
-                reward=0.0,
-                hidden_state_id=None,
-            )
-
-    def select_child(self):
-        scores = [
-            (Node.ucb_score(parent=self, child=child), action, child)
-            for action, child in self.children.items()
-        ]
-        _, action, child = max(scores)
-        return action, child
-
-    def add_exploration_noise(self):
-        # TODO: adjustable later
-        dirichlet_alpha = 0.2
-        frac = 0.2
-
-        actions = list(self.children.keys())
-        noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
-        for a, n in zip(actions, noise):
-            self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
-
-    def backpropagate(self, value: float, discount: float):
-        node = self
-        while True:
-            node.value_sum += value
-            node.visit_count += 1
-            value = node.reward + value * discount
-            if node.parent:
-                node = node.parent
-            else:
-                break
-
-    def get_children_visit_counts(self):
-        visit_counts = {}
-        for action, child in self.children.items():
-            visit_counts[action] = child.visit_count
-        return visit_counts
-
-    def get_children_values(self):
-        values = {}
-        for action, child in self.children.items():
-            values[action] = child.value
-        return values
-
-    def select_leaf(self):
-        node = self
-        while node.is_expanded:
-            action, node = node.select_child()
-        return action, node
-
-    @classmethod
-    def ucb_score(cls, parent: "Node", child: "Node"):
-        pb_c_base = 19652.0
-        pb_c_init = 1.25
-        # TODO: obviously this should be a parameter
-        discount = 0.99
-
-        pb_c = np.log((parent.visit_count + pb_c_base + 1) / pb_c_base) + pb_c_init
-        pb_c *= np.sqrt(parent.visit_count) / (child.visit_count + 1)
-        prior_score = pb_c * child.prior
-
-        if child.visit_count > 0:
-            value_score = child.reward + discount * child.value
-        else:
-            value_score = 0.0
-        return prior_score + value_score
-
-
-# class Requester:
-#     def __init__(self) -> None:
-#         self._queue = ray.util.queue.Queue()
-
-#     def add(self, request):
-#         self._queue.put(request)
-        
-#     async def send(self):
-#         self._queue.
 
 
 class MonteCarloTreeSearch:

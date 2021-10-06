@@ -67,54 +67,54 @@ class MonteCarloTreeSearch:
         """TODO: relase recurrent states stored remotely."""
 
 
-def get_uuid():
-    return uuid.uuid4().hex[:8]
+# def get_uuid():
+#     return uuid.uuid4().hex[:8]
 
 
-def convert_to_anytree(node: Node, anytree_node=None, action="_"):
-    if node.visit_count > 0:
-        anytree_node = anytree.Node(
-            id=get_uuid(),
-            name=action,
-            parent=anytree_node,
-            prior=str(np.round(node.prior, 3)),
-            reward=str(np.round(node.reward, 3)),
-            value=str(np.round(node.value, 3)),
-            visits=str(np.round(node.visit_count, 3)),
-        )
-        for action, child in node.children.items():
-            convert_to_anytree(child, anytree_node, action)
-        return anytree_node
-    else:
-        return anytree_node
+# def convert_to_anytree(node: Node, anytree_node=None, action="_"):
+#     if node.visit_count > 0:
+#         anytree_node = anytree.Node(
+#             id=get_uuid(),
+#             name=action,
+#             parent=anytree_node,
+#             prior=str(np.round(node.prior, 3)),
+#             reward=str(np.round(node.reward, 3)),
+#             value=str(np.round(node.value, 3)),
+#             visits=str(np.round(node.visit_count, 3)),
+#         )
+#         for action, child in node.children.items():
+#             convert_to_anytree(child, anytree_node, action)
+#         return anytree_node
+#     else:
+#         return anytree_node
 
 
-def nodeattrfunc(node):
-    return f'label="V: {node.value}\nN: {node.visits}"'
+# def nodeattrfunc(node):
+#     return f'label="V: {node.value}\nN: {node.visits}"'
 
 
-def edgeattrfunc(parent, child):
-    return f'label="A: {child.name} \np: {child.prior}\nR: {child.reward}"'
+# def edgeattrfunc(parent, child):
+#     return f'label="A: {child.name} \np: {child.prior}\nR: {child.reward}"'
 
 
-_partial_dot_exporter = functools.partial(
-    anytree.exporter.UniqueDotExporter,
-    nodenamefunc=lambda node: node.id,
-    nodeattrfunc=nodeattrfunc,
-    edgeattrfunc=edgeattrfunc,
-)
+# _partial_dot_exporter = functools.partial(
+#     anytree.exporter.UniqueDotExporter,
+#     nodenamefunc=lambda node: node.id,
+#     nodeattrfunc=nodeattrfunc,
+#     edgeattrfunc=edgeattrfunc,
+# )
 
 
-def anytree_to_png(anytree_root, file_path):
-    _partial_dot_exporter(anytree_root).to_picture(file_path)
+# def anytree_to_png(anytree_root, file_path):
+#     _partial_dot_exporter(anytree_root).to_picture(file_path)
 
 
-def anytree_to_json(anytree_root, file_path):
-    json_s = anytree.exporter.JsonExporter(indent=2, sort_keys=True).export(
-        anytree_root
-    )
-    with open(file_path, "w") as f:
-        f.write(json_s)
+# def anytree_to_json(anytree_root, file_path):
+#     json_s = anytree.exporter.JsonExporter(indent=2, sort_keys=True).export(
+#         anytree_root
+#     )
+#     with open(file_path, "w") as f:
+#         f.write(json_s)
 
 
 # def train_policy_fn(mcts: MonteCarloTreeSearch, feed: PolicyFeed) -> PolicyResult:

@@ -22,12 +22,13 @@ import attr
 _safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")
 
 
-@attr.s(auto_attribs=True, repr=False)
+# @attr.s(auto_attribs=True, repr=False)
+@dataclass
 class Node(object):
     prior: float
     player: int = 0
     parent: Optional["Node"] = None
-    children: dict = attr.ib(factory=dict)
+    children: dict = field(default_factory=dict)
     value_sum: float = 0.0
     visit_count: int = 0
     reward: float = 0.0
@@ -174,3 +175,7 @@ def anytree_to_json(anytree_root, file_path):
     )
     with open(file_path, "w") as f:
         f.write(json_s)
+
+
+def anytree_to_text(anytree_root) -> str:
+    return anytree.RenderTree(anytree_root)

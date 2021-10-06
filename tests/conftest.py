@@ -89,11 +89,11 @@ def variable_client(params):
 
 
 @pytest.fixture
-def policy_feed(env, num_frames, random_key) -> PolicyFeed:
-    legal_actions_mask = np.zeros(4)
-    legal_actions_indices = [1, 2, 3]
-    legal_actions_mask[legal_actions_indices] = 1
-    legal_actions_mask = jnp.array(legal_actions_mask)
+def policy_feed(env, env_spec, num_frames, random_key) -> PolicyFeed:
+    legal_actions_mask = np.ones(env_spec.actions.num_values)
+    # legal_actions_indices = [1, 2, 3]
+    # legal_actions_mask[legal_actions_indices] = 1
+    # legal_actions_mask = jnp.array(legal_actions_mask)
     timestep = env.reset()
     frame = timestep.observation[0].observation
     stacked_frames = jnp.stack([frame.copy() for _ in range(num_frames)])

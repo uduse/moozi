@@ -45,7 +45,7 @@ class MCTSAsync:
     async def simulate_once(self, root: Node):
         action, node = root.select_leaf()
         assert node.parent
-        nn_output = await self.recurr_inf_fn((node.parent.hidden_state, action))
+        nn_output = await self.recurr_inf_fn(node.parent.hidden_state, action)
         node.expand_node(nn_output, self.all_actions_mask)
         node.backpropagate(float(nn_output.value), self.discount)
 

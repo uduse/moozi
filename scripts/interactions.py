@@ -1,7 +1,10 @@
 import collections
+from dataclasses import InitVar, dataclass, field
 import functools
 from typing import Any, Callable, Coroutine, Dict, List, NamedTuple, Optional, Union
 
+import jax
+import jax.numpy as jnp
 import acme
 import attr
 import dm_env
@@ -17,8 +20,11 @@ from acme.wrappers.open_spiel_wrapper import OpenSpielWrapper
 from jax._src.numpy.lax_numpy import stack
 from moozi.batching_layer import BatchingClient, BatchingLayer
 from moozi.link import AsyncUniverse, link
+from moozi.nn import NeuralNetwork
 from moozi.utils import SimpleBuffer
 from trio_asyncio import aio_as_trio
+
+from tests.conftest import network
 
 
 def make_catch():
@@ -51,7 +57,7 @@ def get_observation(timestep: dm_env.TimeStep):
         raise NotImplementedError
 
 
-@attr.s(auto_attribs=True, repr=False)
+@dataclass
 class Artifact:
     # meta
     universe_id: int = -1
@@ -71,43 +77,43 @@ class Artifact:
 
 
 @link
-@attr.s(repr=False)
+@dataclass
 class FrameStacker:
-    num_frames: int = attr.ib(default=1)
+    num_frames: int = 1
 
-    _padding: Optional[np.ndarray] = attr.ib(default=None)
-    _deque: collections.deque = attr.ib(init=False)
+    padding: Optional[np.ndarray] = None
+    deque: collections.deque = None
 
-    def __attrs_post_init__(self):
-        self._deque = collections.deque(maxlen=self.num_frames)
+    def __post_init__(self):
+        self.deque = collections.deque(maxlen=self.num_frames)
 
     def __call__(self, timestep) -> Any:
-        if self._padding is None:
+        if self.padding is None:
             self._make_padding(timestep)
 
         if timestep.last():
-            self._deque.clear()
+            self.deque.clear()
 
-        self._deque.append(get_observation(timestep))
+        self.deque.append(get_observation(timestep))
 
         stacked_frames = self._get_stacked_frames()
 
         return dict(stacked_frames=stacked_frames)
 
     def _get_stacked_frames(self):
-        stacked_frames = np.array(list(self._deque))
-        num_frames_to_pad = self.num_frames - len(self._deque)
+        stacked_frames = np.array(list(self.deque))
+        num_frames_to_pad = self.num_frames - len(self.deque)
         if num_frames_to_pad > 0:
             paddings = np.stack(
-                [np.copy(self._padding) for _ in range(num_frames_to_pad)], axis=0
+                [np.copy(self.padding) for _ in range(num_frames_to_pad)], axis=0
             )
-            stacked_frames = np.append(paddings, np.array(list(self._deque)), axis=0)
+            stacked_frames = np.append(paddings, np.array(list(self.deque)), axis=0)
         return stacked_frames
 
     def _make_padding(self, timestep):
         assert timestep.first()
         shape = get_observation(timestep).shape
-        self._padding = np.zeros(shape)
+        self.padding = np.zeros(shape)
 
 
 @link
@@ -133,71 +139,45 @@ def increment_tick(num_ticks):
 
 
 @link
-@attr.s(repr=False)
+@dataclass
 class PlayerShell:
-    client: BatchingClient = attr.ib()
+    client: BatchingClient
 
     async def __call__(self, timestep):
         await trio.sleep(0)
         if not timestep.last():
-            await self.client.send_request(timestep)
-            result = await self.client.receive_response()
+            result = await self.client.request(timestep)
             logging.debug(f"{self.client.client_id} got {result}")
             return result
 
 
 @link
-@attr.s(repr=False)
+@dataclass
 class EnvironmentLaw:
-    env_state = attr.ib()
+    env_state: dm_env.Environment
 
     def __call__(self, timestep: dm_env.TimeStep, action: int):
         if timestep is None or timestep.last():
             timestep = self.env_state.reset()
         else:
             timestep = self.env_state.step([action])
-        return {"timestep": timestep}
+        return dict(timestep=timestep)
 
 
-@attr.s
+@dataclass
 class InteractionManager:
-    batching_layers = attr.ib()
+    batching_layers: List[BatchingLayer]
+    universes: List[AsyncUniverse]
 
-    universes = attr.ib(init=False)
+    num_universes: int = 2
+    num_ticks: int = 10
 
-    num_universes: int = attr.ib(default=2)
-    num_ticks: int = attr.ib(default=10)
-    verbosity = attr.ib(default=logging.INFO)
+    verbosity: InitVar = logging.INFO
 
-    def __attrs_post_init__(self):
-        logging.set_verbosity(self.verbosity)
-
-    def setup(self):
-        def make_artifact(index):
-            return Artifact(universe_id=index)
-
-        def make_player_shell():
-            client = self.batching_layers.spawn_client()
-            return PlayerShell(client)
-
-        def make_laws():
-            return [
-                EnvironmentLaw(make_env()[0]),
-                FrameStacker(num_frames=1),
-                make_player_shell(),
-                wrap_up_episode,
-                increment_tick,
-            ]
-
-        def make_universe(index):
-            artifact = make_artifact(index)
-            laws = make_laws()
-            return AsyncUniverse(artifact, laws)
-
-        self.universes = [make_universe(i) for i in range(self.num_universes)]
+    def __post_init__(self, verbosity):
+        logging.set_verbosity(verbosity)
 
     def run(self):
-        self.setup()
 
         import trio
 
@@ -217,36 +197,21 @@ class InteractionManager:
 
         trio_asyncio.run(main_loop)
 
-        return self.universes[0].artifact
+        return self.universes
 
 
-def builder():
-    batching_layer = BatchingLayer(
-        max_batch_size=3,
-        process_fn=lambda batch: aio_as_trio(policy_server.process_batch.remote(batch)),
-    )
+@dataclass
+class InferenceServer:
+    network: NeuralNetwork
+    params: Any = None
+    random_key = jax.random.PRNGKey(0)
 
-    def make_artifact(index):
-        return Artifact(universe_id=index)
+    def __post_init__(self):
+        self.random_key, next_key = jax.random.split(self.random_key)
+        self.params = network.init(next_key)
 
-    def make_player_shell():
-        client = self.batching_layers.spawn_client()
-        return PlayerShell(client)
+    def init_inf(self, frames):
+        return self.network.initial_inference(frames)
 
-    def make_laws():
-        return [
-            EnvironmentLaw(make_env()[0]),
-            FrameStacker(num_frames=1),
-            make_player_shell(),
-            wrap_up_episode,
-            increment_tick,
-        ]
-
-    def make_universe(index):
-        artifact = make_artifact(index)
-        laws = make_laws()
-        return AsyncUniverse(artifact, laws)
-
-    self.universes = [make_universe(i) for i in range(self.num_universes)]
-
-    policy_server = ray.remote(PolicyServer).remote()
+    def recurr_inf(self, hidden_states, actions):
+        return self.network.recurrent_inference(hidden_states, actions)

@@ -12,8 +12,8 @@ async def test_async_mcts(
     async def init_inf(frames):
         return network.initial_inference_unbatched(params, frames)
 
-    def recurr_inf(inputs):
-        return network.recurrent_inference_unbatched(params, *inputs)
+    def recurr_inf(hidden_state, action):
+        return network.recurrent_inference_unbatched(params, hidden_state, action)
 
     mcts_async = MCTSAsync(
         init_inf_fn=init_inf,
@@ -23,4 +23,4 @@ async def test_async_mcts(
     )
 
     root = await mcts_async(policy_feed)
-    print(anytree_to_text(convert_to_anytree(root)))
+    assert root

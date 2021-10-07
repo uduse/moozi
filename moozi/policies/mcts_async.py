@@ -8,7 +8,7 @@ from moozi.batching_layer import BatchingClient
 from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
 from moozi.policies.mcts_core import Node
 from moozi.policies.policy import PolicyFeed, PolicyFn, PolicyResult
-from moozi.utils import as_coroutine
+from moozi.utils import sync_as_async
 
 
 @dataclass
@@ -23,9 +23,9 @@ class MCTSAsync:
     def __post_init__(self, dim_action):
         self.all_actions_mask = np.ones((dim_action,), dtype=np.int32)
         if not inspect.iscoroutinefunction(self.init_inf_fn):
-            self.init_inf_fn = as_coroutine(self.init_inf_fn)
+            self.init_inf_fn = sync_as_async(self.init_inf_fn)
         if not inspect.iscoroutinefunction(self.recurr_inf_fn):
-            self.recurr_inf_fn = as_coroutine(self.recurr_inf_fn)
+            self.recurr_inf_fn = sync_as_async(self.recurr_inf_fn)
 
     async def __call__(self, feed: PolicyFeed) -> Node:
         root = await self.get_root(feed)
@@ -45,7 +45,7 @@ class MCTSAsync:
     async def simulate_once(self, root: Node):
         action, node = root.select_leaf()
         assert node.parent
-        nn_output = await self.recurr_inf_fn(node.parent.hidden_state, action)
+        nn_output = await self.recurr_inf_fn((node.parent.hidden_state, action))
         node.expand_node(nn_output, self.all_actions_mask)
         node.backpropagate(float(nn_output.value), self.discount)
 

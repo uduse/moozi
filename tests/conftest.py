@@ -103,3 +103,10 @@ def policy_feed(env, env_spec, num_frames, random_key) -> PolicyFeed:
         legal_actions_mask=legal_actions_mask,
         random_key=random_key,
     )
+
+
+@pytest.fixture
+def init_ray():
+    import ray
+
+    ray.init(ignore_reinit_error=True)

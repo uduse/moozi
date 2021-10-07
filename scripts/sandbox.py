@@ -1,12 +1,17 @@
 # %%
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass, field
+import functools
+from functools import partial
+import operator
 from typing import Any, Callable, Coroutine, Dict, List, NamedTuple, Optional, Union
+from acme.utils.tree_utils import unstack_sequence_fields
 
 import attr
 import dm_env
 import jax
 import numpy as np
 import ray
+import tree
 import trio
 import trio_asyncio
 from trio_asyncio import aio_as_trio
@@ -18,18 +23,23 @@ from moozi import batching_layer
 from moozi.batching_layer import BatchingClient, BatchingLayer
 from moozi.link import AsyncUniverse, link
 from moozi.nn import NeuralNetwork
+from moozi.policies.mcts_async import MCTSAsync
 from moozi.utils import SimpleBuffer
+import moozi as mz
 
 from interactions import (
     InteractionManager,
     Artifact,
     FrameStacker,
     EnvironmentLaw,
+    make_catch,
     make_env,
     PlayerShell,
     increment_tick,
     wrap_up_episode,
+    BatchInferenceServer,
 )
+from scripts import interactions
 
 logging.set_verbosity(logging.DEBUG)
 
@@ -46,24 +56,61 @@ def get_random_action_from_timestep(timestep: dm_env.TimeStep):
         return {"action": -1}
 
 
-def make_interaction_manager():
-    init_ref_batching_layer = BatchingLayer(
-        max_batch_size=3,
-        process_fn=lambda batch: aio_as_trio(policy_server.process_batch.remote(batch)),
+def setup():
+    env, env_spec = make_catch()
+
+    num_stacked_frames = 1
+    num_universes = 10
+    dim_repr = 64
+    dim_action = env_spec.actions.num_values
+    frame_shape = env_spec.observations.observation.shape
+    stacked_frame_shape = (num_stacked_frames,) + frame_shape
+    nn_spec = mz.nn.NeuralNetworkSpec(
+        stacked_frames_shape=stacked_frame_shape,
+        dim_repr=dim_repr,
+        dim_action=dim_action,
+        repr_net_sizes=(128, 128),
+        pred_net_sizes=(128, 128),
+        dyna_net_sizes=(128, 128),
     )
+    network = mz.nn.get_network(nn_spec)
+    params = network.init(jax.random.PRNGKey(0))
+
+    inf_server = ray.remote(BatchInferenceServer).remote(network, params)
+
+    async def init_inf_remote(x):
+        return await aio_as_trio(inf_server.init_inf.remote(x))
+
+    async def recurr_inf_remote(x):
+        return await aio_as_trio(inf_server.recurr_inf.remote(x))
+
+    bl_init_inf = BatchingLayer(max_batch_size=3, process_fn=init_inf_remote)
+    bl_recurr_inf = BatchingLayer(max_batch_size=3, process_fn=recurr_inf_remote)
 
     def make_artifact(index):
         return Artifact(universe_id=index)
 
-    def make_player_shell():
-        client = self.batching_layers.spawn_client()
-        return PlayerShell(client)
+    def make_planner():
+        mcts = MCTSAsync(
+            init_inf_fn=bl_init_inf.spawn_client().request,
+            recurr_inf_fn=bl_recurr_inf.spawn_client().request,
+            num_simulations=10,
+            dim_action=dim_action,
+        )
+
+        @link
+        async def planner(stacked_frames):
+            mcts_tree = await mcts(stacked_frames)
+            action, _ = mcts_tree.select_child()
+            return dict(action=action)
+
+        return planner
 
     def make_laws():
         return [
             EnvironmentLaw(make_env()[0]),
             FrameStacker(num_frames=1),
-            make_player_shell(),
+            make_planner(),
             wrap_up_episode,
             increment_tick,
         ]
@@ -73,84 +120,21 @@ def make_interaction_manager():
         laws = make_laws()
         return AsyncUniverse(artifact, laws)
 
-    self.universes = [make_universe(i) for i in range(self.num_universes)]
+    universes = [make_universe(i) for i in range(num_universes)]
 
-    policy_server = ray.remote(InferenceServer).remote()
-    return InteractionManager
+    mgr = ray.remote(InteractionManager).remote(
+        batching_layers=[bl_init_inf, bl_recurr_inf], universes=universes
+    )
+    return mgr
 
 
-@attr.s
 class Driver:
     def run(self):
-        policy_server = ray.remote(InferenceServer).remote()
-
-        batching_layer = BatchingLayer(
-            max_batch_size=3,
-            process_fn=lambda batch: aio_as_trio(
-                policy_server.process_batch.remote(batch)
-            ),
-        )
-
-        mgr = ray.remote(InteractionManager).remote(
-            batching_layers=[batching_layer], num_universes=5, num_ticks=100
-        )
-
+        mgr = setup()
         ref = mgr.run.remote()
         return ref
 
 
 # %%
-@dataclass
-class InferenceServer:
-    network: NeuralNetwork
-    params: Any = None
-    random_key = jax.random.PRNGKey(0)
-
-    def __post_init__(self):
-        self.random_key, next_key = jax.random.split(self.random_key)
-        self.params = self.network.init(next_key)
-
-    def init_inf(self, frames):
-        return self.network.initial_inference(frames)
-
-    def recurr_inf(self, hidden_states, actions):
-        return self.network.recurrent_inference(hidden_states, actions)
-
-
-# %%
-@dataclass
-class StupidInferenceServer:
-    def init_inf(self, frames):
-        return np.ones_like(frames)
-
-    def recurr_inf(self, hidden_states, actions):
-        return np.ones_like(hidden_states)
-
-
-# %%
-logging.set_verbosity(logging.DEBUG)
-inf_server = ray.remote(StupidInferenceServer).remote()
-
-# %%
-async def process_fn(batch):
-    logging.debug("batch:" + str(batch))
-    return await trio_asyncio.aio_as_trio(inf_server.init_inf.remote(batch))
-
-
-batching_layer = BatchingLayer(max_batch_size=5, process_fn=process_fn)
-clients = [batching_layer.spawn_client() for _ in range(10)]
-
-# %%
-async def run():
-    async with trio.open_nursery() as n:
-        n.start_soon(batching_layer.start_processing)
-
-        async with trio.open_nursery() as nn:
-            for c in clients:
-                nn.start_soon(c.request, 0)
-
-        await batching_layer.close()
-
-
-# %%
-trio_asyncio.run(run)
+driver = Driver()
+driver.run()

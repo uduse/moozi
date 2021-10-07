@@ -33,10 +33,11 @@ async def test_batching_layer():
     async with trio.open_nursery() as nursery:
         nursery.start_soon(batching_layer.start_processing)
 
-        async with contextlib.aclosing(batching_layer):
-            async with trio.open_nursery() as requesters_nursery:
-                for r in requesters:
-                    requesters_nursery.start_soon(r.run)
-            logging.info("requesters done")
+        async with trio.open_nursery() as requesters_nursery:
+            for r in requesters:
+                requesters_nursery.start_soon(r.run)
+        logging.info("requesters done")
+
+        await batching_layer.close()
 
     logging.info("all done")

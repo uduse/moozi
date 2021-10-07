@@ -93,6 +93,7 @@ class BatchingLayer:
             processed_data = self.process_fn(data)
             if inspect.isawaitable(processed_data):
                 processed_data = await processed_data
+            assert len(processed_data) == len(client_ids)
             logging.debug(
                 f"{len(processed_data)} data processed, sending back to {len(client_ids)} clients"
             )
@@ -110,3 +111,8 @@ class BatchingLayer:
             for client_id in self.response_channels:
                 n.start_soon(self.response_channels[client_id][self.SEND].aclose)
         logging.debug("batching layer closed")
+
+    @contextlib.asynccontextmanager
+    async def open_context(self):
+        yield
+        await self.close()

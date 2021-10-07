@@ -115,7 +115,7 @@ def frame_to_str(frame):
 #     _partial_exporter(anytree_root).to_picture(file_path)
 
 
-def as_coroutine(func):
+def sync_as_async(func):
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
         return func(*args, **kwargs)

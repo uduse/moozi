@@ -1,13 +1,16 @@
 import collections
 from dataclasses import InitVar, dataclass, field
 import functools
+import operator
 from typing import Any, Callable, Coroutine, Dict, List, NamedTuple, Optional, Union
+from acme.utils.tree_utils import unstack_sequence_fields
 
 import jax
 import jax.numpy as jnp
 import acme
 import attr
 import dm_env
+import tree
 import moozi as mz
 import numpy as np
 import open_spiel
@@ -164,7 +167,7 @@ class EnvironmentLaw:
         return dict(timestep=timestep)
 
 
-@dataclass
+@dataclass(repr=False)
 class InteractionManager:
     batching_layers: List[BatchingLayer]
     universes: List[AsyncUniverse]
@@ -200,18 +203,49 @@ class InteractionManager:
         return self.universes
 
 
-@dataclass
-class InferenceServer:
-    network: NeuralNetwork
-    params: Any = None
-    random_key = jax.random.PRNGKey(0)
+# @dataclass
+# class InferenceServer:
+#     network: NeuralNetwork
+#     params: Any = None
+#     random_key = jax.random.PRNGKey(0)
 
-    def __post_init__(self):
-        self.random_key, next_key = jax.random.split(self.random_key)
-        self.params = network.init(next_key)
+#     def __post_init__(self):
+#         self.random_key, next_key = jax.random.split(self.random_key)
+#         self.params = network.init(next_key)
+
+#     def init_inf(self, frames):
+#         return self.network.initial_inference(frames)
+
+#     def recurr_inf(self, hidden_states, actions):
+#         return self.network.recurrent_inference(hidden_states, actions)
+
+
+@dataclass(repr=False)
+class BatchInferenceServer:
+    network: InitVar
+    params: InitVar
+
+    init_inf_fn: Callable = field(init=False)
+    recurr_inf_fn: Callable = field(init=False)
+
+    def __post_init__(self, network, params):
+        self.init_inf_fn = functools.partial(
+            jax.jit(network.initial_inference), params
+        )
+        self.recurr_inf_fn = functools.partial(
+            jax.jit(network.recurrent_inference), params
+        )
 
     def init_inf(self, frames):
-        return self.network.initial_inference(frames)
+        batch_size = len(frames)
+        results = self.init_inf_fn(np.array(frames))
+        results = tree.map_structure(np.array, results)
+        return unstack_sequence_fields(results, batch_size)
 
-    def recurr_inf(self, hidden_states, actions):
-        return self.network.recurrent_inference(hidden_states, actions)
+    def recurr_inf(self, inputs):
+        batch_size = len(inputs)
+        hidden_states = np.array(list(map(operator.itemgetter(0), inputs)))
+        actions = np.array(list(map(operator.itemgetter(1), inputs)))
+        results = self.recurr_inf_fn(hidden_states, actions)
+        results = tree.map_structure(np.array, results)
+        return unstack_sequence_fields(results, batch_size)

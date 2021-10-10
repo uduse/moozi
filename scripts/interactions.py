@@ -2,7 +2,17 @@ import collections
 from dataclasses import InitVar, dataclass, field
 import functools
 import operator
-from typing import Any, Callable, Coroutine, Dict, List, NamedTuple, Optional, Union
+from typing import (
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+)
 from acme.utils.tree_utils import unstack_sequence_fields
 
 import jax
@@ -19,10 +29,10 @@ import trio
 import trio_asyncio
 from absl import logging
 from acme.wrappers import SinglePrecisionWrapper
-from acme.wrappers.open_spiel_wrapper import OpenSpielWrapper
+from acme_openspiel_wrapper import OpenSpielWrapper
 from jax._src.numpy.lax_numpy import stack
 from moozi.batching_layer import BatchingClient, BatchingLayer
-from moozi.link import AsyncUniverse, link
+from moozi.link import UniverseAsync, link
 from moozi.nn import NeuralNetwork
 from moozi.utils import SimpleBuffer
 from trio_asyncio import aio_as_trio
@@ -60,6 +70,14 @@ def get_observation(timestep: dm_env.TimeStep):
         raise NotImplementedError
 
 
+def get_legal_actions(timestep: dm_env.TimeStep):
+    if isinstance(timestep.observation, list):
+        assert len(timestep.observation) == 1
+        return timestep.observation[0].legal_actions
+    else:
+        raise NotImplementedError
+
+
 @dataclass
 class Artifact:
     # meta
@@ -76,6 +94,7 @@ class Artifact:
     action: int = -1
 
     # player
+    legal_actions_mask: np.ndarray = None
     stacked_frames: np.ndarray = None
 
 
@@ -117,6 +136,11 @@ class FrameStacker:
         assert timestep.first()
         shape = get_observation(timestep).shape
         self.padding = np.zeros(shape)
+
+
+@link
+def set_legal_actions(timestep):
+    return dict(legal_actions_mask=get_legal_actions(timestep))
 
 
 @link
@@ -169,18 +193,19 @@ class EnvironmentLaw:
 
 @dataclass(repr=False)
 class InteractionManager:
-    batching_layers: List[BatchingLayer]
-    universes: List[AsyncUniverse]
+    batching_layers: Optional[List[BatchingLayer]] = None
+    universes: Optional[List[UniverseAsync]] = None
 
-    num_universes: int = 2
-    num_ticks: int = 10
+    def setup(
+        self,
+        factory: Callable[[], Tuple[List[BatchingLayer], List[UniverseAsync]]],
+    ):
+        self.batching_layers, self.universes = factory()
 
-    verbosity: InitVar = logging.INFO
-
-    def __post_init__(self, verbosity):
+    def set_verbosity(self, verbosity):
         logging.set_verbosity(verbosity)
 
-    def run(self):
+    def run(self, num_ticks):
 
         import trio
 
@@ -192,7 +217,7 @@ class InteractionManager:
                 async with trio.open_nursery() as universe_nursery:
                     for u in self.universes:
                         universe_nursery.start_soon(
-                            functools.partial(u.tick, times=self.num_ticks)
+                            functools.partial(u.tick, times=num_ticks)
                         )
 
                 for b in self.batching_layers:
@@ -201,6 +226,18 @@ class InteractionManager:
         trio_asyncio.run(main_loop)
 
         return self.universes
+
+
+@ray.remote
+@dataclass
+class InteractionManagerRemoteWrapper:
+    setup_fn: InitVar[Callable[[], Tuple[List[BatchingLayer], List[UniverseAsync]]]]
+
+    mgr: InteractionManager = field(init=False)
+
+    def __post_init__(self, setup_fn):
+        batching_layers, universes = setup_fn()
+        self.mgr = InteractionManager(batching_layers, universes)
 
 
 # @dataclass
@@ -229,9 +266,7 @@ class BatchInferenceServer:
     recurr_inf_fn: Callable = field(init=False)
 
     def __post_init__(self, network, params):
-        self.init_inf_fn = functools.partial(
-            jax.jit(network.initial_inference), params
-        )
+        self.init_inf_fn = functools.partial(jax.jit(network.initial_inference), params)
         self.recurr_inf_fn = functools.partial(
             jax.jit(network.recurrent_inference), params
         )

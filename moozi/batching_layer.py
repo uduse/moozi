@@ -83,6 +83,8 @@ class BatchingLayer:
                             break
                 await self.process_batch()
             except (trio.EndOfChannel, trio.ClosedResourceError):
+                # TODO: use a event to signal stop processing instead of
+                #       closing the channels?
                 assert len(self.batch_buffer) == 0
                 break
 

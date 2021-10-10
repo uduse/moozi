@@ -122,7 +122,7 @@ class Universe:
 
 
 @attr.s
-class AsyncUniverse:
+class UniverseAsync:
     artifact = attr.ib()
     laws = attr.ib()
 

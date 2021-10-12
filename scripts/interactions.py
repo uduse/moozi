@@ -38,8 +38,6 @@ from moozi.utils import SimpleBuffer
 from trio_asyncio import aio_as_trio
 from config import Config
 
-from tests.conftest import network
-
 
 def make_catch():
     prev_verbosity = logging.get_verbosity()

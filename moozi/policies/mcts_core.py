@@ -21,11 +21,12 @@ import attr
 # TODO: not necessary CPU?
 _safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")
 # softmax = jax.jit(jax.nn.softmax, backend="cpu")
+
 @functools.partial(jax.jit, backend='cpu')
 def softmax(x):
     """Compute softmax values for each sets of scores in x."""
-    e_x = np.exp(x - np.max(x))
-    return e_x / e_x.sum()
+    e_x = jnp.exp(x - jnp.max(x))
+    return e_x / jnp.sum(e_x)
 
 
 # @attr.s(auto_attribs=True, repr=False)
@@ -55,7 +56,8 @@ class Node(object):
         self.hidden_state = network_output.hidden_state
         self.reward = float(network_output.reward)
         # action_probs = np.array(_safe_epsilon_softmax(network_output.policy_logits))
-        action_probs = softmax(np.array(network_output.policy_logits))
+        # action_probs = softmax(np.array(network_output.policy_logits))
+        action_probs = np.array(softmax(network_output.policy_logits))
         action_probs *= legal_actions_mask
         action_probs /= np.sum(action_probs)
         for action, prob in enumerate(action_probs):

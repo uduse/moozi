@@ -27,7 +27,6 @@ class BatchingClient:
     open_context: AsyncContextManager
 
 
-# @attr.s(repr=False)
 @dataclass
 class BatchingLayer:
     SEND: ClassVar[int] = 0

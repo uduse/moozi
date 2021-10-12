@@ -19,7 +19,9 @@ from moozi.policies.policy import PolicyFeed
 
 def update_jax_config():
     jax.config.update("jax_disable_jit", True)
+    print('conftest JAX: disabled jit')
     jax.config.update("jax_platform_name", "cpu")
+    print('conftest JAX: platform cpu')
 
 
 update_jax_config()

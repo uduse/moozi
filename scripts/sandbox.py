@@ -34,7 +34,7 @@ from moozi.link import UniverseAsync, link
 from moozi.nn import NeuralNetwork
 from moozi.policies.mcts_async import MCTSAsync
 from moozi.policies.policy import PolicyFeed
-from moozi.utils import SimpleBuffer, WallTimer
+from moozi.utils import SimpleBuffer, WallTimer, check_ray_gpu
 from trio_asyncio import aio_as_trio
 
 # from acme.wrappers.open_spiel_wrapper import OpenSpielWrapper
@@ -70,7 +70,7 @@ def get_random_action_from_timestep(timestep: dm_env.TimeStep):
 
 
 def setup(inf_server_handler) -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
-    num_universes = 300
+    num_universes = 50
 
     async def init_inf_remote(x):
         return await aio_as_trio(inf_server_handler.init_inf.remote(x))
@@ -79,10 +79,10 @@ def setup(inf_server_handler) -> Tuple[List[BatchingLayer], List[UniverseAsync]]
         return await aio_as_trio(inf_server_handler.recurr_inf.remote(x))
 
     bl_init_inf = BatchingLayer(
-        max_batch_size=100, process_fn=init_inf_remote, name="batching [init]"
+        max_batch_size=25, process_fn=init_inf_remote, name="batching [init]"
     )
     bl_recurr_inf = BatchingLayer(
-        max_batch_size=100, process_fn=recurr_inf_remote, name="batching [recurr]"
+        max_batch_size=25, process_fn=recurr_inf_remote, name="batching [recurr]"
     )
 
     def make_artifact(index):
@@ -155,17 +155,38 @@ def make_inference_server_handler():
 inf_server = make_inference_server_handler()
 
 # %%
-# mgr = InteractionManager()
-# mgr.setup(partial(setup, inf_server))
-# result = mgr.run(5)
+mgr = InteractionManager()
+mgr.setup(partial(setup, inf_server))
+result = mgr.run(5)
 
 # %%
-mgr = ray.remote(InteractionManager).remote()
-done_setup = mgr.setup.remote(partial(setup, inf_server))
-ray.get(done_setup)
+result = mgr.run(5)
 
-t = WallTimer()
-with t:
-    ref = mgr.run.remote(5)
-    artifacts = ray.get(ref)
-t.print()
+# %%
+import inspect
+from dataclasses import dataclass, field
+from typing import (
+    AsyncContextManager,
+    Awaitable,
+    Callable,
+    ClassVar,
+    ContextManager,
+    Coroutine,
+)
+from absl import logging
+import numpy as np
+import contextlib
+import attr
+import trio
+
+logging.set_verbosity(logging.INFO)
+
+
+# @attr.s(auto_attribs=True, repr=False)
+@dataclass
+class BatchingClient:
+    client_id: int
+    # send_request: Callable[..., Awaitable]
+    # receive_response: Callable[..., Awaitable]
+    request: Callable[..., Awaitable]
+    open_context: AsyncContextManager

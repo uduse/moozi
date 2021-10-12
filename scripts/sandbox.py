@@ -2,7 +2,7 @@
 import functools
 import operator
 from dataclasses import InitVar, dataclass, field
-from functools import partial
+from functools import _make_key, partial
 from typing import (
     Any,
     Callable,
@@ -34,7 +34,7 @@ from moozi.link import UniverseAsync, link
 from moozi.nn import NeuralNetwork
 from moozi.policies.mcts_async import MCTSAsync
 from moozi.policies.policy import PolicyFeed
-from moozi.utils import SimpleBuffer
+from moozi.utils import SimpleBuffer, WallTimer
 from trio_asyncio import aio_as_trio
 
 # from acme.wrappers.open_spiel_wrapper import OpenSpielWrapper
@@ -45,21 +45,18 @@ from interactions import (
     EnvironmentLaw,
     FrameStacker,
     InteractionManager,
-    PlayerShell,
     increment_tick,
     make_catch,
     make_env,
     set_legal_actions,
     wrap_up_episode,
 )
+from config import Config, get_config_proxy
 
 logging.set_verbosity(logging.DEBUG)
 
-import os
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
-ray.init(ignore_reinit_error=True)
+ray.init(num_gpus=1, ignore_reinit_error=True)
 
 
 # %%
@@ -72,36 +69,21 @@ def get_random_action_from_timestep(timestep: dm_env.TimeStep):
         return {"action": -1}
 
 
-def setup() -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
-    env, env_spec = make_catch()
-
-    num_universes = 50
-    num_stacked_frames = 1
-    dim_repr = 64
-    dim_action = env_spec.actions.num_values
-    frame_shape = env_spec.observations.observation.shape
-    stacked_frame_shape = (num_stacked_frames,) + frame_shape
-    nn_spec = mz.nn.NeuralNetworkSpec(
-        stacked_frames_shape=stacked_frame_shape,
-        dim_repr=dim_repr,
-        dim_action=dim_action,
-        repr_net_sizes=(128, 128),
-        pred_net_sizes=(128, 128),
-        dyna_net_sizes=(128, 128),
-    )
-    network = mz.nn.get_network(nn_spec)
-    params = network.init(jax.random.PRNGKey(0))
-
-    inf_server = ray.remote(BatchInferenceServer).remote(network, params)
+def setup(inf_server_handler) -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
+    num_universes = 300
 
     async def init_inf_remote(x):
-        return await aio_as_trio(inf_server.init_inf.remote(x))
+        return await aio_as_trio(inf_server_handler.init_inf.remote(x))
 
     async def recurr_inf_remote(x):
-        return await aio_as_trio(inf_server.recurr_inf.remote(x))
+        return await aio_as_trio(inf_server_handler.recurr_inf.remote(x))
 
-    bl_init_inf = BatchingLayer(max_batch_size=50, process_fn=init_inf_remote)
-    bl_recurr_inf = BatchingLayer(max_batch_size=50, process_fn=recurr_inf_remote)
+    bl_init_inf = BatchingLayer(
+        max_batch_size=100, process_fn=init_inf_remote, name="batching [init]"
+    )
+    bl_recurr_inf = BatchingLayer(
+        max_batch_size=100, process_fn=recurr_inf_remote, name="batching [recurr]"
+    )
 
     def make_artifact(index):
         return Artifact(universe_id=index)
@@ -111,7 +93,7 @@ def setup() -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
             init_inf_fn=bl_init_inf.spawn_client().request,
             recurr_inf_fn=bl_recurr_inf.spawn_client().request,
             num_simulations=10,
-            dim_action=dim_action,
+            dim_action=3,
         )
 
         @link
@@ -120,7 +102,7 @@ def setup() -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
                 feed = PolicyFeed(
                     stacked_frames=stacked_frames,
                     legal_actions_mask=legal_actions_mask,
-                    random_key=jax.random.PRNGKey(0),
+                    random_key=None,
                 )
                 mcts_tree = await mcts(feed)
                 action, _ = mcts_tree.select_child()
@@ -147,33 +129,43 @@ def setup() -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
     return [bl_init_inf, bl_recurr_inf], universes
 
 
+def make_inference_server_handler():
+    env_spec = make_env()[1]
+    num_stacked_frames = 1
+    dim_repr = 64
+    dim_action = env_spec.actions.num_values
+    frame_shape = env_spec.observations.observation.shape
+    stacked_frame_shape = (num_stacked_frames,) + frame_shape
+    nn_spec = mz.nn.NeuralNetworkSpec(
+        stacked_frames_shape=stacked_frame_shape,
+        dim_repr=dim_repr,
+        dim_action=dim_action,
+        repr_net_sizes=(128, 128),
+        pred_net_sizes=(128, 128),
+        dyna_net_sizes=(128, 128),
+    )
+    network = mz.nn.get_network(nn_spec)
+    params = network.init(jax.random.PRNGKey(0))
+
+    inf_server = ray.remote(num_gpus=0.5)(BatchInferenceServer).remote(network, params)
+    return inf_server
+
+
+# %%
+inf_server = make_inference_server_handler()
+
 # %%
 # mgr = InteractionManager()
-# mgr.setup(setup)
-# ref = mgr.run(5)
+# mgr.setup(partial(setup, inf_server))
+# result = mgr.run(5)
 
 # %%
 mgr = ray.remote(InteractionManager).remote()
-done_setup = mgr.setup.remote(setup)
+done_setup = mgr.setup.remote(partial(setup, inf_server))
 ray.get(done_setup)
-ref = mgr.run.remote(100)
 
-# %%
-# class Driver:
-#     def run(self):
-#         mgr = ray.remote(InteractionManager).remote()
-#         done_setup = mgr.setup.remote(setup)
-#         ray.get(done_setup)
-#         ref = mgr.run.remote(5)
-#         return ref
-
-
-# # %%
-# driver = Driver()
-# driver.run()
-
-# %%
-import jax
-# %%
-jax.devices()
-# %%
+t = WallTimer()
+with t:
+    ref = mgr.run.remote(5)
+    artifacts = ray.get(ref)
+t.print()

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import random
 import functools
 import typing
@@ -121,3 +122,42 @@ def sync_as_async(func):
         return func(*args, **kwargs)
 
     return wrapper
+
+
+import contextlib
+import time
+
+
+@dataclass(repr=False)
+class WallTimer:
+    name: str = "WallTimer"
+    start_time: float = 0.0
+    end_time: float = 0.0
+    delta: float = 0.0
+
+    def __enter__(self):
+        self.start_time = time.time()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.end_time = time.time()
+        self.delta = self.end_time - self.start_time
+
+    def print(self):
+        print(f"{self.name}: {self.delta} s")
+
+
+def check_ray_gpu():
+    import ray
+
+    ray.init(ignore_reinit_error=True)
+
+    @ray.remote(num_gpus=1)
+    def use_gpu():
+        import os
+        import jax
+
+        print("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
+        print("CUDA_VISIBLE_DEVICES: {}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
+        print("jax devices:", jax.devices())
+
+    ray.get(use_gpu.remote())

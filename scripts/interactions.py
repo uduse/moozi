@@ -36,18 +36,24 @@ from moozi.link import UniverseAsync, link
 from moozi.nn import NeuralNetwork
 from moozi.utils import SimpleBuffer
 from trio_asyncio import aio_as_trio
+from config import Config
 
 from tests.conftest import network
 
 
 def make_catch():
-    env_columns, env_rows = 3, 3
+    prev_verbosity = logging.get_verbosity()
+    logging.set_verbosity(logging.WARNING)
+
+    env_columns, env_rows = 6, 6
     raw_env = open_spiel.python.rl_environment.Environment(
         f"catch(columns={env_columns},rows={env_rows})"
     )
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
     env_spec = acme.specs.make_environment_spec(env)
+
+    logging.set_verbosity(prev_verbosity)
     return env, env_spec
 
 
@@ -167,19 +173,6 @@ def increment_tick(num_ticks):
 
 @link
 @dataclass
-class PlayerShell:
-    client: BatchingClient
-
-    async def __call__(self, timestep):
-        await trio.sleep(0)
-        if not timestep.last():
-            result = await self.client.request(timestep)
-            logging.debug(f"{self.client.client_id} got {result}")
-            return result
-
-
-@link
-@dataclass
 class EnvironmentLaw:
     env_state: dm_env.Environment
 
@@ -213,6 +206,7 @@ class InteractionManager:
             async with trio.open_nursery() as main_nursery:
                 for b in self.batching_layers:
                     main_nursery.start_soon(b.start_processing)
+                    main_nursery.start_soon(b.start_logging)
 
                 async with trio.open_nursery() as universe_nursery:
                     for u in self.universes:
@@ -224,37 +218,7 @@ class InteractionManager:
                     await b.close()
 
         trio_asyncio.run(main_loop)
-
-        return self.universes
-
-
-@ray.remote
-@dataclass
-class InteractionManagerRemoteWrapper:
-    setup_fn: InitVar[Callable[[], Tuple[List[BatchingLayer], List[UniverseAsync]]]]
-
-    mgr: InteractionManager = field(init=False)
-
-    def __post_init__(self, setup_fn):
-        batching_layers, universes = setup_fn()
-        self.mgr = InteractionManager(batching_layers, universes)
-
-
-# @dataclass
-# class InferenceServer:
-#     network: NeuralNetwork
-#     params: Any = None
-#     random_key = jax.random.PRNGKey(0)
-
-#     def __post_init__(self):
-#         self.random_key, next_key = jax.random.split(self.random_key)
-#         self.params = network.init(next_key)
-
-#     def init_inf(self, frames):
-#         return self.network.initial_inference(frames)
-
-#     def recurr_inf(self, hidden_states, actions):
-#         return self.network.recurrent_inference(hidden_states, actions)
+        return [u.artifact for u in self.universes]
 
 
 @dataclass(repr=False)
@@ -266,10 +230,19 @@ class BatchInferenceServer:
     recurr_inf_fn: Callable = field(init=False)
 
     def __post_init__(self, network, params):
+        import os
+        import jax
+
+        logging.info("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
+        logging.info(
+            "CUDA_VISIBLE_DEVICES: {}".format(os.environ["CUDA_VISIBLE_DEVICES"])
+        )
+        logging.info(f"seeing {jax.devices()}")
         self.init_inf_fn = functools.partial(jax.jit(network.initial_inference), params)
         self.recurr_inf_fn = functools.partial(
             jax.jit(network.recurrent_inference), params
         )
+        logging.info(f"seeing {jax.devices()}")
 
     def init_inf(self, frames):
         batch_size = len(frames)
@@ -284,3 +257,14 @@ class BatchInferenceServer:
         results = self.recurr_inf_fn(hidden_states, actions)
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
+
+
+def setup_config(config: Config):
+    def make_artifact(index):
+        return Artifact(universe_id=index)
+
+    config.set(Config.ARTIFACT_FACTORY, make_artifact)
+
+    config.set(Config.ENV_FACTORY, lambda: make_catch()[0])
+    config.set(Config.ENV_SPEC, make_catch()[1])
+    config.set(Config.NUM_UNIVERSES, 2000)

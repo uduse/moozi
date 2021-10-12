@@ -15,6 +15,7 @@ class Link:
     to_write: Union[List[str], str] = "auto"
 
     async def __call__(self, artifact: object):
+        # TODO: slow, cache the parsing and validation results
         keys_to_read = self._get_keys_to_read(artifact)
         artifact_window = Link._read_artifact(artifact, keys_to_read)
 

@@ -34,6 +34,7 @@ class BatchingLayer:
     RECEIVE: ClassVar[int] = 1
 
     max_batch_size: int
+    name: str = "BatchingLayer"
     batch_process_period: float = 1
 
     batch_buffer: list = field(default_factory=list)
@@ -43,6 +44,9 @@ class BatchingLayer:
     response_channels: dict = field(default_factory=dict)
 
     client_counter: int = 0
+
+    logging_period: float = 5
+    logging_throughput: int = 0
 
     def get_client_id(self):
         client_id = self.client_counter
@@ -59,7 +63,6 @@ class BatchingLayer:
         async def request_fn(payload):
             await send_request_channel.send(dict(client_id=client_id, payload=payload))
             response = await receive_response_channel.receive()
-            # logging.debug(f"response for {client_id} received")
             return response
 
         @contextlib.asynccontextmanager
@@ -77,7 +80,7 @@ class BatchingLayer:
                 with trio.move_on_after(self.batch_process_period):
                     while True:
                         data = await self.request_channel[self.RECEIVE].receive()
-                        logging.debug(f"request from {data['client_id']} received")
+                        # logging.debug(f"request from {data['client_id']} received")
                         self.batch_buffer.append(data)
                         if len(self.batch_buffer) >= self.max_batch_size:
                             break
@@ -96,23 +99,33 @@ class BatchingLayer:
             if inspect.isawaitable(processed_data):
                 processed_data = await processed_data
             assert len(processed_data) == len(client_ids)
-            logging.debug(
-                f"{len(processed_data)} data processed, sending back to {len(client_ids)} clients"
-            )
+            self.logging_throughput += len(processed_data)
             for client_id, d in zip(client_ids, processed_data):
                 await self.response_channels[client_id][self.SEND].send(d)
             self.batch_buffer.clear()
         else:
-            logging.debug("batch buffer empty, skipped")
+            logging.debug(f"{self.name} empty, skipped")
+
+    async def start_logging(self):
+        # TODO: improve this start_logging interface
+        while not self.request_channel[self.RECEIVE]._closed:
+            if self.logging_period > 0:
+                await trio.sleep(self.logging_period)
+                logging.info(
+                    f"{self.name} processed {self.logging_throughput} requests in {self.logging_period} second(s)"
+                )
+                self.logging_throughput = 0
+        logging.info(f"{self.name} processed {self.logging_throughput} requests.")
+        self.logging_throughput = 0
 
     async def close(self):
-        logging.debug("closing batching layer")
+        logging.debug(f"closing {self.name}")
         async with trio.open_nursery() as n:
             n.start_soon(self.request_channel[self.RECEIVE].aclose)
             n.start_soon(self.request_channel[self.SEND].aclose)
             for client_id in self.response_channels:
                 n.start_soon(self.response_channels[client_id][self.SEND].aclose)
-        logging.debug("batching layer closed")
+        logging.debug(f"{self.name} closed")
 
     @contextlib.asynccontextmanager
     async def open_context(self):

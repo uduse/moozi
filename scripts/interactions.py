@@ -90,12 +90,17 @@ class Artifact:
     num_episodes: int = 0
     avg_episodic_reward: float = 0
     sum_episodic_reward: float = 0
+    
+    config: Any = None  # TODO: add config?
 
     # environment
     env_state: dm_env.Environment = None
     timestep: dm_env.TimeStep = None
     to_play: int = -1
     action: int = -1
+    
+    # planner
+    root: Any = None
 
     # player
     legal_actions_mask: np.ndarray = None
@@ -211,12 +216,19 @@ class InteractionManager:
                         universe_nursery.start_soon(
                             functools.partial(u.tick, times=num_ticks)
                         )
-
                 for b in self.batching_layers:
-                    await b.close()
+                    b.is_paused = True
 
         trio_asyncio.run(main_loop)
         return [u.artifact for u in self.universes]
+
+
+@link
+def set_action_probs():
+    action_probs = np.zeros_like(mcts.all_actions_mask, dtype=np.float32)
+    for a, visit_count in mcts_tree.get_children_visit_counts().items():
+        action_probs[a] = visit_count
+    action_probs /= np.sum(action_probs)
 
 
 @dataclass(repr=False)

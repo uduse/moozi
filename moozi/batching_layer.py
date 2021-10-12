@@ -42,18 +42,20 @@ class BatchingLayer:
     request_channel: list = field(default_factory=lambda: trio.open_memory_channel(0))
     response_channels: dict = field(default_factory=dict)
 
-    client_counter: int = 0
+    is_paused: bool = False
 
     logging_period: float = 5
     logging_throughput: int = 0
 
-    def get_client_id(self):
-        client_id = self.client_counter
-        self.client_counter += 1
+    _client_counter: int = 0
+
+    def _get_client_id(self):
+        client_id = self._client_counter
+        self._client_counter += 1
         return client_id
 
     def spawn_client(self):
-        client_id = self.get_client_id()
+        client_id = self._get_client_id()
 
         self.response_channels[client_id] = trio.open_memory_channel(0)
         send_request_channel = self.request_channel[self.SEND].clone()
@@ -74,12 +76,14 @@ class BatchingLayer:
         return BatchingClient(client_id, request_fn, open_context)
 
     async def start_processing(self):
-        while True:
+        logging.info(f"{self.name} started processing")
+        self.is_paused = False
+        while not self.is_paused:
             try:
                 with trio.move_on_after(self.batch_process_period):
                     while True:
                         data = await self.request_channel[self.RECEIVE].receive()
-                        # logging.debug(f"request from {data['client_id']} received")
+                        # logging.info(f"request from {data['client_id']} received")
                         self.batch_buffer.append(data)
                         if len(self.batch_buffer) >= self.max_batch_size:
                             break
@@ -89,6 +93,7 @@ class BatchingLayer:
                 #       closing the channels?
                 assert len(self.batch_buffer) == 0
                 break
+        logging.info(f"{self.name} paused processing")
 
     async def process_batch(self):
         if len(self.batch_buffer) > 0:
@@ -107,7 +112,7 @@ class BatchingLayer:
 
     async def start_logging(self):
         # TODO: improve this start_logging interface
-        while not self.request_channel[self.RECEIVE]._closed:
+        while not self.is_paused:
             if self.logging_period > 0:
                 await trio.sleep(self.logging_period)
                 logging.info(
@@ -119,6 +124,7 @@ class BatchingLayer:
 
     async def close(self):
         logging.debug(f"closing {self.name}")
+        self.is_paused = True
         async with trio.open_nursery() as n:
             n.start_soon(self.request_channel[self.RECEIVE].aclose)
             n.start_soon(self.request_channel[self.SEND].aclose)

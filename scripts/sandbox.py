@@ -53,7 +53,7 @@ from interactions import (
 )
 from config import Config, get_config_proxy
 
-logging.set_verbosity(logging.DEBUG)
+logging.set_verbosity(logging.INFO)
 
 
 ray.init(num_gpus=1, ignore_reinit_error=True)
@@ -161,32 +161,3 @@ result = mgr.run(5)
 
 # %%
 result = mgr.run(5)
-
-# %%
-import inspect
-from dataclasses import dataclass, field
-from typing import (
-    AsyncContextManager,
-    Awaitable,
-    Callable,
-    ClassVar,
-    ContextManager,
-    Coroutine,
-)
-from absl import logging
-import numpy as np
-import contextlib
-import attr
-import trio
-
-logging.set_verbosity(logging.INFO)
-
-
-# @attr.s(auto_attribs=True, repr=False)
-@dataclass
-class BatchingClient:
-    client_id: int
-    # send_request: Callable[..., Awaitable]
-    # receive_response: Callable[..., Awaitable]
-    request: Callable[..., Awaitable]
-    open_context: AsyncContextManager

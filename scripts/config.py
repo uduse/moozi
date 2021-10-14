@@ -5,10 +5,12 @@ from dataclasses import dataclass, field
 @dataclass(repr=False)
 class Config:
     ENV_FACTORY = "ENV_FACTORY"
-    ENV_SPEC = "ENV_SPEC_FACTORY"
+    ENV_SPEC = "ENV_SPEC"
     ARTIFACT_FACTORY = "ARTIFACT_FACTORY"
     NUM_UNIVERSES = "NUM_UNIVERSES"
     
+    NUM_STACKED_FRAMES = "NUM_STACKED_FRAMES"
+    DIM_REPR = "DIM_REPR"
 
     store: dict = field(default_factory=dict)
 

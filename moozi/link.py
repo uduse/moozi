@@ -79,7 +79,9 @@ class Link:
             keys = self._wrapped_func_keys()
             keys = keys - {"self"}  ## TODO?
             if not Link._artifact_has_keys(artifact, keys):
-                raise ValueError(f"{str(keys)} not in {str(artifact.__dict__.keys())})")
+                raise ValueError(
+                    f"{self._get_missing_keys(artifact, keys)} not in {str(artifact.__dict__.keys())})"
+                )
         elif isinstance(self.to_read, list):
             keys = self.to_read
         else:

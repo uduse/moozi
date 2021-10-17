@@ -142,6 +142,45 @@ class Adder(ReverbAdder):
         self._writer.create_item(DEFAULT_PRIORITY_TABLE, 1.0, trajectory)
 
 
+class Adder_2(ReverbAdder):
+    def __init__(
+        self,
+        client: reverb.Client,
+        delta_encoded: bool = False,
+        # NOTE: according to the pseudocode, 500 is roughly enough for board games
+        max_episode_length: int = 500,
+        max_inflight_items: int = 1,
+    ):
+
+        self._client = client
+
+        super().__init__(
+            client=client,
+            max_sequence_length=max_episode_length,
+            max_in_flight_items=max_inflight_items,
+            delta_encoded=delta_encoded,
+        )
+
+    def add(self, observation: Observation, reflection: Reflection):
+        self._writer.append({**reflection._asdict(), **observation._asdict()})
+
+        if observation.is_last:
+            self._write_last()
+            self.reset()
+
+    def _write(self):
+        # This adder only writes at the end of the episode, see _write_last()
+        pass
+
+    def _write_last(self):
+        r"""
+        There are two ways of storing experiences for training.
+        One way is to store the entire episode into the replay and create
+        """
+        trajectory = tree.map_structure(lambda x: x[:], self._writer.history)
+        self._writer.create_item(DEFAULT_PRIORITY_TABLE, 1.0, trajectory)
+
+
 class Trajectory(NamedTuple):
     frame: NDArray[np.float32]
     reward: NDArray[np.float32]

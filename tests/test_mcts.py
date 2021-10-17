@@ -17,7 +17,7 @@ from moozi.nn import NeuralNetwork
 from moozi.policies.mcts_async import MCTSAsync
 from moozi.policies.mcts_core import anytree_to_text, convert_to_anytree
 from moozi.policies.policy import PolicyFeed
-from moozi.utils import sync_as_async
+from moozi.utils import as_coroutine
 
 from tests.utils import with_trio_asyncio
 

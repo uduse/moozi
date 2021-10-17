@@ -116,12 +116,18 @@ def frame_to_str(frame):
 #     _partial_exporter(anytree_root).to_picture(file_path)
 
 
-def sync_as_async(func):
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
+def as_coroutine(func):
+    import inspect
 
-    return wrapper
+    if inspect.iscoroutinefunction(func):
+        return func
+    else:
+
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+
+        return wrapper
 
 
 import contextlib

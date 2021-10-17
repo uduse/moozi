@@ -15,6 +15,8 @@ from typing import (
 )
 from acme.utils.tree_utils import unstack_sequence_fields
 
+from moozi.replay import Trajectory
+
 import jax
 import jax.numpy as jnp
 import acme
@@ -90,17 +92,18 @@ class Artifact:
     num_episodes: int = 0
     avg_episodic_reward: float = 0
     sum_episodic_reward: float = 0
-    
-    config: Any = None  # TODO: add config?
+
+    # config: Any = None  # TODO: add config?
 
     # environment
-    env_state: dm_env.Environment = None
     timestep: dm_env.TimeStep = None
     to_play: int = -1
     action: int = -1
-    
+
     # planner
     root: Any = None
+    root_value: float = 0
+    action_probs: Any = None
 
     # player
     legal_actions_mask: np.ndarray = None
@@ -197,6 +200,7 @@ class InteractionManager:
         factory: Callable[[], Tuple[List[BatchingLayer], List[UniverseAsync]]],
     ):
         self.batching_layers, self.universes = factory()
+        return self
 
     def set_verbosity(self, verbosity):
         logging.set_verbosity(verbosity)
@@ -208,6 +212,7 @@ class InteractionManager:
         async def main_loop():
             async with trio.open_nursery() as main_nursery:
                 for b in self.batching_layers:
+                    b.is_paused = False
                     main_nursery.start_soon(b.start_processing)
                     main_nursery.start_soon(b.start_logging)
 
@@ -224,15 +229,25 @@ class InteractionManager:
 
 
 @link
-def set_action_probs():
-    action_probs = np.zeros_like(mcts.all_actions_mask, dtype=np.float32)
-    for a, visit_count in mcts_tree.get_children_visit_counts().items():
-        action_probs[a] = visit_count
-    action_probs /= np.sum(action_probs)
+def set_random_action_from_timestep(timestep: dm_env.TimeStep):
+    if not timestep.last():
+        legal_actions = timestep.observation[0].legal_actions
+        random_action = np.random.choice(np.flatnonzero(legal_actions == 1))
+        return {"action": random_action}
+    else:
+        return {"action": -1}
+
+
+# @link
+# def set_action_probs():
+#     action_probs = np.zeros_like(mcts.all_actions_mask, dtype=np.float32)
+#     for a, visit_count in mcts_tree.get_children_visit_counts().items():
+#         action_probs[a] = visit_count
+#     action_probs /= np.sum(action_probs)
 
 
 @dataclass(repr=False)
-class BatchInferenceServer:
+class InferenceServer:
     network: InitVar
     params: InitVar
 
@@ -256,6 +271,7 @@ class BatchInferenceServer:
 
     def init_inf(self, frames):
         batch_size = len(frames)
+        # TODO: concatnating frames should be on the client side?
         results = self.init_inf_fn(np.array(frames))
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
@@ -267,6 +283,24 @@ class BatchInferenceServer:
         results = self.recurr_inf_fn(hidden_states, actions)
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
+
+    @staticmethod
+    def make_init_inf_remote_fn(handler):
+        """For using with Ray."""
+
+        async def init_inf_remote(x):
+            return await aio_as_trio(handler.init_inf.remote(x))
+
+        return init_inf_remote
+
+    @staticmethod
+    def make_recurr_inf_remote_fn(handler):
+        """For using with Ray."""
+
+        async def recurr_inf_remote(x):
+            return await aio_as_trio(handler.recurr_inf.remote(x))
+
+        return recurr_inf_remote
 
 
 def setup_config(config: Config):

@@ -77,7 +77,6 @@ class BatchingLayer:
 
     async def start_processing(self):
         logging.info(f"{self.name} started processing")
-        self.is_paused = False
         while not self.is_paused:
             try:
                 with trio.move_on_after(self.batch_process_period):

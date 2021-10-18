@@ -1,7 +1,8 @@
 import collections
-from dataclasses import InitVar, dataclass, field
-import functools
 import operator
+import os
+from dataclasses import InitVar, dataclass, field
+from functools import partial
 from typing import (
     Any,
     Callable,
@@ -13,31 +14,35 @@ from typing import (
     Tuple,
     Union,
 )
-from acme.utils.tree_utils import unstack_sequence_fields
 
-from moozi.replay import Trajectory
-
-import jax
-import jax.numpy as jnp
 import acme
 import attr
+import chex
 import dm_env
-import tree
+import jax
+import jax.numpy as jnp
 import moozi as mz
 import numpy as np
 import open_spiel
+import optax
 import ray
+import rlax
+import tree
 import trio
 import trio_asyncio
 from absl import logging
+from acme.utils.tree_utils import unstack_sequence_fields
 from acme.wrappers import SinglePrecisionWrapper
-from acme_openspiel_wrapper import OpenSpielWrapper
 from jax._src.numpy.lax_numpy import stack
 from moozi.batching_layer import BatchingClient, BatchingLayer
+from moozi.learner import TrainingState
 from moozi.link import UniverseAsync, link
 from moozi.nn import NeuralNetwork
+from moozi.replay import Trajectory
 from moozi.utils import SimpleBuffer
 from trio_asyncio import aio_as_trio
+
+from acme_openspiel_wrapper import OpenSpielWrapper
 from config import Config
 
 
@@ -93,12 +98,16 @@ class Artifact:
     avg_episodic_reward: float = 0
     sum_episodic_reward: float = 0
 
-    # config: Any = None  # TODO: add config?
-
     # environment
     timestep: dm_env.TimeStep = None
+    obs: np.ndarray = None
+    is_first: bool = True
+    is_last: bool = False
     to_play: int = -1
+    reward: float = 0.0
     action: int = -1
+    discount: float = 1.0
+    legal_actions_mask: np.ndarray = None
 
     # planner
     root: Any = None
@@ -106,7 +115,6 @@ class Artifact:
     action_probs: Any = None
 
     # player
-    legal_actions_mask: np.ndarray = None
     stacked_frames: np.ndarray = None
 
 
@@ -187,7 +195,14 @@ class EnvironmentLaw:
             timestep = self.env_state.reset()
         else:
             timestep = self.env_state.step([action])
-        return dict(timestep=timestep)
+        return dict(
+            timestep=timestep,
+            obs=get_observation(timestep),
+            is_first=timestep.first(),
+            is_last=timestep.last(),
+            to_play=self.env_state.current_player,
+            reward=timestep.reward,
+        )
 
 
 @dataclass(repr=False)
@@ -218,9 +233,7 @@ class InteractionManager:
 
                 async with trio.open_nursery() as universe_nursery:
                     for u in self.universes:
-                        universe_nursery.start_soon(
-                            functools.partial(u.tick, times=num_ticks)
-                        )
+                        universe_nursery.start_soon(partial(u.tick, times=num_ticks))
                 for b in self.batching_layers:
                     b.is_paused = True
 
@@ -246,6 +259,41 @@ def set_random_action_from_timestep(timestep: dm_env.TimeStep):
 #     action_probs /= np.sum(action_probs)
 
 
+def make_sgd_step_fn(network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, optimizer):
+    @partial(jax.jit, backend="cpu")
+    @chex.assert_max_traces(n=1)
+    def sgd_step_fn(training_state: TrainingState, batch: mz.replay.TrainTarget):
+        # gradient descend
+        _, new_key = jax.random.split(training_state.rng_key)
+        grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
+            network, training_state.params, batch
+        )
+        updates, new_opt_state = optimizer.update(grads, training_state.opt_state)
+        new_params = optax.apply_updates(training_state.params, updates)
+        steps = training_state.steps + 1
+        new_training_state = TrainingState(new_params, new_opt_state, steps, new_key)
+
+        # KL calculation
+        orig_logits = network.initial_inference(
+            training_state.params, batch.stacked_frames
+        ).policy_logits
+        new_logits = network.initial_inference(
+            new_params, batch.stacked_frames
+        ).policy_logits
+        prior_kl = jnp.mean(rlax.categorical_kl_divergence(orig_logits, new_logits))
+
+        # store data to log
+        step_data = mz.logging.JAXBoardStepData(scalars={}, histograms={})
+        step_data.update(extra)
+        step_data.scalars["prior_kl"] = prior_kl
+        # step_data.histograms["reward"] = batch.last_reward
+        step_data.add_hk_params(new_params)
+
+        return new_training_state, step_data
+
+    return sgd_step_fn
+
+
 @dataclass(repr=False)
 class InferenceServer:
     network: InitVar
@@ -254,25 +302,32 @@ class InferenceServer:
     init_inf_fn: Callable = field(init=False)
     recurr_inf_fn: Callable = field(init=False)
 
-    def __post_init__(self, network, params):
-        import os
-        import jax
+    loss_fn: mz.loss.LossFn
+    optimizer: optax.GradientTransformation
 
+    sgd_step_fn: Callable = field(init=False)
+    state: TrainingState = field(init=False)
+
+    def __post_init__(self, network, params):
         logging.info("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
-        logging.info(
-            "CUDA_VISIBLE_DEVICES: {}".format(os.environ["CUDA_VISIBLE_DEVICES"])
+        logging.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
+        logging.info(f"jax.devices(): {jax.devices()}")
+
+        # BUG: use the lastest params
+        self.init_inf_fn = jax.jit(network.initial_inference)
+        self.recurr_inf_fn = jax.jit(network.recurrent_inference)
+        self.state = TrainingState(
+            params=self.params,
+            opt_state=self.optimizer.init(self.params),
+            steps=0,
+            rng_key=jax.random.PRNGKey(0),
         )
-        logging.info(f"seeing {jax.devices()}")
-        self.init_inf_fn = functools.partial(jax.jit(network.initial_inference), params)
-        self.recurr_inf_fn = functools.partial(
-            jax.jit(network.recurrent_inference), params
-        )
-        logging.info(f"seeing {jax.devices()}")
+        self.sgd_step_fn = make_sgd_step_fn(self.network, self.loss_fn, self.optimizer)
 
     def init_inf(self, frames):
         batch_size = len(frames)
         # TODO: concatnating frames should be on the client side?
-        results = self.init_inf_fn(np.array(frames))
+        results = self.init_inf_fn(self.state.params, np.array(frames))
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
 
@@ -280,7 +335,7 @@ class InferenceServer:
         batch_size = len(inputs)
         hidden_states = np.array(list(map(operator.itemgetter(0), inputs)))
         actions = np.array(list(map(operator.itemgetter(1), inputs)))
-        results = self.recurr_inf_fn(hidden_states, actions)
+        results = self.recurr_inf_fn(self.state.params, hidden_states, actions)
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
 
@@ -301,6 +356,10 @@ class InferenceServer:
             return await aio_as_trio(handler.recurr_inf.remote(x))
 
         return recurr_inf_remote
+
+    def update(self, batch):
+        self.state, step_data = self.sgd_step_fn(self.state, batch)
+        return step_data
 
 
 def setup_config(config: Config):

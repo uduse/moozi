@@ -1,8 +1,10 @@
 # %%
 import functools
 import operator
+import random
 from dataclasses import InitVar, dataclass, field
 from functools import _make_key, partial
+from operator import itemgetter
 from typing import (
     Any,
     Callable,
@@ -14,19 +16,22 @@ from typing import (
     Tuple,
     Union,
 )
-from acme import specs
-from acme.agents.replay import ReverbReplay
 
 import attr
+import chex
 import dm_env
 import jax
+import jax.numpy as jnp
 import moozi as mz
 import numpy as np
+import optax
 import ray
+import rlax
 import tree
 import trio
 import trio_asyncio
 from absl import logging
+from acme import specs
 from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from acme.wrappers import SinglePrecisionWrapper, open_spiel_wrapper
 from jax._src.numpy.lax_numpy import stack
@@ -36,17 +41,18 @@ from moozi.link import UniverseAsync, link
 from moozi.nn import NeuralNetwork
 from moozi.policies.mcts_async import MCTSAsync
 from moozi.policies.policy import PolicyFeed
-from moozi.replay import Trajectory
-from moozi.utils import SimpleBuffer, WallTimer, check_ray_gpu, as_coroutine
+from moozi.replay import Trajectory, make_target
+from moozi.utils import SimpleBuffer, WallTimer, as_coroutine, check_ray_gpu
 from trio_asyncio import aio_as_trio
 
 # from acme.wrappers.open_spiel_wrapper import OpenSpielWrapper
 from acme_openspiel_wrapper import OpenSpielWrapper
+from config import Config
 from sandbox_core import (
     Artifact,
-    InferenceServer,
     EnvironmentLaw,
     FrameStacker,
+    InferenceServer,
     InteractionManager,
     increment_tick,
     make_catch,
@@ -55,7 +61,6 @@ from sandbox_core import (
     set_random_action_from_timestep,
     wrap_up_episode,
 )
-from config import Config
 
 logging.set_verbosity(logging.INFO)
 
@@ -96,15 +101,20 @@ class TrajectorySaver:
     def __post_init__(self):
         self.traj_save_fn = as_coroutine(self.traj_save_fn)
 
-    async def __call__(self, timestep, stacked_frames, action, value, action_probs):
+    async def __call__(self, timestep, obs, action, root_value, action_probs):
 
+        # hack for open_spiel reward structure
+        if timestep.reward is None:
+            reward = 0.0
+        else:
+            reward = timestep.reward[0]
         step = Trajectory(
-            frame=stacked_frames,
-            reward=timestep.reward,
+            frame=obs,
+            reward=reward,
             is_first=timestep.first(),
             is_last=timestep.last(),
             action=action,
-            root_value=value,
+            root_value=root_value,
             action_probs=action_probs,
         ).cast()
 
@@ -160,7 +170,7 @@ def setup(
     return [bl_init_inf, bl_recurr_inf], rollout_universes
 
 
-def make_inference_server_handler(config: Config):
+def make_network_and_params(config):
     dim_action = config.env_spec.actions.num_values
     frame_shape = config.env_spec.observations.observation.shape
     stacked_frame_shape = (config.num_stacked_frames,) + frame_shape
@@ -174,7 +184,11 @@ def make_inference_server_handler(config: Config):
     )
     network = mz.nn.get_network(nn_spec)
     params = network.init(jax.random.PRNGKey(0))
+    return network, params
 
+
+def make_inference_server_handler(config: Config):
+    network, params = make_network_and_params(config)
     inf_server = ray.remote(num_gpus=0.5)(InferenceServer).remote(network, params)
     return inf_server
 
@@ -199,71 +213,34 @@ setup_config(config)
 inf_server = make_inference_server_handler(config)
 
 # %%
-mgr = InteractionManager()
-mgr.setup(lambda: setup(config, inf_server))
-result = mgr.run(5)
+@dataclass(repr=False)
+class ReplayBuffer:
+    store: List[Trajectory] = field(default_factory=list)
 
-# %%
-print(result[0].num_ticks)
+    def append(self, traj: Trajectory):
+        self.store.append(traj)
 
-# %%
-result = mgr.run(5)
-
-# %%
-def convert(timestep):
-    timestep = timestep._replace(observation=timestep.observation[0])
-    frame = timestep.observation.observation.astype(np.float32)
-    if timestep.reward is None:
-        reward = np.float32(0)
-    else:
-        reward = np.float32(timestep.reward).squeeze()
-    # legal_actions_mask = timestep.observation[0].legal_actions.astype(np.bool8)
-    is_first = np.bool8(timestep.first())
-    is_last = np.bool8(timestep.last())
-    # return Observation(frame, reward, legal_actions_mask, is_first, is_last)
-    return replay.Observation(frame, reward, is_first, is_last)
+    def get(self, num_samples=1):
+        sample = random.sample(self.store, num_samples)
+        if num_samples == 1:
+            return sample
+        else:
+            return stack_sequence_fields(sample)
 
 
 # %%
-sampler = Sampler.remote(replay_factory)
-
-
-# %%
-r = replay_factory()
-
-# %%
-env = config.env_factory()
-
-# %%
-timestep = env.reset()
-r.adder.add_first(convert(timestep))
-while not timestep.last():
-    timestep = env.step([0])
-    r.adder.add(
-        replay.Reflection(
-            np.array(0, dtype=np.int32),
-            np.array(0.0, dtype=np.float32),
-            np.array([1, 2, 3], dtype=np.float32),
-        ),
-        convert(timestep),
-    )
-
-# %%
-ref = sampler.sample.remote()
-
-# %%
-ray.get(ref, timeout=3)
-
-
-# %%
-def setup(config: Config) -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
+def setup(config: Config, rb) -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
     def make_rollout_laws():
         return [
             EnvironmentLaw(config.env_factory()),
             set_legal_actions,
             FrameStacker(num_frames=config.num_stacked_frames),
             set_random_action_from_timestep,
-            TrajectorySaver(lambda x: print(f"saving {x}")),
+            link(lambda: dict(action_probs=np.random.randn(3))),
+            TrajectorySaver(
+                lambda x: rb.append.remote(x),
+                # lambda x: print(f"saving {tree.map_structure(np.shape, x)}")
+            ),
             wrap_up_episode,
             increment_tick,
         ]
@@ -277,9 +254,74 @@ def setup(config: Config) -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
 
 
 # %%
+rb = ray.remote(ReplayBuffer).remote()
 mgr = InteractionManager()
-mgr.setup(partial(setup, config))
+mgr.setup(partial(setup, config=config, rb=rb))
 
 # %%
-mgr.run(5)
+mgr.run(1000)
+
+# %%
+x = ray.get(rb.get.remote(10))
+xx = tree.map_structure(itemgetter(0), x)
+print(tree.map_structure(np.shape, xx))
+
+# %%
+xt = make_target(
+    sample=xx,
+    start_idx=0,
+    discount=1,
+    num_unroll_steps=config.num_unroll_steps,
+    num_td_steps=config.num_td_steps,
+    num_stacked_frames=config.num_stacked_frames,
+)
+print(tree.map_structure(np.shape, xt))
+# random_start = random.randrange( + 1)
+
+# %%
+class TrainingState(NamedTuple):
+    params: Any
+    opt_state: optax.OptState
+    steps: int
+    rng_key: jax.random.KeyArray
+
+
+@dataclass(repr=False)
+class Learner:
+    network: NeuralNetwork
+    params: Any
+
+    loss_fn: mz.loss.LossFn
+    optimizer: optax.GradientTransformation
+
+    sgd_step_fn: Callable = field(init=False)
+    state: TrainingState = field(init=False)
+
+    def __post_init__(self):
+        self.state = TrainingState(
+            params=self.params,
+            opt_state=self.optimizer.init(self.params),
+            steps=0,
+            rng_key=jax.random.PRNGKey(0),
+        )
+        self.sgd_step_fn = _make_sgd_step_fn(self.network, self.loss_fn, self.optimizer)
+
+    def __call__(self, batch):
+        self.state, step_data = self.sgd_step_fn(self.state, batch)
+        print(step_data.scalars)
+
+
+# %%
+network, params = make_network_and_params(config)
+loss_fn = mz.loss.MuZeroLoss(
+    num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay
+)
+step_fn = _make_sgd_step_fn(network, loss_fn, config.optimizer_factory())
+learner = Learner(
+    network=network,
+    params=params,
+    loss_fn=loss_fn,
+    optimizer=config.optimizer_factory(),
+)
+
 # %%

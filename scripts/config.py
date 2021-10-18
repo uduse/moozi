@@ -1,6 +1,7 @@
 from typing import Any, Callable, Optional
+import optax
 import ray
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, InitVar
 
 
 @dataclass
@@ -11,9 +12,17 @@ class Config:
     num_rollout_universes: int = 1
 
     num_stacked_frames: int = 1
+    num_unroll_steps: int = 5
+    num_td_steps: int = 1
+
     dim_repr: int = 10
-    
-    
+    weight_decay: float = 1e-4
+
+    lr: InitVar[float] = 2e-3
+    optimizer_factory: Callable[[], optax.GradientTransformation] = field(init=False)
+
+    def __post_init__(self, lr: float):
+        self.optimizer_factory = lambda: optax.adam(lr)
 
 
 # @dataclass(repr=False)

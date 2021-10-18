@@ -18,11 +18,13 @@ class Config:
     dim_repr: int = 10
     weight_decay: float = 1e-4
 
-    lr: InitVar[float] = 2e-3
-    optimizer_factory: Callable[[], optax.GradientTransformation] = field(init=False)
+    batch_size: int = 256
+    lr: float = 2e-3
 
-    def __post_init__(self, lr: float):
-        self.optimizer_factory = lambda: optax.adam(lr)
+    # optimizer_factory: Callable[[], optax.GradientTransformation] = field(init=False)
+
+    # def __post_init__(self, lr: float):
+    #     self.optimizer_factory = lambda: optax.adam(lr)
 
 
 # @dataclass(repr=False)

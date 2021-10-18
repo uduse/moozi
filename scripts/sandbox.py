@@ -87,7 +87,12 @@ def make_planner_law(init_inf_fn, recurr_inf_fn):
             )
             mcts_tree = await mcts(feed)
             action, _ = mcts_tree.select_child()
-            return dict(action=action, root=mcts_tree)
+
+            action_probs = np.zeros((3,), dtype=np.float32)
+            for a, visit_count in mcts_tree.get_children_visit_counts().items():
+                action_probs[a] = visit_count
+            action_probs /= np.sum(action_probs)
+            return dict(action=action, action_probs=action_probs)
 
     return planner
 
@@ -127,11 +132,11 @@ class TrajectorySaver:
 
 
 def setup(
-    config: Config, inf_server_handler
+    config: Config, inf_server_handle, replay_handle
 ) -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
 
-    init_inf_remote = InferenceServer.make_init_inf_remote_fn(inf_server_handler)
-    recurr_inf_remote = InferenceServer.make_recurr_inf_remote_fn(inf_server_handler)
+    init_inf_remote = InferenceServer.make_init_inf_remote_fn(inf_server_handle)
+    recurr_inf_remote = InferenceServer.make_recurr_inf_remote_fn(inf_server_handle)
 
     bl_init_inf = BatchingLayer(
         max_batch_size=25,
@@ -153,6 +158,10 @@ def setup(
             FrameStacker(num_frames=config.num_stacked_frames),
             make_planner_law(
                 bl_init_inf.spawn_client().request, bl_recurr_inf.spawn_client().request
+            ),
+            TrajectorySaver(
+                lambda x: replay_handle.append.remote(x),
+                # lambda x: print(f"saving {tree.map_structure(np.shape, x)}")
             ),
             wrap_up_episode,
             increment_tick,
@@ -189,7 +198,13 @@ def make_network_and_params(config):
 
 def make_inference_server_handler(config: Config):
     network, params = make_network_and_params(config)
-    inf_server = ray.remote(num_gpus=0.5)(InferenceServer).remote(network, params)
+    loss_fn = mz.loss.MuZeroLoss(
+        num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay
+    )
+    optimizer = optax.adam(config.lr)
+    inf_server = ray.remote(num_gpus=1)(InferenceServer).remote(
+        network, params, loss_fn, optimizer
+    )
     return inf_server
 
 
@@ -206,122 +221,55 @@ def setup_config(config: Config):
 
 
 # %%
-config = Config()
-setup_config(config)
-
-# %%
-inf_server = make_inference_server_handler(config)
-
-# %%
 @dataclass(repr=False)
 class ReplayBuffer:
+    config: Config
+
     store: List[Trajectory] = field(default_factory=list)
 
     def append(self, traj: Trajectory):
         self.store.append(traj)
 
     def get(self, num_samples=1):
-        sample = random.sample(self.store, num_samples)
-        if num_samples == 1:
-            return sample
-        else:
-            return stack_sequence_fields(sample)
+        trajs = random.sample(self.store, num_samples)
+        batch = []
+        for traj in trajs:
+            random_start_idx = random.randrange(len(traj.reward))
+            target = make_target(
+                traj,
+                start_idx=random_start_idx,
+                discount=1.0,
+                num_unroll_steps=self.config.num_unroll_steps,
+                num_td_steps=self.config.num_td_steps,
+                num_stacked_frames=self.config.num_stacked_frames,
+            )
+            batch.append(target)
+        return stack_sequence_fields(batch)
 
 
 # %%
-def setup(config: Config, rb) -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
-    def make_rollout_laws():
-        return [
-            EnvironmentLaw(config.env_factory()),
-            set_legal_actions,
-            FrameStacker(num_frames=config.num_stacked_frames),
-            set_random_action_from_timestep,
-            link(lambda: dict(action_probs=np.random.randn(3))),
-            TrajectorySaver(
-                lambda x: rb.append.remote(x),
-                # lambda x: print(f"saving {tree.map_structure(np.shape, x)}")
-            ),
-            wrap_up_episode,
-            increment_tick,
-        ]
-
-    def make_universe():
-        artifact = config.artifact_factory(0)
-        laws = make_rollout_laws()
-        return UniverseAsync(artifact, laws)
-
-    return [], [make_universe()]
-
+config = Config()
+setup_config(config)
 
 # %%
-rb = ray.remote(ReplayBuffer).remote()
+inf_server_handle = make_inference_server_handler(config)
+replay_handle = ray.remote(ReplayBuffer).remote(config)
 mgr = InteractionManager()
-mgr.setup(partial(setup, config=config, rb=rb))
-
-# %%
-mgr.run(1000)
-
-# %%
-x = ray.get(rb.get.remote(10))
-xx = tree.map_structure(itemgetter(0), x)
-print(tree.map_structure(np.shape, xx))
-
-# %%
-xt = make_target(
-    sample=xx,
-    start_idx=0,
-    discount=1,
-    num_unroll_steps=config.num_unroll_steps,
-    num_td_steps=config.num_td_steps,
-    num_stacked_frames=config.num_stacked_frames,
-)
-print(tree.map_structure(np.shape, xt))
-# random_start = random.randrange( + 1)
-
-# %%
-class TrainingState(NamedTuple):
-    params: Any
-    opt_state: optax.OptState
-    steps: int
-    rng_key: jax.random.KeyArray
-
-
-@dataclass(repr=False)
-class Learner:
-    network: NeuralNetwork
-    params: Any
-
-    loss_fn: mz.loss.LossFn
-    optimizer: optax.GradientTransformation
-
-    sgd_step_fn: Callable = field(init=False)
-    state: TrainingState = field(init=False)
-
-    def __post_init__(self):
-        self.state = TrainingState(
-            params=self.params,
-            opt_state=self.optimizer.init(self.params),
-            steps=0,
-            rng_key=jax.random.PRNGKey(0),
-        )
-        self.sgd_step_fn = _make_sgd_step_fn(self.network, self.loss_fn, self.optimizer)
-
-    def __call__(self, batch):
-        self.state, step_data = self.sgd_step_fn(self.state, batch)
-        print(step_data.scalars)
-
-
-# %%
-network, params = make_network_and_params(config)
-loss_fn = mz.loss.MuZeroLoss(
-    num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay
-)
-step_fn = _make_sgd_step_fn(network, loss_fn, config.optimizer_factory())
-learner = Learner(
-    network=network,
-    params=params,
-    loss_fn=loss_fn,
-    optimizer=config.optimizer_factory(),
+mgr.setup(
+    partial(
+        setup,
+        config=config,
+        inf_server_handle=inf_server_handle,
+        replay_handle=replay_handle,
+    )
 )
 
 # %%
+results = mgr.run(500)
+
+# %%
+for _ in range(100):
+    loss = ray.get(
+        inf_server_handle.update.remote(replay_handle.get.remote(50))
+    ).scalars["loss"]
+    print(loss)

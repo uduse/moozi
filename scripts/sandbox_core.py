@@ -110,7 +110,7 @@ class Artifact:
     legal_actions_mask: np.ndarray = None
 
     # planner
-    root: Any = None
+    # root: Any = None
     root_value: float = 0
     action_probs: Any = None
 
@@ -298,17 +298,17 @@ def make_sgd_step_fn(network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, opti
 class InferenceServer:
     network: InitVar
     params: InitVar
+    loss_fn: InitVar[mz.loss.LossFn]
+    optimizer: InitVar[optax.GradientTransformation]
+
+    state: TrainingState = field(init=False)
 
     init_inf_fn: Callable = field(init=False)
     recurr_inf_fn: Callable = field(init=False)
 
-    loss_fn: mz.loss.LossFn
-    optimizer: optax.GradientTransformation
-
     sgd_step_fn: Callable = field(init=False)
-    state: TrainingState = field(init=False)
 
-    def __post_init__(self, network, params):
+    def __post_init__(self, network, params, loss_fn, optimizer):
         logging.info("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
         logging.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
         logging.info(f"jax.devices(): {jax.devices()}")
@@ -317,12 +317,12 @@ class InferenceServer:
         self.init_inf_fn = jax.jit(network.initial_inference)
         self.recurr_inf_fn = jax.jit(network.recurrent_inference)
         self.state = TrainingState(
-            params=self.params,
-            opt_state=self.optimizer.init(self.params),
+            params=params,
+            opt_state=optimizer.init(params),
             steps=0,
             rng_key=jax.random.PRNGKey(0),
         )
-        self.sgd_step_fn = make_sgd_step_fn(self.network, self.loss_fn, self.optimizer)
+        self.sgd_step_fn = make_sgd_step_fn(network, loss_fn, optimizer)
 
     def init_inf(self, frames):
         batch_size = len(frames)
@@ -338,6 +338,10 @@ class InferenceServer:
         results = self.recurr_inf_fn(self.state.params, hidden_states, actions)
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
+
+    def update(self, batch):
+        self.state, step_data = self.sgd_step_fn(self.state, batch)
+        return step_data
 
     @staticmethod
     def make_init_inf_remote_fn(handler):
@@ -356,10 +360,6 @@ class InferenceServer:
             return await aio_as_trio(handler.recurr_inf.remote(x))
 
         return recurr_inf_remote
-
-    def update(self, batch):
-        self.state, step_data = self.sgd_step_fn(self.state, batch)
-        return step_data
 
 
 def setup_config(config: Config):

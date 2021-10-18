@@ -148,8 +148,13 @@ class MuZeroLoss(LossFn):
                 # * step_loss_mask
             )
 
-        losses["l2_loss"] = jnp.reshape(params_l2_loss(params) * self._weight_decay, (1,))
+        losses["l2_loss"] = jnp.reshape(
+            params_l2_loss(params) * self._weight_decay, (1,)
+        )
 
         loss = jnp.sum(jnp.concatenate(tree.flatten(losses)))
+        losses["loss"] = loss
 
-        return loss, JAXBoardStepData(scalars=tree.map_structure(jnp.mean,losses), histograms={})
+        return loss, JAXBoardStepData(
+            scalars=tree.map_structure(jnp.mean, losses), histograms={}
+        )

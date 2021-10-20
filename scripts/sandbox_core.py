@@ -3,6 +3,7 @@ import operator
 import os
 from dataclasses import InitVar, dataclass, field
 from functools import partial
+import random
 from typing import (
     Any,
     Callable,
@@ -31,17 +32,20 @@ import tree
 import trio
 import trio_asyncio
 from absl import logging
-from acme.utils.tree_utils import unstack_sequence_fields
+from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from acme.wrappers import SinglePrecisionWrapper
 from jax._src.numpy.lax_numpy import stack
 from moozi.batching_layer import BatchingClient, BatchingLayer
 from moozi.learner import TrainingState
 from moozi.link import UniverseAsync, link
+from moozi.logging import JAXBoardStepData
 from moozi.nn import NeuralNetwork
 from moozi.replay import Trajectory
 from moozi.utils import SimpleBuffer
 from trio_asyncio import aio_as_trio
+from acme.utils.loggers import TerminalLogger
 
+from moozi.replay import make_target
 from acme_openspiel_wrapper import OpenSpielWrapper
 from config import Config
 
@@ -164,7 +168,7 @@ def set_legal_actions(timestep):
 
 
 @link
-def wrap_up_episode(timestep, sum_episodic_reward, num_episodes, universe_id):
+def save_episode_stats(timestep, sum_episodic_reward, num_episodes, universe_id):
     if timestep.last():
         sum_episodic_reward = sum_episodic_reward + float(timestep.reward)
         num_episodes = num_episodes + 1
@@ -178,6 +182,21 @@ def wrap_up_episode(timestep, sum_episodic_reward, num_episodes, universe_id):
         logging.debug({**dict(universe_id=universe_id), **result})
 
         return result
+
+
+@link
+@dataclass
+class EpisodeStatsReporter:
+    logger: mz.logging.Logger
+
+    def __call__(self, avg_episodic_reward, is_last, reward):
+        step_data = JAXBoardStepData(
+            scalars=dict(avg_episodic_reward=avg_episodic_reward), histograms={}
+        )
+        if is_last:
+            step_data.scalars.update(dict(last_reward=reward))
+
+        self.logger.write(step_data)
 
 
 @link
@@ -206,7 +225,7 @@ class EnvironmentLaw:
 
 
 @dataclass(repr=False)
-class InteractionManager:
+class RolloutWorker:
     batching_layers: Optional[List[BatchingLayer]] = None
     universes: Optional[List[UniverseAsync]] = None
 
@@ -215,7 +234,6 @@ class InteractionManager:
         factory: Callable[[], Tuple[List[BatchingLayer], List[UniverseAsync]]],
     ):
         self.batching_layers, self.universes = factory()
-        return self
 
     def set_verbosity(self, verbosity):
         logging.set_verbosity(verbosity)
@@ -229,15 +247,19 @@ class InteractionManager:
                 for b in self.batching_layers:
                     b.is_paused = False
                     main_nursery.start_soon(b.start_processing)
-                    main_nursery.start_soon(b.start_logging)
+                    # TODO: toggle logging
+                    # main_nursery.start_soon(b.start_logging)
 
                 async with trio.open_nursery() as universe_nursery:
                     for u in self.universes:
                         universe_nursery.start_soon(partial(u.tick, times=num_ticks))
+
                 for b in self.batching_layers:
                     b.is_paused = True
 
         trio_asyncio.run(main_loop)
+
+    def get_artifacts(self):
         return [u.artifact for u in self.universes]
 
 
@@ -249,14 +271,6 @@ def set_random_action_from_timestep(timestep: dm_env.TimeStep):
         return {"action": random_action}
     else:
         return {"action": -1}
-
-
-# @link
-# def set_action_probs():
-#     action_probs = np.zeros_like(mcts.all_actions_mask, dtype=np.float32)
-#     for a, visit_count in mcts_tree.get_children_visit_counts().items():
-#         action_probs[a] = visit_count
-#     action_probs /= np.sum(action_probs)
 
 
 def make_sgd_step_fn(network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, optimizer):
@@ -308,12 +322,13 @@ class InferenceServer:
 
     sgd_step_fn: Callable = field(init=False)
 
+    loggers: List[mz.logging.Logger] = field(default_factory=list)
+
     def __post_init__(self, network, params, loss_fn, optimizer):
         logging.info("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
         logging.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
         logging.info(f"jax.devices(): {jax.devices()}")
 
-        # BUG: use the lastest params
         self.init_inf_fn = jax.jit(network.initial_inference)
         self.recurr_inf_fn = jax.jit(network.recurrent_inference)
         self.state = TrainingState(
@@ -324,10 +339,13 @@ class InferenceServer:
         )
         self.sgd_step_fn = make_sgd_step_fn(network, loss_fn, optimizer)
 
-    def init_inf(self, frames):
-        batch_size = len(frames)
-        # TODO: concatnating frames should be on the client side?
-        results = self.init_inf_fn(self.state.params, np.array(frames))
+    def set_loggers(self, loggers_factory: Callable[[], List[mz.logging.Logger]]):
+        self.loggers = loggers_factory()
+        logging.info("setting loggers")
+
+    def init_inf(self, list_of_stacked_frames):
+        batch_size = len(list_of_stacked_frames)
+        results = self.init_inf_fn(self.state.params, np.array(list_of_stacked_frames))
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
 
@@ -340,34 +358,78 @@ class InferenceServer:
         return unstack_sequence_fields(results, batch_size)
 
     def update(self, batch):
+        if len(batch) == 0:
+            logging.warning("Empty batch")
+            return
         self.state, step_data = self.sgd_step_fn(self.state, batch)
-        return step_data
+        self._log(step_data)
+
+    def _log(self, step_data):
+        for logger in self.loggers:
+            if isinstance(logger, TerminalLogger):
+                logger.write(str(step_data.scalars))
+            elif isinstance(logger, mz.logging.JAXBoardLogger):
+                logger.write(step_data)
+            else:
+                raise NotImplementedError(f"Logger type {type(logger)} not supported")
+
+    def close(self):
+        for logger in self._loggers:
+            if isinstance(logger, mz.logging.JAXBoardLogger):
+                logging.info(logger._name, "closed")
+                logger.close()
 
     @staticmethod
-    def make_init_inf_remote_fn(handler):
+    def make_init_inf_remote_fn(handle):
         """For using with Ray."""
 
         async def init_inf_remote(x):
-            return await aio_as_trio(handler.init_inf.remote(x))
+            return await aio_as_trio(handle.init_inf.remote(x))
 
         return init_inf_remote
 
     @staticmethod
-    def make_recurr_inf_remote_fn(handler):
+    def make_recurr_inf_remote_fn(handle):
         """For using with Ray."""
 
         async def recurr_inf_remote(x):
-            return await aio_as_trio(handler.recurr_inf.remote(x))
+            return await aio_as_trio(handle.recurr_inf.remote(x))
 
         return recurr_inf_remote
 
 
-def setup_config(config: Config):
-    def make_artifact(index):
-        return Artifact(universe_id=index)
+@dataclass(repr=False)
+class ReplayBuffer:
+    config: Config
 
-    config.set(Config.ARTIFACT_FACTORY, make_artifact)
+    store: List[Trajectory] = field(default_factory=list)
 
-    config.set(Config.ENV_FACTORY, lambda: make_catch()[0])
-    config.set(Config.ENV_SPEC, make_catch()[1])
-    config.set(Config.NUM_UNIVERSES, 2000)
+    def add_traj(self, traj: Trajectory):
+        self.store.append(traj)
+        if len(self.store) > self.config.replay_buffer_size:
+            self.store = self.store[-self.config.replay_buffer_size :]
+
+        # TODO: FIFO
+        # if len(self.store) > self.config.replay_buffer_size:
+        #     self.store.pop(0)
+
+    def get_batch(self, num_samples=1):
+        if not self.store:
+            return []
+        trajs = random.choices(self.store, k=num_samples)
+        batch = []
+        for traj in trajs:
+            random_start_idx = random.randrange(len(traj.reward))
+            target = make_target(
+                traj,
+                start_idx=random_start_idx,
+                discount=1.0,
+                num_unroll_steps=self.config.num_unroll_steps,
+                num_td_steps=self.config.num_td_steps,
+                num_stacked_frames=self.config.num_stacked_frames,
+            )
+            batch.append(target)
+        return stack_sequence_fields(batch)
+
+    def size(self):
+        return len(self.store)

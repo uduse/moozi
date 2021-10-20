@@ -76,13 +76,13 @@ class BatchingLayer:
         return BatchingClient(client_id, request_fn, open_context)
 
     async def start_processing(self):
-        logging.info(f"{self.name} started processing")
+        logging.debug(f"{self.name} started processing")
         while not self.is_paused:
             try:
                 with trio.move_on_after(self.batch_process_period):
                     while True:
                         data = await self.request_channel[self.RECEIVE].receive()
-                        # logging.info(f"request from {data['client_id']} received")
+                        # logging.debug(f"request from {data['client_id']} received")
                         self.batch_buffer.append(data)
                         if len(self.batch_buffer) >= self.max_batch_size:
                             break
@@ -92,7 +92,7 @@ class BatchingLayer:
                 #       closing the channels?
                 assert len(self.batch_buffer) == 0
                 break
-        logging.info(f"{self.name} paused processing")
+        logging.debug(f"{self.name} paused processing")
 
     async def process_batch(self):
         if len(self.batch_buffer) > 0:
@@ -114,11 +114,11 @@ class BatchingLayer:
         while not self.is_paused:
             if self.logging_period > 0:
                 await trio.sleep(self.logging_period)
-                logging.info(
+                logging.debug(
                     f"{self.name} processed {self.logging_throughput} requests in {self.logging_period} second(s)"
                 )
                 self.logging_throughput = 0
-        logging.info(f"{self.name} processed {self.logging_throughput} requests.")
+        logging.debug(f"{self.name} processed {self.logging_throughput} requests.")
         self.logging_throughput = 0
 
     async def close(self):

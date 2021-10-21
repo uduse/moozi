@@ -181,7 +181,7 @@ class Adder_2(ReverbAdder):
         self._writer.create_item(DEFAULT_PRIORITY_TABLE, 1.0, trajectory)
 
 
-class Trajectory(NamedTuple):
+class StepSample(NamedTuple):
     frame: NDArray[np.float32]
     reward: NDArray[np.float32]
     is_first: NDArray[np.bool8]
@@ -190,8 +190,8 @@ class Trajectory(NamedTuple):
     root_value: NDArray[np.float32]
     action_probs: NDArray[np.float32]
 
-    def cast(self) -> "Trajectory":
-        return Trajectory(
+    def cast(self) -> "StepSample":
+        return StepSample(
             frame=np.asarray(self.frame, dtype=np.float32),
             reward=np.asarray(self.reward, dtype=np.float32),
             is_first=np.asarray(self.is_first, dtype=np.bool8),
@@ -200,6 +200,11 @@ class Trajectory(NamedTuple):
             root_value=np.asarray(self.root_value, dtype=np.float32),
             action_probs=np.asarray(self.action_probs, dtype=np.float32),
         )
+
+
+# Trajectory is a StepSample with stacked values
+class TrajectorySample(StepSample):
+    pass
 
 
 class TrainTarget(NamedTuple):
@@ -219,8 +224,8 @@ class TrainTarget(NamedTuple):
         )
 
 
-def make_target(
-    sample: Trajectory,
+def make_target_from_traj(
+    sample: TrajectorySample,
     start_idx,
     discount,
     num_unroll_steps,
@@ -237,7 +242,7 @@ def make_target(
     for curr_idx in range(start_idx, start_idx + num_unroll_steps + 1):
         value = _get_value(sample, curr_idx, last_step_idx, num_td_steps, discount)
         last_reward = _get_last_reward(sample, start_idx, curr_idx, last_step_idx)
-        action_probs = get_action_probs(sample, curr_idx, last_step_idx)
+        action_probs = _get_action_probs(sample, curr_idx, last_step_idx)
         unrolled_data.append((value, last_reward, action_probs))
 
     unrolled_data_stacked = tree_utils.stack_sequence_fields(unrolled_data)
@@ -293,7 +298,7 @@ def _get_last_reward(sample, start_idx, curr_idx, last_step_idx):
         return 0
 
 
-def get_action_probs(sample, curr_idx, last_step_idx):
+def _get_action_probs(sample, curr_idx, last_step_idx):
     if curr_idx <= last_step_idx:
         return sample.action_probs[curr_idx]
     else:
@@ -351,10 +356,10 @@ def post_process_data_iterator(
 ):
     # NOTE: use jax.random instead of python native random?
 
-    def _make_one_target_from_one_trajectory(traj: Trajectory):
+    def _make_one_target_from_one_trajectory(traj: TrajectorySample):
         last_step_idx = traj.is_last.argmax()
         random_start = random.randrange(last_step_idx + 1)
-        return mz.replay.make_target(
+        return mz.replay.make_target_from_traj(
             traj,
             random_start,
             discount,
@@ -365,7 +370,7 @@ def post_process_data_iterator(
 
     while data := next(data_iterator).data:
         raw_trajs = tree_utils.unstack_sequence_fields(data, batch_size=batch_size)
-        trajs = list(map(lambda x: Trajectory(**x), raw_trajs))
+        trajs = list(map(lambda x: TrajectorySample(**x), raw_trajs))
         batched_target = tree_utils.stack_sequence_fields(
             map(_make_one_target_from_one_trajectory, trajs)
         )

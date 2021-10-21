@@ -1,4 +1,6 @@
 # %%
+# debug = True
+
 import functools
 import operator
 import pprint
@@ -39,15 +41,15 @@ from acme import specs
 from acme.utils.loggers import TerminalLogger
 from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from acme.wrappers import SinglePrecisionWrapper, open_spiel_wrapper
-from jax._src.numpy.lax_numpy import stack
+from jax._src.numpy.lax_numpy import outer, stack
 from moozi import batching_layer
 from moozi.batching_layer import BatchingClient, BatchingLayer
 from moozi.link import UniverseAsync, link
-from moozi.logging import JAXBoardLogger
+from moozi.logging import JAXBoardLogger, JAXBoardStepData
 from moozi.nn import NeuralNetwork
 from moozi.policies.mcts_async import MCTSAsync
 from moozi.policies.policy import PolicyFeed
-from moozi.replay import Trajectory, make_target
+from moozi.replay import StepSample, TrajectorySample, make_target_from_traj
 from moozi.utils import SimpleBuffer, WallTimer, as_coroutine, check_ray_gpu
 from trio_asyncio import aio_as_trio
 
@@ -57,16 +59,18 @@ from config import Config
 from sandbox_core import (
     Artifact,
     EnvironmentLaw,
-    EpisodeStatsReporter,
     FrameStacker,
     InferenceServer,
+    MetricsReporterActor,
+    ParameterOptimizer,
     ReplayBuffer,
     RolloutWorker,
+    StepSampleSaver,
     increment_tick,
     make_catch,
     make_env,
-    save_episode_stats,
-    set_legal_actions,
+    output_reward,
+    update_episode_stats,
     set_random_action_from_timestep,
 )
 
@@ -86,8 +90,8 @@ def make_planner_law(init_inf_fn, recurr_inf_fn):
     )
 
     @link
-    async def planner(timestep, stacked_frames, legal_actions_mask):
-        if not timestep.last():
+    async def planner(is_last, stacked_frames, legal_actions_mask):
+        if not is_last:
             feed = PolicyFeed(
                 stacked_frames=stacked_frames,
                 legal_actions_mask=legal_actions_mask,
@@ -105,42 +109,8 @@ def make_planner_law(init_inf_fn, recurr_inf_fn):
     return planner
 
 
-@link
-@dataclass
-class TrajectorySaver:
-    traj_save_fn: Callable
-    buffer: list = field(default_factory=list)
-
-    def __post_init__(self):
-        self.traj_save_fn = as_coroutine(self.traj_save_fn)
-
-    async def __call__(self, timestep, obs, action, root_value, action_probs):
-
-        # hack for open_spiel reward structure
-        if timestep.reward is None:
-            reward = 0.0
-        else:
-            reward = timestep.reward[0]
-        step = Trajectory(
-            frame=obs,
-            reward=reward,
-            is_first=timestep.first(),
-            is_last=timestep.last(),
-            action=action,
-            root_value=root_value,
-            action_probs=action_probs,
-        ).cast()
-
-        self.buffer.append(step)
-
-        if timestep.last():
-            final_traj = stack_sequence_fields(self.buffer)
-            self.buffer.clear()
-            await self.traj_save_fn(final_traj)
-
-
 def rollout_worker_setup(
-    config: Config, inf_server_handle, replay_handle
+    config: Config, inf_server_handle
 ) -> Tuple[List[BatchingLayer], List[UniverseAsync]]:
     init_inf_remote = InferenceServer.make_init_inf_remote_fn(inf_server_handle)
     recurr_inf_remote = InferenceServer.make_recurr_inf_remote_fn(inf_server_handle)
@@ -165,10 +135,10 @@ def rollout_worker_setup(
         )
         laws = [
             EnvironmentLaw(config.env_factory()),
-            set_legal_actions,
             FrameStacker(num_frames=config.num_stacked_frames),
             planner_law,
-            TrajectorySaver(lambda x: replay_handle.add_traj.remote(x)),
+            StepSampleSaver(),
+            update_episode_stats,
             increment_tick,
         ]
         return UniverseAsync(artifact, laws)
@@ -190,11 +160,10 @@ def evaluation_worker_setup(
         )
         laws = [
             EnvironmentLaw(config.env_factory()),
-            set_legal_actions,
             FrameStacker(num_frames=config.num_stacked_frames),
             planner_law,
-            save_episode_stats,
-            EpisodeStatsReporter(mz.logging.JAXBoardLogger(name="evaluator")),
+            output_reward,
+            update_episode_stats,
             increment_tick,
         ]
         return UniverseAsync(artifact, laws)
@@ -219,24 +188,44 @@ def make_network_and_params(config):
     return network, params
 
 
-def make_inference_server_handle(config: Config):
-    network, params = make_network_and_params(config)
-    loss_fn = mz.loss.MuZeroLoss(
-        num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay
-    )
-    optimizer = optax.adam(config.lr)
-    inf_server = (
-        ray.remote(num_gpus=1)(InferenceServer)
-        .options(name="Inference Server", max_concurrency=5)
-        .remote(network, params, loss_fn, optimizer)
-    )
-    inf_server.set_loggers.remote(
-        lambda: [
-            # TerminalLogger(),
-            mz.logging.JAXBoardLogger(name="inf_server", time_delta=10.0),
-        ]
-    )
-    return inf_server
+# def make_inference_server_handle(config: Config):
+#     network, params = make_network_and_params(config)
+#     loss_fn = mz.loss.MuZeroLoss(
+#         num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay
+#     )
+#     optimizer = optax.adam(config.lr)
+#     inf_server = (
+#         ray.remote(num_gpus=1)(InferenceServer)
+#         .options(name="Inference Server", max_concurrency=1000)
+#         .remote(network, params, loss_fn, optimizer)
+#     )
+#     inf_server.set_loggers.remote(
+#         lambda: [
+#             # TerminalLogger(),
+#             mz.logging.JAXBoardLogger(name="inf_server", time_delta=10.0),
+#         ]
+#     )
+#     return inf_server
+
+
+# def make_parameter_server(config: Config):
+#     network, params = make_network_and_params(config)
+#     loss_fn = mz.loss.MuZeroLoss(
+#         num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay
+#     )
+#     optimizer = optax.adam(config.lr)
+#     param_server = (
+#         ray.remote(num_gpus=1)(ParameterServer)
+#         .options(name="Parameter Server")
+#         .remote(network, params, loss_fn, optimizer)
+#     )
+#     param_server.set_loggers.remote(
+#         lambda: [
+#             # TerminalLogger(),
+#             mz.logging.JAXBoardLogger(name="param_server", time_delta=10.0),
+#         ]
+#     )
+#     return param_server
 
 
 # %%
@@ -260,66 +249,163 @@ def setup_config(config: Config):
 
     config.dim_repr = 64
 
-    config.num_epochs = 500
-    config.num_ticks_per_epoch = 30
-    config.num_updates_per_epoch = 30
-    config.num_rollout_workers = 1
-    config.num_rollout_universes_per_worker = 100
+    config.num_epochs = 20
+    config.num_ticks_per_epoch = 20
+    config.num_updates_per_samples_added = 30
+    config.num_rollout_workers = 4
+    config.num_rollout_universes_per_worker = 200
 
-    # config.num_ticks = int(
-    #     250_000 / (config.num_rollout_workers * config.num_rollout_universes_per_worker)
-    # )
+
+def setup_config_debug(config: Config):
+    def make_artifact(index):
+        return Artifact(universe_id=index)
+
+    config.batch_size = 32
+    config.discount = 0.99
+    config.num_unroll_steps = 3
+    config.num_td_steps = 100
+    config.num_stacked_frames = 1
+
+    config.lr = 2e-3
+
+    config.artifact_factory = make_artifact
+    config.env_factory = lambda: make_catch()[0]
+    config.env_spec = make_catch()[1]
+
+    config.replay_buffer_size = 1000
+
+    config.dim_repr = 10
+
+    config.num_epochs = 5
+    config.num_ticks_per_epoch = 10
+    config.num_updates_per_samples_added = 10
+    config.num_rollout_workers = 3
+    config.num_rollout_universes_per_worker = 10
 
 
 # %%
 config = Config()
-setup_config(config)
+if "debug" in locals():
+    setup_config_debug(config)
+else:
+    setup_config(config)
 pprint.pprint(asdict(config))
 
 # %%
-inf_server_handle = make_inference_server_handle(config)
-replay_handle = ray.remote(ReplayBuffer).remote(config)
+metrics_reporter = MetricsReporterActor.remote()
+# %%
 
-mgrs = []
+network, params = make_network_and_params(config)
+loss_fn = mz.loss.MuZeroLoss(
+    num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay
+)
+optimizer = optax.adam(config.lr)
+
+# %%
+inf_server = (
+    ray.remote(num_gpus=1)(InferenceServer)
+    .options(name="Inference Server", max_concurrency=1000)
+    .remote()
+)
+
+ray.get(
+    [
+        inf_server.set_network.remote(network),
+        inf_server.set_params.remote(params),
+        inf_server.set_loggers.remote(
+            lambda: [
+                TerminalLogger(label="Inference Server", print_fn=print),
+            ]
+        ),
+    ]
+)
+
+# %%
+param_opt = (
+    ray.remote(ParameterOptimizer)
+    .options(num_gpus=1)
+    .remote(network, params, loss_fn, optimizer)
+)
+
+ray.get(
+    [
+        param_opt.set_loggers.remote(
+            lambda: [
+                TerminalLogger(label="Parameter Optimizer", print_fn=print),
+                mz.logging.JAXBoardLogger(name="inf_server"),
+            ]
+        )
+    ]
+)
+
+# %%
+replay_buffer = ray.remote(ReplayBuffer).remote(config)
+
+# %%
+rollout_workers = []
 for _ in range(config.num_rollout_workers):
-    mgr = ray.remote(RolloutWorker).remote()
-    mgr.setup.remote(
+    worker = ray.remote(RolloutWorker).remote()
+    worker.setup.remote(
         partial(
             rollout_worker_setup,
             config=config,
-            inf_server_handle=inf_server_handle,
-            replay_handle=replay_handle,
+            inf_server_handle=inf_server,
+            # replay_handle=replay_buffer,
         )
     )
-    mgrs.append(mgr)
-
-mgr = ray.remote(RolloutWorker).options(name="Evaluator").remote()
-mgr.setup.remote(
-    partial(evaluation_worker_setup, config=config, inf_server_handle=inf_server_handle)
-)
-mgrs.append(mgr)
+    rollout_workers.append(worker)
 
 # %%
-for i in tqdm.tqdm(range(config.num_epochs)):
-    tasks = []
-    for mgr in mgrs:
-        rollout_task = mgr.run.remote(config.num_ticks_per_epoch)
-        tasks.append(rollout_task)
+evaluator = ray.remote(RolloutWorker).options(name="Evaluator").remote()
+evaluator.setup.remote(
+    partial(evaluation_worker_setup, config=config, inf_server_handle=inf_server)
+)
 
-    for _ in range(config.num_updates_per_epoch):
-        batch = replay_handle.get_batch.remote(config.batch_size)
-        update_task = inf_server_handle.update.remote(batch)
-        tasks.append(update_task)
 
-    ray.get(tasks)
+@ray.remote
+def evaluation_post_process(output_buffer):
+    return JAXBoardStepData(
+        scalars=dict(last_run_avr_reward=np.mean(output_buffer)), histograms=dict()
+    )
 
-# # %%
-# for mgr in mgrs:
-#     mgr.run.remote(config.num_ticks)
 
-# time.sleep(10)
-# for i in range(config.num_epochs):
-#     time.sleep(0.1)
-#     batch = replay_handle.get_batch.remote(config.batch_size)
-#     updated = inf_server_handle.update.remote(batch)
-#     ray.get(updated)
+# %%
+def evaluate(num_ticks):
+    output_buffer = evaluator.run.remote(num_ticks)
+    step_data = evaluation_post_process.remote(output_buffer)
+    return metrics_reporter.report.remote(step_data)
+
+
+# %%
+@ray.remote
+def print_result(result):
+    print(result)
+
+
+# %%
+# all_evaluations_done = []
+for epoch in range(config.num_epochs):
+    print(f"Epochs: {epoch + 1} / {config.num_epochs}")
+    samples = [w.run.remote(config.num_ticks_per_epoch) for w in rollout_workers]
+    samples_added = [replay_buffer.add_samples.remote(s) for s in samples]
+    evaluation_done = evaluate(num_ticks=50)
+    while samples_added:
+        _, samples_added = ray.wait(samples_added)
+        for _ in range(config.num_updates_per_samples_added):
+            batch = replay_buffer.get_batch.remote(config.batch_size)
+            new_params = param_opt.update.remote(batch)
+
+        inf_server.set_params.remote(new_params)
+        inf_server.log_stats.remote()
+        param_opt.log_stats.remote()
+
+    # print_result.remote(evaluation_result)
+    # print_result.remote(inf_server.get_stats.remote())
+    # print_result.remote(param_opt.get_stats.remote())
+    # ray.get(evaluation_done)
+
+ray.get(evaluation_done)
+
+# %%
+# rollout_pool = ray.util.ActorPool([rollout_workers])
+# rollout_pool.

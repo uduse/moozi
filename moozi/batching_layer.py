@@ -17,12 +17,11 @@ import trio
 logging.set_verbosity(logging.INFO)
 
 
-# @attr.s(auto_attribs=True, repr=False)
+# TODO: rewrite everything in asyncio?
+
 @dataclass
 class BatchingClient:
     client_id: int
-    # send_request: Callable[..., Awaitable]
-    # receive_response: Callable[..., Awaitable]
     request: Callable[..., Awaitable]
     open_context: AsyncContextManager
 

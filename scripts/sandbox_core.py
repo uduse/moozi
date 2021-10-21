@@ -1,4 +1,6 @@
 import collections
+from acme.utils import loggers
+import cloudpickle
 import operator
 import os
 from dataclasses import InitVar, dataclass, field
@@ -8,6 +10,7 @@ from typing import (
     Any,
     Callable,
     Coroutine,
+    Deque,
     Dict,
     List,
     NamedTuple,
@@ -40,12 +43,12 @@ from moozi.learner import TrainingState
 from moozi.link import UniverseAsync, link
 from moozi.logging import JAXBoardStepData
 from moozi.nn import NeuralNetwork
-from moozi.replay import Trajectory
+from moozi.replay import StepSample, TrajectorySample
 from moozi.utils import SimpleBuffer
 from trio_asyncio import aio_as_trio
 from acme.utils.loggers import TerminalLogger
 
-from moozi.replay import make_target
+from moozi.replay import make_target_from_traj
 from acme_openspiel_wrapper import OpenSpielWrapper
 from config import Config
 
@@ -121,6 +124,8 @@ class Artifact:
     # player
     stacked_frames: np.ndarray = None
 
+    output_buffer: tuple = field(default_factory=tuple)
+
 
 @link
 @dataclass
@@ -162,13 +167,14 @@ class FrameStacker:
         self.padding = np.zeros(shape)
 
 
-@link
-def set_legal_actions(timestep):
-    return dict(legal_actions_mask=get_legal_actions(timestep))
+# @link
+# def set_legal_actions(timestep):
+#     # TODO: make a part of the environment law
+#     return dict(legal_actions_mask=get_legal_actions(timestep))
 
 
 @link
-def save_episode_stats(timestep, sum_episodic_reward, num_episodes, universe_id):
+def update_episode_stats(timestep, sum_episodic_reward, num_episodes, universe_id):
     if timestep.last():
         sum_episodic_reward = sum_episodic_reward + float(timestep.reward)
         num_episodes = num_episodes + 1
@@ -185,18 +191,19 @@ def save_episode_stats(timestep, sum_episodic_reward, num_episodes, universe_id)
 
 
 @link
+def output_reward(is_last, reward, output_buffer):
+    if is_last:
+        output_buffer = output_buffer + (reward,)
+        return dict(output_buffer=output_buffer)
+
+
+@ray.remote
 @dataclass
-class EpisodeStatsReporter:
+class LoggerActor:
     logger: mz.logging.Logger
 
-    def __call__(self, avg_episodic_reward, is_last, reward):
-        step_data = JAXBoardStepData(
-            scalars=dict(avg_episodic_reward=avg_episodic_reward), histograms={}
-        )
-        if is_last:
-            step_data.scalars.update(dict(last_reward=reward))
-
-        self.logger.write(step_data)
+    def log(self, data):
+        self.logger.write(data)
 
 
 @link
@@ -214,13 +221,18 @@ class EnvironmentLaw:
             timestep = self.env_state.reset()
         else:
             timestep = self.env_state.step([action])
+        if timestep.reward is None:
+            reward = 0.0
+        else:
+            reward = float(np.nan_to_num(timestep.reward))
         return dict(
             timestep=timestep,
             obs=get_observation(timestep),
             is_first=timestep.first(),
             is_last=timestep.last(),
             to_play=self.env_state.current_player,
-            reward=timestep.reward,
+            reward=reward,
+            legal_actions_mask=get_legal_actions(timestep),
         )
 
 
@@ -230,8 +242,7 @@ class RolloutWorker:
     universes: Optional[List[UniverseAsync]] = None
 
     def setup(
-        self,
-        factory: Callable[[], Tuple[List[BatchingLayer], List[UniverseAsync]]],
+        self, factory: Callable[[], Tuple[List[BatchingLayer], List[UniverseAsync]]]
     ):
         self.batching_layers, self.universes = factory()
 
@@ -239,9 +250,6 @@ class RolloutWorker:
         logging.set_verbosity(verbosity)
 
     def run(self, num_ticks):
-
-        import trio
-
         async def main_loop():
             async with trio.open_nursery() as main_nursery:
                 for b in self.batching_layers:
@@ -259,22 +267,30 @@ class RolloutWorker:
 
         trio_asyncio.run(main_loop)
 
-    def get_artifacts(self):
-        return [u.artifact for u in self.universes]
+        return self.flush_output_buffers()
+
+    def flush_output_buffers(self) -> List[TrajectorySample]:
+        outputs: List[TrajectorySample] = sum(
+            (list(u.artifact.output_buffer) for u in self.universes), []
+        )
+
+        for u in self.universes:
+            u.artifact.output_buffer = tuple()
+        return outputs
 
 
 @link
 def set_random_action_from_timestep(timestep: dm_env.TimeStep):
+    action = -1
     if not timestep.last():
         legal_actions = timestep.observation[0].legal_actions
         random_action = np.random.choice(np.flatnonzero(legal_actions == 1))
-        return {"action": random_action}
-    else:
-        return {"action": -1}
+        action = random_action
+    return dict(action=action)
 
 
 def make_sgd_step_fn(network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, optimizer):
-    @partial(jax.jit, backend="cpu")
+    @jax.jit
     @chex.assert_max_traces(n=1)
     def sgd_step_fn(training_state: TrainingState, batch: mz.replay.TrainTarget):
         # gradient descend
@@ -308,29 +324,8 @@ def make_sgd_step_fn(network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, opti
     return sgd_step_fn
 
 
-@dataclass(repr=False)
-class InferenceServer:
-    network: InitVar
-    params: InitVar
-    loss_fn: InitVar[mz.loss.LossFn]
-    optimizer: InitVar[optax.GradientTransformation]
-
-    state: TrainingState = field(init=False)
-
-    init_inf_fn: Callable = field(init=False)
-    recurr_inf_fn: Callable = field(init=False)
-
-    sgd_step_fn: Callable = field(init=False)
-
-    loggers: List[mz.logging.Logger] = field(default_factory=list)
-
-    def __post_init__(self, network, params, loss_fn, optimizer):
-        logging.info("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
-        logging.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
-        logging.info(f"jax.devices(): {jax.devices()}")
-
-        self.init_inf_fn = jax.jit(network.initial_inference)
-        self.recurr_inf_fn = jax.jit(network.recurrent_inference)
+class ParameterOptimizer:
+    def __init__(self, network, params, loss_fn, optimizer, loggers=None):
         self.state = TrainingState(
             params=params,
             opt_state=optimizer.init(params),
@@ -338,6 +333,82 @@ class InferenceServer:
             rng_key=jax.random.PRNGKey(0),
         )
         self.sgd_step_fn = make_sgd_step_fn(network, loss_fn, optimizer)
+        self.loggers = [] if not loggers else loggers
+        self._num_updates: int = 0
+
+    def update(self, batch):
+        if len(batch) == 0:
+            raise ValueError("Batch is empty")
+        self.state, step_data = self.sgd_step_fn(self.state, batch)
+        self._num_updates += 1
+        self._log_step_data(step_data)
+        return self.state.params
+
+    def get_params(self):
+        return self.state.params
+
+    def save(self, path):
+        with open(path, "wb") as f:
+            cloudpickle.dump(self, f)
+
+    @classmethod
+    def restore(path):
+        with open(path, "rb") as f:
+            return cloudpickle.load(f)
+
+    def set_loggers(self, loggers_factory: Callable[[], List[mz.logging.Logger]]):
+        self.loggers = loggers_factory()
+        logging.info("setting loggers")
+
+    def _log_step_data(self, step_data):
+        for logger in self.loggers:
+            if isinstance(logger, TerminalLogger):
+                logger.write(step_data.scalars)
+            elif isinstance(logger, mz.logging.JAXBoardLogger):
+                logger.write(step_data)
+            else:
+                raise NotImplementedError(f"Logger type {type(logger)} not supported")
+
+    def get_stats(self):
+        return dict(num_updates=self._num_updates)
+
+    def log_stats(self):
+        logging.info(self.get_stats())
+
+    def close(self):
+        for logger in self._loggers:
+            if isinstance(logger, mz.logging.JAXBoardLogger):
+                logging.info(logger._name, "closed")
+                logger.close()
+
+
+@dataclass(repr=False)
+class InferenceServer:
+    network: mz.nn.NeuralNetwork = field(init=False)
+    params: Any = field(init=False)
+
+    loggers: List[mz.logging.Logger] = field(default_factory=list)
+
+    _num_set_params: int = 0
+    _num_set_network: int = 0
+
+    _num_init_inf: int = 0
+    _init_inf_timer = mz.utils.WallTimer()
+    # _num_init_inf_avg_size: float = 0.0
+    _num_recurr_inf: int = 0
+
+    def set_network(self, network):
+        logging.info("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
+        logging.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
+        logging.info(f"jax.devices(): {jax.devices()}")
+        self.network = network
+        self.init_inf_fn = jax.jit(network.initial_inference)
+        self.recurr_inf_fn = jax.jit(network.recurrent_inference)
+        self._num_set_network += 1
+
+    def set_params(self, params):
+        self.params = params
+        self._num_set_params += 1
 
     def set_loggers(self, loggers_factory: Callable[[], List[mz.logging.Logger]]):
         self.loggers = loggers_factory()
@@ -345,39 +416,30 @@ class InferenceServer:
 
     def init_inf(self, list_of_stacked_frames):
         batch_size = len(list_of_stacked_frames)
-        results = self.init_inf_fn(self.state.params, np.array(list_of_stacked_frames))
+        results = self.init_inf_fn(self.params, np.array(list_of_stacked_frames))
         results = tree.map_structure(np.array, results)
+        self._num_init_inf += 1
         return unstack_sequence_fields(results, batch_size)
 
     def recurr_inf(self, inputs):
         batch_size = len(inputs)
         hidden_states = np.array(list(map(operator.itemgetter(0), inputs)))
         actions = np.array(list(map(operator.itemgetter(1), inputs)))
-        results = self.recurr_inf_fn(self.state.params, hidden_states, actions)
+        results = self.recurr_inf_fn(self.params, hidden_states, actions)
         results = tree.map_structure(np.array, results)
+        self._num_recurr_inf += 1
         return unstack_sequence_fields(results, batch_size)
 
-    def update(self, batch):
-        if len(batch) == 0:
-            logging.warning("Empty batch")
-            return
-        self.state, step_data = self.sgd_step_fn(self.state, batch)
-        self._log(step_data)
+    def get_stats(self):
+        return dict(
+            num_set_network=self._num_set_network,
+            num_set_params=self._num_set_params,
+            num_init_inf=self._num_init_inf,
+            num_recurr_infs=self._num_recurr_inf,
+        )
 
-    def _log(self, step_data):
-        for logger in self.loggers:
-            if isinstance(logger, TerminalLogger):
-                logger.write(str(step_data.scalars))
-            elif isinstance(logger, mz.logging.JAXBoardLogger):
-                logger.write(step_data)
-            else:
-                raise NotImplementedError(f"Logger type {type(logger)} not supported")
-
-    def close(self):
-        for logger in self._loggers:
-            if isinstance(logger, mz.logging.JAXBoardLogger):
-                logging.info(logger._name, "closed")
-                logger.close()
+    def log_stats(self):
+        logging.info(self.get_stats())
 
     @staticmethod
     def make_init_inf_remote_fn(handle):
@@ -398,29 +460,64 @@ class InferenceServer:
         return recurr_inf_remote
 
 
+@link
+@dataclass
+class StepSampleSaver:
+    traj_buffer: list = field(default_factory=list)
+
+    def __call__(
+        self,
+        obs,
+        action,
+        reward,
+        root_value,
+        is_first,
+        is_last,
+        action_probs,
+        output_buffer,
+    ):
+        step_record = StepSample(
+            frame=obs,
+            reward=reward,
+            is_first=is_first,
+            is_last=is_last,
+            action=action,
+            root_value=root_value,
+            action_probs=action_probs,
+        ).cast()
+
+        self.traj_buffer.append(step_record)
+
+        if is_last:
+            traj = stack_sequence_fields(self.traj_buffer)
+            self.traj_buffer.clear()
+            return dict(output_buffer=output_buffer + (traj,))
+
+
 @dataclass(repr=False)
 class ReplayBuffer:
+    # TODO: remove config here
     config: Config
 
-    store: List[Trajectory] = field(default_factory=list)
+    store: Deque[TrajectorySample] = field(init=False)
 
-    def add_traj(self, traj: Trajectory):
-        self.store.append(traj)
-        if len(self.store) > self.config.replay_buffer_size:
-            self.store = self.store[-self.config.replay_buffer_size :]
+    def __post_init__(self):
+        self.store = collections.deque(maxlen=self.config.replay_buffer_size)
 
-        # TODO: FIFO
-        # if len(self.store) > self.config.replay_buffer_size:
-        #     self.store.pop(0)
+    def add_samples(self, samples: List[TrajectorySample]):
+        self.store.extend(samples)
+        logging.info(f"Replay buffer size: {self.size()}")
+        return self.size()
 
-    def get_batch(self, num_samples=1):
+    def get_batch(self, batch_size=1):
         if not self.store:
-            return []
-        trajs = random.choices(self.store, k=num_samples)
+            raise ValueError("Empty replay buffer")
+
+        trajs = random.choices(self.store, k=batch_size)
         batch = []
         for traj in trajs:
             random_start_idx = random.randrange(len(traj.reward))
-            target = make_target(
+            target = make_target_from_traj(
                 traj,
                 start_idx=random_start_idx,
                 discount=1.0,
@@ -431,5 +528,20 @@ class ReplayBuffer:
             batch.append(target)
         return stack_sequence_fields(batch)
 
+    # def add_and_get_batch(self, samples: List[TrajectorySample], batch_size=1):
+    #     self.add_samples(samples)
+    #     return self.get_batch(batch_size=batch_size)
+
     def size(self):
         return len(self.store)
+
+
+class MetricsReporter:
+    def __init__(self) -> None:
+        self.logger = mz.logging.JAXBoardLogger(name="reporter")
+
+    def report(self, step_data: JAXBoardStepData):
+        self.logger.write(step_data)
+
+
+MetricsReporterActor = ray.remote(num_cpus=0)(MetricsReporter)

@@ -29,7 +29,7 @@ from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironm
 from acme.jax.variable_utils import VariableClient
 from acme.utils import tree_utils
 from acme.utils.loggers.base import NoOpLogger
-from moozi.replay import Trajectory, make_replay
+from moozi.replay import TrajectorySample, make_replay
 from nptyping import NDArray
 from reverb import rate_limiters
 from reverb.trajectory_writer import TrajectoryColumn

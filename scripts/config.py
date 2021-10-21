@@ -6,6 +6,8 @@ from dataclasses import dataclass, field, InitVar
 
 @dataclass
 class Config:
+    seed: int = 0
+
     env_factory: Optional[Callable] = None
     env_spec: Any = None
     artifact_factory: Optional[Callable] = None
@@ -28,7 +30,7 @@ class Config:
 
     num_epochs: int = 1
     num_ticks_per_epoch: int = 1
-    num_updates_per_epoch: int = 1
+    num_updates_per_samples_added: int = 1
 
     # num_ticks: int = 1
 

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-SAMPLE = mz.replay.Trajectory(
+SAMPLE = mz.replay.TrajectorySample(
     frame=[[11], [22], [33], [44], [55], [66]],
     reward=[0, 200, 300, 400, 500, 600],
     is_first=[True, False, False, False, False, False],
@@ -121,6 +121,25 @@ TEST_CASES.append(
     )
 )
 
+TEST_CASES.append(
+    dict(
+        name="test 6",
+        sample=SAMPLE,
+        start_idx=5,
+        discount=0.5,
+        num_unroll_steps=3,
+        num_td_steps=100,
+        num_stacked_frames=3,
+        expected_target=mz.replay.TrainTarget(
+            stacked_frames=[[44], [55], [66]],
+            action=[-1, -1, -1],
+            value=[0, 0, 0, 0],
+            last_reward=[0, 0, 0, 0],
+            action_probs=[np.zeros(3), np.zeros(3), np.zeros(3), np.zeros(3)],
+        ).cast(),
+    )
+)
+
 names = list(map(lambda x: x["name"], TEST_CASES))
 assert len(names) == len(set(names)), "Duplicate test cases name."
 
@@ -136,7 +155,7 @@ def test_make_target(
     num_stacked_frames,
     expected_target,
 ):
-    computed_target = mz.replay.make_target(
+    computed_target = mz.replay.make_target_from_traj(
         sample,
         start_idx,
         discount,

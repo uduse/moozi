@@ -142,11 +142,21 @@ class WallTimer:
     delta: float = 0.0
 
     def __enter__(self):
-        self.start_time = time.time()
+        self.start()
+        return self
 
     def __exit__(self, exc_type, exc_value, traceback):
+        self.end()
+
+    def start(self):
+        self.start_time = time.time()
+
+    def end(self):
         self.end_time = time.time()
-        self.delta = self.end_time - self.start_time
+        self.delta += self.end_time - self.start_time
+
+    def reset(self):
+        self.delta = 0.0
 
     def print(self):
         print(f"{self.name}: {self.delta} s")

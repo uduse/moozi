@@ -37,9 +37,9 @@ from acme.utils import tree_utils
 from acme.utils.loggers.base import NoOpLogger
 from IPython.display import Image, display
 from moozi.actors.evaluator import Evaluator
-from moozi.nn import NeuralNetwork, NeuralNetworkOutput
+from moozi.nn import NeuralNetwork, NNOutput
 from moozi.policies.policy import PolicyFeed, PolicyResult
-from moozi.replay import Trajectory, make_replay
+from moozi.replay import TrajectorySample, make_replay
 from nptyping import NDArray
 from reverb import rate_limiters
 from reverb.trajectory_writer import TrajectoryColumn
@@ -150,7 +150,7 @@ train_policy_fn = functools.partial(
     mz.policies.monte_carlo_tree_search.train_policy_fn, mcts
 )
 
-actor = mz.MuZeroActor(
+actor = mz.PlayerShell(
     env_spec,
     variable_client,
     train_policy_fn,

@@ -18,46 +18,16 @@ from acme.utils import tree_utils
 from acme.wrappers.open_spiel_wrapper import OLT
 from moozi.policies import PolicyFeed, PolicyFn
 
+class PlayerShell:
+    def __init__(self):
+        pass
+    
+    # def 
 
-class SimpleQueue(object):
-    r"""A simple FIFO queue."""
-
-    def __init__(self, size: int = 1000) -> None:
-        self._list: list = []
-        self._size = size
-
-    def put(self, value):
-        self._list.append(value)
-        if len(self._list) > self._size:
-            self._list = self._list[-self._size :]
-
-    def get(self):
-        return self._list
-
-    def is_full(self) -> bool:
-        return len(self._list) == self._size
-
-    def __len__(self):
-        return len(self._list)
-
-    @property
-    def size(self):
-        return self._size
-
-
-class MuZeroActor(BaseActor):
-    r"""
-    # NOTE: acme's actor's batching behavior is inconsistent
-    # https://github.com/deepmind/acme/blob/aba3f195afd3e9774e2006ec9b32cb76048b7fe6/acme/agents/jax/actors.py#L82
-    # TODO: replace vmap with manual batching?
-    # https://github.com/deepmind/acme/blob/926b17ad116578801a0fbbe73c4ddc276a28e23e/acme/agents/jax/actors.py#L76
-    # self._policy_fn = jax.jit(jax.vmap(_policy_fn, in_axes=[None, 0, 0, None]))
-    """
-
+class PlayerShell(object):
     def __init__(
         self,
         env_spec: specs.EnvironmentSpec,
-        variable_client: VariableClient,
         policy_fn: PolicyFn,
         adder: mz.replay.Adder,
         random_key,
@@ -66,7 +36,6 @@ class MuZeroActor(BaseActor):
         name: Optional[str] = None,
     ):
         self._env_spec = env_spec
-        self._variable_client = variable_client
         self._policy_fn = policy_fn
         self._adder = adder
         self._loggers = loggers or []
@@ -76,10 +45,10 @@ class MuZeroActor(BaseActor):
         def _init_memory():
             return {
                 "random_key": random_key,
-                "last_frames": SimpleQueue(5000),
-                "rolling_rewards": SimpleQueue(5000),
-                "policy_results": SimpleQueue(5000),
-                "action_probs": SimpleQueue(5000),
+                "last_frames": mz.utils.SimpleQueue(5000),
+                "rolling_rewards": mz.utils.SimpleQueue(5000),
+                "policy_results": mz.utils.SimpleQueue(5000),
+                "action_probs": mz.utils.SimpleQueue(5000),
             }
 
         self._init_memory_fn = _init_memory
@@ -156,9 +125,6 @@ class MuZeroActor(BaseActor):
         for logger in self._loggers:
             if isinstance(logger, mz.logging.JAXBoardLogger):
                 logger.write(data)
-
-    def update(self, wait: bool = False):
-        self._variable_client.update(wait)
 
     def close(self):
         for logger in self._loggers:

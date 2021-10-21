@@ -18,33 +18,6 @@ from acme.utils import tree_utils
 from acme.wrappers.open_spiel_wrapper import OLT
 from moozi.policies import PolicyFeed, PolicyFn
 
-
-class SimpleQueue(object):
-    r"""A simple FIFO queue."""
-
-    def __init__(self, size: int = 1000) -> None:
-        self._list: list = []
-        self._size = size
-
-    def put(self, value):
-        self._list.append(value)
-        if len(self._list) > self._size:
-            self._list = self._list[-self._size :]
-
-    def get(self):
-        return self._list
-
-    def is_full(self) -> bool:
-        return len(self._list) == self._size
-
-    def __len__(self):
-        return len(self._list)
-
-    @property
-    def size(self):
-        return self._size
-
-
 class Evaluator(BaseActor):
     def __init__(
         self,
@@ -66,8 +39,8 @@ class Evaluator(BaseActor):
     def reset_memory(self):
         self._memory = {
             "random_key": self._seed_random_key,
-            "last_frames": SimpleQueue(5000),
-            "policy_results": SimpleQueue(5000),
+            "last_frames": mz.utils.SimpleBuffer(5000),
+            "policy_results": mz.utils.SimpleBuffer(5000),
         }
 
     def select_action(self, observation: OLT) -> int:

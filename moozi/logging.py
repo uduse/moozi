@@ -3,10 +3,11 @@ import time
 import typing
 import uuid
 from pathlib import Path
+from acme.utils.loggers.terminal import TerminalLogger
 
-import acme
 import haiku as hk
 import jax.numpy as jnp
+from absl import logging
 
 import moozi as mz
 
@@ -40,7 +41,11 @@ def is_vector(datum: Data):
     return jnp.ndim(datum.content) == 1
 
 
-class FileLogger(acme.utils.loggers.base.Logger):
+class Logger:
+    pass
+
+
+class FileLogger(Logger):
     # TODO: implement this
     def __init__(self, name, fname, time_delta: float = 0.0):
         self._name = name
@@ -73,7 +78,7 @@ class FileLogger(acme.utils.loggers.base.Logger):
         return self._writer.close()
 
 
-class JAXBoardLogger(acme.utils.loggers.base.Logger):
+class JAXBoardLogger(Logger):
     def __init__(self, name, log_dir=None, time_delta: float = 0.0):
         self._name = name
         self._log_dir = log_dir or "./tensorboard_log/"
@@ -82,7 +87,7 @@ class JAXBoardLogger(acme.utils.loggers.base.Logger):
         self._time = time.time()
         self._steps = 0
         self._writer = mz.jaxboard.SummaryWriter(name, log_dir=self._log_dir)
-        print(f"{self._name} is logging to {(self._log_dir)}")
+        logging.info(f"{self._name} is logging to {(self._log_dir)}")
 
     def write(self, data: JAXBoardStepData):
         now = time.time()

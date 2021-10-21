@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import moozi as mz
 
 
-class NeuralNetworkOutput(NamedTuple):
+class NNOutput(NamedTuple):
     value: jnp.ndarray
     reward: jnp.ndarray
     # policy_logits: typing.Dict[mz.Action, float]
@@ -18,12 +18,20 @@ class NeuralNetworkOutput(NamedTuple):
     hidden_state: jnp.ndarray
 
 
+# class AsyncNNOutput(NamedTuple):
+#     value: jnp.ndarray
+#     reward: jnp.ndarray
+#     # policy_logits: typing.Dict[mz.Action, float]
+#     policy_logits: jnp.ndarray
+#     hidden_state_id: jnp.ndarray
+
+
 class NeuralNetwork(NamedTuple):
     init: Callable
-    initial_inference: Callable[..., NeuralNetworkOutput]
-    recurrent_inference: Callable[..., NeuralNetworkOutput]
-    initial_inference_unbatched: Callable[..., NeuralNetworkOutput]
-    recurrent_inference_unbatched: Callable[..., NeuralNetworkOutput]
+    initial_inference: Callable[..., NNOutput]
+    recurrent_inference: Callable[..., NNOutput]
+    initial_inference_unbatched: Callable[..., NNOutput]
+    recurrent_inference_unbatched: Callable[..., NNOutput]
 
 
 class NeuralNetworkSpec(NamedTuple):
@@ -151,7 +159,7 @@ class MLPNet(hk.Module):
         value, policy_logits = self.pred_net(hidden_state)
         reward = jnp.zeros_like(value)
         chex.assert_rank([value, reward, policy_logits, hidden_state], [1, 1, 2, 2])
-        return NeuralNetworkOutput(
+        return NNOutput(
             value=value,
             reward=reward,
             policy_logits=policy_logits,
@@ -163,7 +171,7 @@ class MLPNet(hk.Module):
         hidden_state, reward = self.dyna_net(hidden_state, action)
         value, policy_logits = self.pred_net(hidden_state)
         chex.assert_rank([value, reward, policy_logits, hidden_state], [1, 1, 2, 2])
-        return NeuralNetworkOutput(
+        return NNOutput(
             value=value,
             reward=reward,
             policy_logits=policy_logits,

@@ -21,7 +21,6 @@ class PolicyFeed(NamedTuple):
     stacked_frames: jnp.ndarray
     legal_actions_mask: jnp.ndarray
     random_key: jnp.ndarray
-    to_play: int = 0
 
 
 class PolicyResult(NamedTuple):

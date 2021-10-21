@@ -15,7 +15,7 @@ class TrainingState(typing.NamedTuple):
     params: chex.ArrayTree
     opt_state: optax.OptState
     steps: int
-    rng_key: jax.numpy.ndarray
+    rng_key: jax.random.KeyArray
 
 
 class NoOpLearner(acme.Learner):

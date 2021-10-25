@@ -1,6 +1,6 @@
 import os
 import time
-import typing
+from typing import Any, NamedTuple, Dict
 import uuid
 from pathlib import Path
 from acme.utils.loggers.terminal import TerminalLogger
@@ -12,9 +12,9 @@ from absl import logging
 import moozi as mz
 
 
-class JAXBoardStepData(typing.NamedTuple):
-    scalars: typing.Dict[str, jnp.DeviceArray]
-    histograms: typing.Dict[str, jnp.DeviceArray]
+class JAXBoardStepData(NamedTuple):
+    scalars: Dict[str, Any]
+    histograms: Dict[str, Any]
 
     def update(self, other: "JAXBoardStepData"):
         self.scalars.update(other.scalars)
@@ -27,7 +27,7 @@ class JAXBoardStepData(typing.NamedTuple):
             self.histograms[name] = weights
 
 
-class Data(typing.NamedTuple):
+class Data(NamedTuple):
     # TODO: replace JAXBoardStepData with this class
     name: str
     content: jnp.ndarray

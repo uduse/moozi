@@ -11,7 +11,6 @@ from typing import (
 from absl import logging
 import numpy as np
 import contextlib
-import attr
 import trio
 
 logging.set_verbosity(logging.INFO)

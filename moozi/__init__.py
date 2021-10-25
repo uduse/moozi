@@ -15,6 +15,7 @@ from . import learner
 from . import agent
 from . import link
 from . import batching_layer
+from .config import Config
 
 # from .action_history import ActionHistory
 

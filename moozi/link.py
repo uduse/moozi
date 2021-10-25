@@ -1,23 +1,25 @@
 import functools
 import inspect
-from typing import Any, Dict, List, Union
-import attr
+from typing import Any, Awaitable, Callable, Dict, List, Union
+from dataclasses import dataclass
 
-from absl import logging
-from jax._src.numpy.lax_numpy import isin
-from ray.cloudpickle.cloudpickle import instance
+from moozi.materia import Materia
 
 
-@attr.s(auto_attribs=True)
-class Link:
+@dataclass
+class _AsyncLink:
     callable_obj: Any
     to_read: Union[List[str], str] = "auto"
     to_write: Union[List[str], str] = "auto"
 
+    # validation_type: str = "once"
+
+    _validated: bool = False
+
     async def __call__(self, artifact: object):
         # TODO: slow, cache the parsing and validation results
         keys_to_read = self._get_keys_to_read(artifact)
-        artifact_window = Link._read_artifact(artifact, keys_to_read)
+        artifact_window = _AsyncLink._read_artifact(artifact, keys_to_read)
 
         updates = self.callable_obj(**artifact_window)
 
@@ -27,8 +29,9 @@ class Link:
         if not updates:
             updates = {}
 
-        self._validate_updates(artifact, updates)
-        Link._update_artifact(artifact, updates)
+        self._validate_once(artifact, updates)
+
+        _AsyncLink._update_artifact(artifact, updates)
 
         return updates
 
@@ -53,10 +56,10 @@ class Link:
         if not isinstance(updates, dict):
             raise TypeError("updates should either be a dictionary or `None`")
 
-        if not Link._artifact_has_keys(artifact, list(updates.keys())):
+        if not _AsyncLink._artifact_has_keys(artifact, list(updates.keys())):
             raise ValueError(
                 "keys "
-                + str(Link._get_missing_keys(artifact, list(updates.keys())))
+                + str(_AsyncLink._get_missing_keys(artifact, list(updates.keys())))
                 + " missing"
             )
 
@@ -71,14 +74,22 @@ class Link:
         else:
             raise ValueError("`to_write` type not accepted.")
 
+    def _validate_once(self, artifact, updates):
+        if self._validated:
+            return
+        else:
+            self._validate_updates(artifact, updates)
+            self._validated = True
+
+    @functools.cached_property
     def _wrapped_func_keys(self):
         return set(inspect.signature(self.callable_obj).parameters.keys())
 
     def _get_keys_to_read(self, artifact):
         if self.to_read == "auto":
-            keys = self._wrapped_func_keys()
+            keys = self._wrapped_func_keys
             keys = keys - {"self"}  ## TODO?
-            if not Link._artifact_has_keys(artifact, keys):
+            if not _AsyncLink._artifact_has_keys(artifact, keys):
                 raise ValueError(
                     f"{self._get_missing_keys(artifact, keys)} not in {str(artifact.__dict__.keys())})"
                 )
@@ -89,9 +100,9 @@ class Link:
         return keys
 
 
-@attr.s
-class LinkClassWrapper:
-    class_: type = attr.ib()
+@dataclass
+class _LinkClassWrapper:
+    class_: type
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         return link(self.class_(*args, **kwargs))
@@ -99,19 +110,19 @@ class LinkClassWrapper:
 
 def link(*args, **kwargs):
     if len(args) == 1 and not kwargs and inspect.isclass(args[0]):
-        return LinkClassWrapper(args[0])
+        return _LinkClassWrapper(args[0])
     elif len(args) == 1 and not kwargs and callable(args[0]):
         func = args[0]
-        return Link(func, to_read="auto", to_write="auto")
+        return _AsyncLink(func, to_read="auto", to_write="auto")
     else:
-        func = functools.partial(Link, *args, **kwargs)
+        func = functools.partial(_AsyncLink, *args, **kwargs)
         return func
 
 
-@attr.s
+@dataclass
 class Universe:
-    artifact = attr.ib()
-    laws = attr.ib()
+    artifact: object
+    laws: List[Callable]
 
     def tick(self, times=1):
         for _ in range(times):
@@ -124,15 +135,15 @@ class Universe:
                 law.close()
 
 
-@attr.s
+@dataclass
 class UniverseAsync:
-    artifact = attr.ib()
-    laws = attr.ib()
+    materia: Materia
+    laws: List[Callable[[object], Awaitable]]
 
     async def tick(self, times=1):
         for _ in range(times):
             for law in self.laws:
-                await law(self.artifact)
+                await law(self.materia)
 
     def close(self):
         for law in self.laws:

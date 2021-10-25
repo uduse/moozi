@@ -1,6 +1,8 @@
+import collections
 import copy
+from dataclasses import dataclass, field
 import random
-from typing import Iterable, List, NamedTuple, Optional
+from typing import Deque, Iterable, List, NamedTuple, Optional
 
 import chex
 import dm_env
@@ -222,6 +224,44 @@ class TrainTarget(NamedTuple):
             last_reward=np.asarray(self.last_reward, dtype=np.float32),
             action_probs=np.asarray(self.action_probs, dtype=np.float32),
         )
+
+
+@dataclass(repr=False)
+class ReplayBuffer:
+    # TODO: remove config here
+    config: mz.Config
+
+    store: Deque[TrajectorySample] = field(init=False)
+
+    def __post_init__(self):
+        self.store = collections.deque(maxlen=self.config.replay_buffer_size)
+
+    def add_samples(self, samples: List[TrajectorySample]):
+        self.store.extend(samples)
+        # logging.info(f"Replay buffer size: {self.size()}")
+        return self.size()
+
+    def get_batch(self, batch_size=1):
+        if not self.store:
+            raise ValueError("Empty replay buffer")
+
+        trajs = random.choices(self.store, k=batch_size)
+        batch = []
+        for traj in trajs:
+            random_start_idx = random.randrange(len(traj.reward))
+            target = make_target_from_traj(
+                traj,
+                start_idx=random_start_idx,
+                discount=1.0,
+                num_unroll_steps=self.config.num_unroll_steps,
+                num_td_steps=self.config.num_td_steps,
+                num_stacked_frames=self.config.num_stacked_frames,
+            )
+            batch.append(target)
+        return tree_utils.stack_sequence_fields(batch)
+
+    def size(self):
+        return len(self.store)
 
 
 def make_target_from_traj(

@@ -49,152 +49,6 @@ from trio_asyncio import aio_as_trio
 from acme.utils.loggers import TerminalLogger
 
 from moozi.replay import make_target_from_traj
-from acme_openspiel_wrapper import OpenSpielWrapper
-from config import Config
-
-
-def make_catch():
-    prev_verbosity = logging.get_verbosity()
-    logging.set_verbosity(logging.WARNING)
-
-    env_columns, env_rows = 6, 6
-    raw_env = open_spiel.python.rl_environment.Environment(
-        f"catch(columns={env_columns},rows={env_rows})"
-    )
-    env = OpenSpielWrapper(raw_env)
-    env = SinglePrecisionWrapper(env)
-    env_spec = acme.specs.make_environment_spec(env)
-
-    logging.set_verbosity(prev_verbosity)
-    return env, env_spec
-
-
-def make_tic_tac_toe():
-    raw_env = open_spiel.python.rl_environment.Environment(f"tic_tac_toe")
-    env = OpenSpielWrapper(raw_env)
-    env = SinglePrecisionWrapper(env)
-    env_spec = acme.specs.make_environment_spec(env)
-    return env, env_spec
-
-
-make_env = make_catch
-
-
-def get_observation(timestep: dm_env.TimeStep):
-    if isinstance(timestep.observation, list):
-        assert len(timestep.observation) == 1
-        return timestep.observation[0].observation
-    else:
-        raise NotImplementedError
-
-
-def get_legal_actions(timestep: dm_env.TimeStep):
-    if isinstance(timestep.observation, list):
-        assert len(timestep.observation) == 1
-        return timestep.observation[0].legal_actions
-    else:
-        raise NotImplementedError
-
-
-@dataclass
-class Artifact:
-    # meta
-    universe_id: int = -1
-    num_ticks: int = 0
-    num_episodes: int = 0
-    avg_episodic_reward: float = 0
-    sum_episodic_reward: float = 0
-
-    # environment
-    timestep: dm_env.TimeStep = None
-    obs: np.ndarray = None
-    is_first: bool = True
-    is_last: bool = False
-    to_play: int = -1
-    reward: float = 0.0
-    action: int = -1
-    discount: float = 1.0
-    legal_actions_mask: np.ndarray = None
-
-    # planner
-    # root: Any = None
-    root_value: float = 0
-    action_probs: Any = None
-
-    # player
-    stacked_frames: np.ndarray = None
-
-    output_buffer: tuple = field(default_factory=tuple)
-
-
-@link
-@dataclass
-class FrameStacker:
-    num_frames: int = 1
-
-    padding: Optional[np.ndarray] = None
-    deque: collections.deque = None
-
-    def __post_init__(self):
-        self.deque = collections.deque(maxlen=self.num_frames)
-
-    def __call__(self, timestep) -> Any:
-        if self.padding is None:
-            self._make_padding(timestep)
-
-        if timestep.last():
-            self.deque.clear()
-
-        self.deque.append(get_observation(timestep))
-
-        stacked_frames = self._get_stacked_frames()
-
-        return dict(stacked_frames=stacked_frames)
-
-    def _get_stacked_frames(self):
-        stacked_frames = np.array(list(self.deque))
-        num_frames_to_pad = self.num_frames - len(self.deque)
-        if num_frames_to_pad > 0:
-            paddings = np.stack(
-                [np.copy(self.padding) for _ in range(num_frames_to_pad)], axis=0
-            )
-            stacked_frames = np.append(paddings, np.array(list(self.deque)), axis=0)
-        return stacked_frames
-
-    def _make_padding(self, timestep):
-        assert timestep.first()
-        shape = get_observation(timestep).shape
-        self.padding = np.zeros(shape)
-
-
-# @link
-# def set_legal_actions(timestep):
-#     # TODO: make a part of the environment law
-#     return dict(legal_actions_mask=get_legal_actions(timestep))
-
-
-@link
-def update_episode_stats(timestep, sum_episodic_reward, num_episodes, universe_id):
-    if timestep.last():
-        sum_episodic_reward = sum_episodic_reward + float(timestep.reward)
-        num_episodes = num_episodes + 1
-        avg_episodic_reward = round(sum_episodic_reward / num_episodes, 3)
-
-        result = dict(
-            num_episodes=num_episodes,
-            sum_episodic_reward=sum_episodic_reward,
-            avg_episodic_reward=avg_episodic_reward,
-        )
-        logging.debug({**dict(universe_id=universe_id), **result})
-
-        return result
-
-
-@link
-def output_reward(is_last, reward, output_buffer):
-    if is_last:
-        output_buffer = output_buffer + (reward,)
-        return dict(output_buffer=output_buffer)
 
 
 @ray.remote
@@ -206,90 +60,8 @@ class LoggerActor:
         self.logger.write(data)
 
 
-@link
-def increment_tick(num_ticks):
-    return {"num_ticks": num_ticks + 1}
-
-
-@link
-@dataclass
-class EnvironmentLaw:
-    env_state: dm_env.Environment
-
-    def __call__(self, timestep: dm_env.TimeStep, action: int):
-        if timestep is None or timestep.last():
-            timestep = self.env_state.reset()
-        else:
-            timestep = self.env_state.step([action])
-        if timestep.reward is None:
-            reward = 0.0
-        else:
-            reward = float(np.nan_to_num(timestep.reward))
-        return dict(
-            timestep=timestep,
-            obs=get_observation(timestep),
-            is_first=timestep.first(),
-            is_last=timestep.last(),
-            to_play=self.env_state.current_player,
-            reward=reward,
-            legal_actions_mask=get_legal_actions(timestep),
-        )
-
-
-@dataclass(repr=False)
-class RolloutWorker:
-    batching_layers: Optional[List[BatchingLayer]] = None
-    universes: Optional[List[UniverseAsync]] = None
-
-    def setup(
-        self, factory: Callable[[], Tuple[List[BatchingLayer], List[UniverseAsync]]]
-    ):
-        self.batching_layers, self.universes = factory()
-
-    def set_verbosity(self, verbosity):
-        logging.set_verbosity(verbosity)
-
-    def run(self, num_ticks):
-        async def main_loop():
-            async with trio.open_nursery() as main_nursery:
-                for b in self.batching_layers:
-                    b.is_paused = False
-                    main_nursery.start_soon(b.start_processing)
-                    # TODO: toggle logging
-                    # main_nursery.start_soon(b.start_logging)
-
-                async with trio.open_nursery() as universe_nursery:
-                    for u in self.universes:
-                        universe_nursery.start_soon(partial(u.tick, times=num_ticks))
-
-                for b in self.batching_layers:
-                    b.is_paused = True
-
-        trio_asyncio.run(main_loop)
-
-        return self.flush_output_buffers()
-
-    def flush_output_buffers(self) -> List[TrajectorySample]:
-        outputs: List[TrajectorySample] = sum(
-            (list(u.artifact.output_buffer) for u in self.universes), []
-        )
-
-        for u in self.universes:
-            u.artifact.output_buffer = tuple()
-        return outputs
-
-
-@link
-def set_random_action_from_timestep(timestep: dm_env.TimeStep):
-    action = -1
-    if not timestep.last():
-        legal_actions = timestep.observation[0].legal_actions
-        random_action = np.random.choice(np.flatnonzero(legal_actions == 1))
-        action = random_action
-    return dict(action=action)
-
-
 def make_sgd_step_fn(network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, optimizer):
+    # @partial(jax.jit, backend="cpu")
     @jax.jit
     @chex.assert_max_traces(n=1)
     def sgd_step_fn(training_state: TrainingState, batch: mz.replay.TrainTarget):
@@ -324,8 +96,19 @@ def make_sgd_step_fn(network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, opti
     return sgd_step_fn
 
 
+@dataclass(repr=False)
 class ParameterOptimizer:
-    def __init__(self, network, params, loss_fn, optimizer, loggers=None):
+    network: mz.nn.NeuralNetwork = field(init=False)
+    state: TrainingState = field(init=False)
+    sgd_step_fn: Callable = field(init=False)
+
+    loggers: List[mz.logging.Logger] = field(default_factory=list)
+
+    _num_updates: int = 0
+
+    def build(self, factory):
+        network, params, loss_fn, optimizer = factory()
+        self.network = network
         self.state = TrainingState(
             params=params,
             opt_state=optimizer.init(params),
@@ -333,8 +116,6 @@ class ParameterOptimizer:
             rng_key=jax.random.PRNGKey(0),
         )
         self.sgd_step_fn = make_sgd_step_fn(network, loss_fn, optimizer)
-        self.loggers = [] if not loggers else loggers
-        self._num_updates: int = 0
 
     def update(self, batch):
         if len(batch) == 0:
@@ -342,10 +123,12 @@ class ParameterOptimizer:
         self.state, step_data = self.sgd_step_fn(self.state, batch)
         self._num_updates += 1
         self._log_step_data(step_data)
-        return self.state.params
 
     def get_params(self):
         return self.state.params
+
+    def get_network(self):
+        return self.network
 
     def save(self, path):
         with open(path, "wb") as f:
@@ -462,7 +245,7 @@ class InferenceServer:
 
 @link
 @dataclass
-class StepSampleSaver:
+class TrajectoryOutputWriter:
     traj_buffer: list = field(default_factory=list)
 
     def __call__(
@@ -494,54 +277,13 @@ class StepSampleSaver:
             return dict(output_buffer=output_buffer + (traj,))
 
 
-@dataclass(repr=False)
-class ReplayBuffer:
-    # TODO: remove config here
-    config: Config
-
-    store: Deque[TrajectorySample] = field(init=False)
-
-    def __post_init__(self):
-        self.store = collections.deque(maxlen=self.config.replay_buffer_size)
-
-    def add_samples(self, samples: List[TrajectorySample]):
-        self.store.extend(samples)
-        logging.info(f"Replay buffer size: {self.size()}")
-        return self.size()
-
-    def get_batch(self, batch_size=1):
-        if not self.store:
-            raise ValueError("Empty replay buffer")
-
-        trajs = random.choices(self.store, k=batch_size)
-        batch = []
-        for traj in trajs:
-            random_start_idx = random.randrange(len(traj.reward))
-            target = make_target_from_traj(
-                traj,
-                start_idx=random_start_idx,
-                discount=1.0,
-                num_unroll_steps=self.config.num_unroll_steps,
-                num_td_steps=self.config.num_td_steps,
-                num_stacked_frames=self.config.num_stacked_frames,
-            )
-            batch.append(target)
-        return stack_sequence_fields(batch)
-
-    # def add_and_get_batch(self, samples: List[TrajectorySample], batch_size=1):
-    #     self.add_samples(samples)
-    #     return self.get_batch(batch_size=batch_size)
-
-    def size(self):
-        return len(self.store)
-
-
 class MetricsReporter:
     def __init__(self) -> None:
-        self.logger = mz.logging.JAXBoardLogger(name="reporter")
+        self.loggers = [mz.logging.JAXBoardLogger(name="reporter")]
 
     def report(self, step_data: JAXBoardStepData):
-        self.logger.write(step_data)
+        for logger in self.loggers:
+            logger.write(step_data)
 
 
 MetricsReporterActor = ray.remote(num_cpus=0)(MetricsReporter)

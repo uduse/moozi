@@ -1,35 +1,37 @@
 # %%
 from functools import partial
 
-import chex
-import dm_env
-import jax
 import jax.numpy as jnp
 import moozi as mz
 import numpy as np
-import optax
 import ray
-import tree
 from absl import logging
 from acme import specs
 from acme.utils.loggers import TerminalLogger
 from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
-
 from acme.wrappers import OpenSpielWrapper, SinglePrecisionWrapper, open_spiel_wrapper
 from acme.wrappers.frame_stacking import FrameStacker
 from moozi import batching_layer
 from moozi.batching_layer import BatchingClient, BatchingLayer
-from moozi.config import Config
+from moozi.driver_utils import (
+    make_evaluator_universes,
+    make_param_opt_properties,
+    make_rollout_worker_batching_layers,
+    make_rollout_worker_universes,
+)
 from moozi.laws import *
-from moozi.link import Universe, UniverseAsync, link
-from moozi.logging import JAXBoardLogger, JAXBoardStepData
-from moozi.materia import Materia
+from moozi.logging import JAXBoardLogger, JAXBoardStepData, MetricsReporterActor
 from moozi.nn import NeuralNetwork
+from moozi.parameter_optimizer import ParameterOptimizer
 from moozi.policy.mcts_async import MCTSAsync, make_async_planner_law
-from moozi.policy.policy import PolicyFeed
-from moozi.replay import StepSample, TrajectorySample, make_target_from_traj
+from moozi.replay import (
+    ReplayBuffer,
+    StepSample,
+    TrajectorySample,
+    make_target_from_traj,
+)
 from moozi.rollout_worker import RolloutWorkerWithWeights
-from moozi.utils import SimpleBuffer, WallTimer, as_coroutine, check_ray_gpu
+from moozi.utils import WallTimer, as_coroutine, check_ray_gpu
 from trio_asyncio import aio_as_trio
 
 logging.set_verbosity(logging.INFO)
@@ -39,7 +41,7 @@ ray.init(ignore_reinit_error=True)
 
 
 # %%
-config = Config().update(
+config = mz.Config().update(
     batch_size=256,
     discount=0.99,
     num_unroll_steps=3,
@@ -70,7 +72,7 @@ param_opt = ray.remote(ParameterOptimizer).options(num_gpus=0.5).remote()
 
 ray.get(
     [
-        param_opt.setup.remote(partial(setup_param_opt, config=config)),
+        param_opt.build.remote(partial(make_param_opt_properties, config=config)),
         param_opt.set_loggers.remote(
             lambda: [
                 # TerminalLogger(label="Parameter Optimizer", print_fn=print),
@@ -85,21 +87,22 @@ ray.get(
 replay_buffer = ray.remote(ReplayBuffer).remote(config)
 
 # %%
-rollout_workers = []
-for _ in range(config.num_rollout_workers):
-    worker = ray.remote(RolloutWorker).remote()
+def make_worker(config, param_opt):
+    worker = ray.remote(RolloutWorkerWithWeights).remote()
     worker.set_network.remote(param_opt.get_network.remote())
     worker.set_params.remote(param_opt.get_params.remote())
-    worker.set_batching_layers.remote(make_rollout_worker_batching_layers)
-    worker.set_universes.remote(partial(make_rollout_worker_universes, config=config))
-    rollout_workers.append(worker)
+    worker.build_batching_layers.remote(make_rollout_worker_batching_layers)
+    worker.build_universes.remote(partial(make_rollout_worker_universes, config=config))
+    return worker
+
+rollout_workers = [make_worker(config, param_opt) for _ in range(config.num_rollout_workers)]
 
 # %%
 # ray.get(worker.run.remote(10))
 
 
 # %%
-evaluator = ray.remote(RolloutWorker).options(name="Evaluator").remote()
+evaluator = ray.remote(RolloutWorkerWithWeights).options(name="Evaluator").remote()
 evaluator.set_network.remote(param_opt.get_network.remote())
 evaluator.set_params.remote(param_opt.get_params.remote())
 evaluator.set_universes.remote(partial(make_evaluator_universes, config=config))

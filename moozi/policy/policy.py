@@ -15,15 +15,10 @@ from acme.wrappers.open_spiel_wrapper import OLT
 from nptyping import NDArray
 
 
-class PolicyFeed(NamedTuple):
-    stacked_frames: jnp.ndarray
-    legal_actions_mask: jnp.ndarray
-    random_key: jnp.ndarray
 
-
-class PolicyResult(NamedTuple):
-    action: jnp.ndarray
-    extras: Dict[str, Any]
+# class PolicyResult(NamedTuple):
+#     action: jnp.ndarray
+#     extras: Dict[str, Any]
 
 
 # class ActionSelector(object):
@@ -39,7 +34,7 @@ class PolicyResult(NamedTuple):
 #     return (action, legal_action_probs)
 
 
-PolicyFn = Callable[[Any, PolicyFeed], PolicyResult]
+# PolicyFn = Callable[[Any, PolicyFeed], PolicyResult]
 
 # TODO: make this callable, not a function
 # class PriorPolicy(PolicyFn):

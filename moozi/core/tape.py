@@ -2,11 +2,11 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 import numpy as np
 
-from moozi.policies.policy import PolicyFeed
+from moozi import PolicyFeed
 
 
 @dataclass
-class Materia:
+class Tape:
     # meta
     universe_id: int = -1
     num_ticks: int = 0
@@ -15,7 +15,6 @@ class Materia:
     sum_episodic_reward: float = 0
 
     # environment
-    # timestep: dm_env.TimeStep = None
     obs: np.ndarray = None
     is_first: bool = True
     is_last: bool = False
@@ -27,7 +26,7 @@ class Materia:
 
     # planner
     root_value: float = 0
-    action_probs: Any = None
+    action_probs: np.ndarray = None
 
     # player
     stacked_frames: np.ndarray = None

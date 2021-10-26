@@ -7,8 +7,8 @@ import numpy as np
 from moozi import link
 from moozi.batching_layer import BatchingClient
 from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
-from moozi.policies.mcts_core import Node
-from moozi.policies.policy import PolicyFeed, PolicyFn, PolicyResult
+from moozi.policy.mcts_core import Node
+from moozi import PolicyFeed
 from moozi.utils import as_coroutine
 
 
@@ -63,14 +63,9 @@ def make_async_planner_law(init_inf_fn, recurr_inf_fn, dim_actions, num_simulati
     )
 
     @link
-    async def planner(is_last, stacked_frames, legal_actions_mask):
+    async def planner(is_last, policy_feed):
         if not is_last:
-            feed = PolicyFeed(
-                stacked_frames=stacked_frames,
-                legal_actions_mask=legal_actions_mask,
-                random_key=None,
-            )
-            mcts_tree = await mcts(feed)
+            mcts_tree = await mcts(policy_feed)
             action, _ = mcts_tree.select_child()
 
             action_probs = np.zeros((3,), dtype=np.float32)

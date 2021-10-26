@@ -18,9 +18,9 @@ from moozi.laws import (
     output_reward,
 )
 from moozi.link import UniverseAsync
-from moozi.materia import Materia
+from moozi.tape import Tape
 from moozi.policy.mcts_async import make_async_planner_law
-from moozi.raw_env_factory import make_env_spec
+from moozi.env import make_env_spec
 from moozi.rollout_worker import RolloutWorkerWithWeights
 import numpy as np
 import moozi as mz
@@ -69,7 +69,7 @@ def make_rollout_worker_universes(
     bl_init_inf, bl_recurr_inf = worker_self.batching_layers
 
     def make_rollout_universe(index):
-        materia = Materia(-1)
+        tape = tape(-1)
         planner_law = make_async_planner_law(
             bl_init_inf.spawn_client().request,
             bl_recurr_inf.spawn_client().request,
@@ -83,7 +83,7 @@ def make_rollout_worker_universes(
             update_episode_stats,
             increment_tick,
         ]
-        return UniverseAsync(materia, laws)
+        return UniverseAsync(tape, laws)
 
     universes = [
         make_rollout_universe(i) for i in range(config.num_rollout_universes_per_worker)
@@ -92,7 +92,7 @@ def make_rollout_worker_universes(
 
 
 def make_evaluator_universes(evaluator_self, config: Config) -> List[UniverseAsync]:
-    materia = Materia(-1)
+    tape = tape(-1)
     planner_law = make_async_planner_law(
         lambda x: evaluator_self.init_inf_fn_unbatched(evaluator_self.params, x),
         lambda x: evaluator_self.recurr_inf_fn_unbatched(
@@ -109,10 +109,10 @@ def make_evaluator_universes(evaluator_self, config: Config) -> List[UniverseAsy
         update_episode_stats,
         increment_tick,
     ]
-    return [UniverseAsync(materia, laws)]
+    return [UniverseAsync(tape, laws)]
 
 
-def setup_param_opt(config):
+def make_param_opt_properties(config):
     dim_action = config.env_spec.actions.num_values
     frame_shape = config.env_spec.observations.observation.shape
     stacked_frame_shape = (config.num_stacked_frames,) + frame_shape

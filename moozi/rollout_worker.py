@@ -61,11 +61,11 @@ class RolloutWorkerWithWeights:
 
     def _flush_output_buffers(self) -> List[TrajectorySample]:
         outputs: List[TrajectorySample] = sum(
-            (list(u.materia.output_buffer) for u in self.universes), []
+            (list(u.tape.output_buffer) for u in self.universes), []
         )
 
         for u in self.universes:
-            u.materia.output_buffer = tuple()
+            u.tape.output_buffer = tuple()
         return outputs
 
     def set_params(self, params):

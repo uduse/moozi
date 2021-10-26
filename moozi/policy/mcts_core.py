@@ -11,12 +11,10 @@ import ray.util.queue
 import rlax
 import trio
 from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
-from moozi.policies.policy import PolicyFeed, PolicyFn, PolicyResult
-
+from moozi import PolicyFeed
 
 from typing import Optional
 
-import attr
 
 # TODO: not necessary CPU?
 _safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")

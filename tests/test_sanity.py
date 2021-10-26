@@ -1,5 +1,3 @@
-import os
-import sys
 import time
 
 import acme.jax.variable_utils
@@ -7,7 +5,6 @@ import acme.wrappers.open_spiel_wrapper
 import dm_env
 import jax
 import moozi as mz
-import open_spiel.python.rl_environment
 import pytest
 import reverb
 from acme.agents import agent as acme_agent

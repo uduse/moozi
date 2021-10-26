@@ -1,9 +1,6 @@
 from dataclasses import dataclass
 import random
 import functools
-import typing
-import uuid
-from logging import root
 
 import acme.jax.variable_utils
 import anytree
@@ -11,35 +8,6 @@ import chex
 import dm_env
 import numpy as np
 from anytree.exporter import DotExporter, UniqueDotExporter
-
-
-class SimpleBuffer(object):
-    r"""A simple FIFO queue."""
-
-    def __init__(self, size: int = 1000) -> None:
-        self._list: list = []
-        self._size = size
-
-    def put(self, value):
-        self._list.append(value)
-        if len(self._list) > self._size:
-            self._list = self._list[-self._size :]
-
-    def get(self):
-        return self._list
-
-    def is_full(self) -> bool:
-        return len(self._list) == self._size
-
-    def __len__(self):
-        return len(self._list)
-
-    @property
-    def size(self):
-        return self._size
-
-    def clear(self):
-        self._list.clear()
 
 
 def print_traj_in_env(env):
@@ -130,7 +98,6 @@ def as_coroutine(func):
         return wrapper
 
 
-import contextlib
 import time
 
 
@@ -147,6 +114,7 @@ class WallTimer:
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.end()
+        self.print()
 
     def start(self):
         self.start_time = time.time()

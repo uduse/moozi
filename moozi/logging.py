@@ -1,13 +1,12 @@
-import os
 import time
 from typing import Any, NamedTuple, Dict
-import uuid
 from pathlib import Path
 from acme.utils.loggers.terminal import TerminalLogger
 
 import haiku as hk
 import jax.numpy as jnp
 from absl import logging
+import ray
 
 import moozi as mz
 
@@ -27,55 +26,8 @@ class JAXBoardStepData(NamedTuple):
             self.histograms[name] = weights
 
 
-class Data(NamedTuple):
-    # TODO: replace JAXBoardStepData with this class
-    name: str
-    content: jnp.ndarray
-
-
-def is_scalar(datum: Data):
-    return jnp.isscalar(datum.content)
-
-
-def is_vector(datum: Data):
-    return jnp.ndim(datum.content) == 1
-
-
 class Logger:
     pass
-
-
-class FileLogger(Logger):
-    # TODO: implement this
-    def __init__(self, name, fname, time_delta: float = 0.0):
-        self._name = name
-        curr_dir_path = Path(os.path.abspath("."))
-        self._f = curr_dir_path.open("w")
-        self._time_delta = time_delta
-        self._time = time.time()
-        self._steps = 0
-        print(f"{self._name} is logging to {curr_dir_path}")
-
-    def write(self, data: Data):
-        now = time.time()
-        if (now - self._time) > self._time_delta:
-            self._write_now(data)
-            self._time = now
-        self._steps += 1
-
-    def _write_now(self, data: Data):
-        if is_scalar(data):
-            self._f.write(f"{str(self._steps).ljust(3)} {data.name} {data.content}\n")
-        # elif is_vector(data):
-        #     np.histogram(data.content, bins=10, range=(0, 1))
-        #     self._f.write(f"{str(self._steps).ljust(3)} {data.name} {data.content.shape}\n")
-
-    def close(self):
-        r"""
-        Always call this method the logging is finished.
-        Otherwise unexpected hangings may occur.
-        """
-        return self._writer.close()
 
 
 class JAXBoardLogger(Logger):
@@ -121,3 +73,15 @@ class JAXBoardLogger(Logger):
         Otherwise unexpected hangings may occur.
         """
         return self._writer.close()
+
+
+class MetricsReporter:
+    def __init__(self) -> None:
+        self.loggers = [mz.logging.JAXBoardLogger(name="reporter")]
+
+    def report(self, step_data: JAXBoardStepData):
+        for logger in self.loggers:
+            logger.write(step_data)
+
+
+MetricsReporterActor = ray.remote(num_cpus=0)(MetricsReporter)

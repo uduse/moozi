@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 import numpy as np
+
+from moozi.policies.policy import PolicyFeed
 
 
 @dataclass
@@ -29,5 +31,6 @@ class Materia:
 
     # player
     stacked_frames: np.ndarray = None
+    policy_feed: Optional[PolicyFeed] = None
 
     output_buffer: tuple = field(default_factory=tuple)

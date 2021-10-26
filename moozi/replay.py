@@ -1,8 +1,7 @@
 import collections
-import copy
 from dataclasses import dataclass, field
 import random
-from typing import Deque, Iterable, List, NamedTuple, Optional
+from typing import Deque, List, NamedTuple
 
 import chex
 import dm_env

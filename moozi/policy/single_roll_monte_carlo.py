@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, NamedTuple
+from typing import Any, Callable, NamedTuple
 from acme.core_test import StepCountingLearner
 import chex
 import jax

@@ -1,3 +1,4 @@
+import functools
 from acme.wrappers import OpenSpielWrapper, SinglePrecisionWrapper
 from acme.specs import make_environment_spec
 import open_spiel
@@ -28,14 +29,9 @@ def make_tic_tac_toe():
     return env, env_spec
 
 
-# make_env = make_catch
-
-
 def make_openspiel_env(str):
     prev_verbosity = logging.get_verbosity()
     logging.set_verbosity(logging.WARNING)
-
-    env_columns, env_rows = 6, 6
     raw_env = open_spiel.python.rl_environment.Environment(str)
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
@@ -45,9 +41,20 @@ def make_openspiel_env(str):
     return env, env_spec
 
 
-def make_env(str):
+def make_env_and_spec(str):
     try:
-        env = make_openspiel_env(str)
-        return env
+        env, env_spec = make_openspiel_env(str)
+        return env, env_spec
     except:
-        pass
+        raise ValueError(f"Environment {str} not found")
+
+
+def make_env(str):
+    env, _ = make_openspiel_env(str)
+    return env
+
+
+@functools.lru_cache(maxsize=None)
+def make_env_spec(str):
+    _, env_spec = make_openspiel_env(str)
+    return env_spec

@@ -16,12 +16,12 @@ class _AsyncLink:
 
     _validated: bool = False
 
-    async def __call__(self, artifact: object):
+    async def __call__(self, materia: object):
         # TODO: slow, cache the parsing and validation results
-        keys_to_read = self._get_keys_to_read(artifact)
-        artifact_window = _AsyncLink._read_artifact(artifact, keys_to_read)
+        keys_to_read = self._get_keys_to_read(materia)
+        materia_window = _AsyncLink._read_materia(materia, keys_to_read)
 
-        updates = self.callable_obj(**artifact_window)
+        updates = self.callable_obj(**materia_window)
 
         if inspect.isawaitable(updates):
             updates = await updates
@@ -29,37 +29,37 @@ class _AsyncLink:
         if not updates:
             updates = {}
 
-        self._validate_once(artifact, updates)
+        self._validate_once(materia, updates)
 
-        _AsyncLink._update_artifact(artifact, updates)
+        _AsyncLink._update_materia(materia, updates)
 
         return updates
 
     @staticmethod
-    def _read_artifact(artifact, keys_to_read: List[str]):
-        return {key: getattr(artifact, key) for key in keys_to_read}
+    def _read_materia(materia, keys_to_read: List[str]):
+        return {key: getattr(materia, key) for key in keys_to_read}
 
     @staticmethod
-    def _update_artifact(artifact, updates: Dict[str, Any]):
+    def _update_materia(materia, updates: Dict[str, Any]):
         for key, val in updates.items():
-            setattr(artifact, key, val)
+            setattr(materia, key, val)
 
     @staticmethod
-    def _artifact_has_keys(artifact, keys: List[str]) -> bool:
-        return set(keys) <= set(artifact.__dict__.keys())
+    def _materia_has_keys(materia, keys: List[str]) -> bool:
+        return set(keys) <= set(materia.__dict__.keys())
 
     @staticmethod
-    def _get_missing_keys(artifact, keys: List[str]) -> List[str]:
-        return list(set(keys) - set(artifact.__dict__.keys()))
+    def _get_missing_keys(materia, keys: List[str]) -> List[str]:
+        return list(set(keys) - set(materia.__dict__.keys()))
 
-    def _validate_updates(self, artifact, updates):
+    def _validate_updates(self, materia, updates):
         if not isinstance(updates, dict):
             raise TypeError("updates should either be a dictionary or `None`")
 
-        if not _AsyncLink._artifact_has_keys(artifact, list(updates.keys())):
+        if not _AsyncLink._materia_has_keys(materia, list(updates.keys())):
             raise ValueError(
                 "keys "
-                + str(_AsyncLink._get_missing_keys(artifact, list(updates.keys())))
+                + str(_AsyncLink._get_missing_keys(materia, list(updates.keys())))
                 + " missing"
             )
 
@@ -74,24 +74,24 @@ class _AsyncLink:
         else:
             raise ValueError("`to_write` type not accepted.")
 
-    def _validate_once(self, artifact, updates):
+    def _validate_once(self, materia, updates):
         if self._validated:
             return
         else:
-            self._validate_updates(artifact, updates)
+            self._validate_updates(materia, updates)
             self._validated = True
 
     @functools.cached_property
     def _wrapped_func_keys(self):
         return set(inspect.signature(self.callable_obj).parameters.keys())
 
-    def _get_keys_to_read(self, artifact):
+    def _get_keys_to_read(self, materia):
         if self.to_read == "auto":
             keys = self._wrapped_func_keys
             keys = keys - {"self"}  ## TODO?
-            if not _AsyncLink._artifact_has_keys(artifact, keys):
+            if not _AsyncLink._materia_has_keys(materia, keys):
                 raise ValueError(
-                    f"{self._get_missing_keys(artifact, keys)} not in {str(artifact.__dict__.keys())})"
+                    f"{self._get_missing_keys(materia, keys)} not in {str(materia.__dict__.keys())})"
                 )
         elif isinstance(self.to_read, list):
             keys = self.to_read
@@ -121,13 +121,13 @@ def link(*args, **kwargs):
 
 @dataclass
 class Universe:
-    artifact: object
+    materia: object
     laws: List[Callable]
 
     def tick(self, times=1):
         for _ in range(times):
             for law in self.laws:
-                law(self.artifact)
+                law(self.materia)
 
     def close(self):
         for law in self.laws:

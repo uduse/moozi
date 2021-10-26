@@ -1,11 +1,14 @@
-from dataclasses import dataclass, field
-import numpy as np
 import collections
+from dataclasses import dataclass, field
 from typing import Any, Deque, Optional
-from moozi.link import link
 
-from absl import logging
 import dm_env
+import numpy as np
+from absl import logging
+from acme.utils.tree_utils import stack_sequence_fields
+from moozi.link import link
+from moozi.policies.policy import PolicyFeed
+from moozi.replay import StepSample
 
 
 @link
@@ -119,3 +122,48 @@ def set_random_action_from_timestep(is_last, legal_actions):
         random_action = np.random.choice(np.flatnonzero(legal_actions == 1))
         action = random_action
     return dict(action=action)
+
+
+@link
+@dataclass
+class TrajectoryOutputWriter:
+    traj_buffer: list = field(default_factory=list)
+
+    def __call__(
+        self,
+        obs,
+        action,
+        reward,
+        root_value,
+        is_first,
+        is_last,
+        action_probs,
+        output_buffer,
+    ):
+        step_record = StepSample(
+            frame=obs,
+            reward=reward,
+            is_first=is_first,
+            is_last=is_last,
+            action=action,
+            root_value=root_value,
+            action_probs=action_probs,
+        ).cast()
+
+        self.traj_buffer.append(step_record)
+
+        if is_last:
+            traj = stack_sequence_fields(self.traj_buffer)
+            self.traj_buffer.clear()
+            return dict(output_buffer=output_buffer + (traj,))
+
+
+@link
+def set_policy_feed(is_last, stacked_frames, legal_actions_mask):
+    if not is_last:
+        feed = PolicyFeed(
+            stacked_frames=stacked_frames,
+            legal_actions_mask=legal_actions_mask,
+            random_key=None,
+        )
+        return dict(feed=feed)

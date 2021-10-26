@@ -1,9 +1,10 @@
-from dataclasses import InitVar, dataclass, field
-from typing import Any, Awaitable, Callable, Dict, NamedTuple, Optional
+from dataclasses import InitVar, dataclass
+from typing import Awaitable, Callable
 
 import inspect
 import jax.numpy as jnp
 import numpy as np
+from moozi import link
 from moozi.batching_layer import BatchingClient
 from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
 from moozi.policies.mcts_core import Node
@@ -51,3 +52,31 @@ class MCTSAsync:
 
     def __del__(self):
         """TODO: relase recurrent states stored remotely."""
+
+
+def make_async_planner_law(init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10):
+    mcts = MCTSAsync(
+        init_inf_fn=init_inf_fn,
+        recurr_inf_fn=recurr_inf_fn,
+        num_simulations=num_simulations,
+        dim_action=dim_actions,
+    )
+
+    @link
+    async def planner(is_last, stacked_frames, legal_actions_mask):
+        if not is_last:
+            feed = PolicyFeed(
+                stacked_frames=stacked_frames,
+                legal_actions_mask=legal_actions_mask,
+                random_key=None,
+            )
+            mcts_tree = await mcts(feed)
+            action, _ = mcts_tree.select_child()
+
+            action_probs = np.zeros((3,), dtype=np.float32)
+            for a, visit_count in mcts_tree.get_children_visit_counts().items():
+                action_probs[a] = visit_count
+            action_probs /= np.sum(action_probs)
+            return dict(action=action, action_probs=action_probs)
+
+    return planner

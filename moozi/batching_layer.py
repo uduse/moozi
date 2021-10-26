@@ -4,9 +4,7 @@ from typing import (
     AsyncContextManager,
     Awaitable,
     Callable,
-    ClassVar,
-    ContextManager,
-    Coroutine,
+    ClassVar
 )
 from absl import logging
 import numpy as np
@@ -17,6 +15,7 @@ logging.set_verbosity(logging.INFO)
 
 
 # TODO: rewrite everything in asyncio?
+
 
 @dataclass
 class BatchingClient:

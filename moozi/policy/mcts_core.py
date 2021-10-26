@@ -1,7 +1,7 @@
 import functools
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, NamedTuple, Optional
+from typing import Optional
 
 import anytree
 import jax
@@ -22,7 +22,8 @@ import attr
 _safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")
 # softmax = jax.jit(jax.nn.softmax, backend="cpu")
 
-@functools.partial(jax.jit, backend='cpu')
+
+@functools.partial(jax.jit, backend="cpu")
 def softmax(x):
     """Compute softmax values for each sets of scores in x."""
     e_x = jnp.exp(x - jnp.max(x))

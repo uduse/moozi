@@ -1,21 +1,12 @@
-from typing import Any, Callable, Optional
-import optax
-import ray
-from dataclasses import dataclass, field, InitVar
+from dataclasses import asdict, dataclass
+import pprint
 
 
 @dataclass
 class Config:
     seed: int = 0
 
-    # TODO: replace with str and env getter
-    # env_factory: Optional[Callable] = None
-    env: str = ''
-    # env_spec: Any = None
-    # artifact_factory: Optional[Callable] = None
-
-    num_rollout_workers: int = 1
-    num_rollout_universes_per_worker: int = 1
+    env: str = ""
 
     num_stacked_frames: int = 1
     num_unroll_steps: int = 5
@@ -23,6 +14,7 @@ class Config:
     discount: float = 1.0
 
     dim_repr: int = 10
+
     weight_decay: float = 1e-4
 
     batch_size: int = 256
@@ -30,6 +22,16 @@ class Config:
 
     replay_buffer_size: int = 1000
 
-    num_epochs: int = 1
-    num_ticks_per_epoch: int = 1
-    num_updates_per_samples_added: int = 1
+    num_rollout_workers: int = 2
+    num_rollout_universes_per_worker: int = 2
+    num_epochs: int = 2
+    num_ticks_per_epoch: int = 10
+    num_updates_per_samples_added: int = 2
+
+    def print(self):
+        pprint.pprint(asdict(self))
+
+    def update(self, **kwargs):
+        for k, v in kwargs.items():
+            if hasattr(self, k):
+                setattr(self, k, v)

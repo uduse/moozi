@@ -1,11 +1,10 @@
 import os
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from functools import partial
 from typing import (
     Any,
     Callable,
-    List,
-    Optional,
+    List
 )
 
 import jax
@@ -22,19 +21,19 @@ from moozi.replay import StepSample, TrajectorySample, make_target_from_traj
 
 @dataclass(repr=False)
 class RolloutWorkerWithWeights:
-    batching_layers: Optional[List[BatchingLayer]] = field(default_factory=list)
+    batching_layers: List[BatchingLayer] = field(default_factory=list)
     universes: List[UniverseAsync] = field(init=False)
 
     network: mz.nn.NeuralNetwork = field(init=False)
-    weights: Any = field(init=False)
+    params: Any = field(init=False)
 
     init_inf_fn: Callable = field(init=False)
     recurr_inf_fn: Callable = field(init=False)
 
-    def make_batching_layers(self, factory):
+    def build_batching_layers(self, factory):
         self.batching_layers = factory(self)
 
-    def make_universes(self, factory):
+    def build_universes(self, factory):
         self.universes = factory(self)
 
     def set_verbosity(self, verbosity):
@@ -69,8 +68,8 @@ class RolloutWorkerWithWeights:
             u.materia.output_buffer = tuple()
         return outputs
 
-    def set_weights(self, weights):
-        self.weights = weights
+    def set_params(self, params):
+        self.params = params
 
     def set_network(self, network: mz.nn.NeuralNetwork):
         logging.info("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))

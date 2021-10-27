@@ -1,47 +1,22 @@
 # %%
 from functools import partial
 
-import jax.numpy as jnp
 import moozi as mz
-import numpy as np
 import ray
 from absl import logging
-from acme import specs
-from acme.utils.loggers import TerminalLogger
-from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
-from acme.wrappers import OpenSpielWrapper, SinglePrecisionWrapper, open_spiel_wrapper
-from acme.wrappers.frame_stacking import FrameStacker
-from moozi import batching_layer
-from moozi.batching_layer import BatchingClient, BatchingLayer
-from moozi.driver_utils import (
-    make_evaluator_universes,
-    make_param_opt_properties,
-    make_rollout_worker_batching_layers,
-    make_rollout_worker_universes,
-)
-from moozi.laws import *
-from moozi.logging import JAXBoardLogger, JAXBoardStepData, MetricsReporterActor
-from moozi.nn import NeuralNetwork
+from moozi.logging import JAXBoardStepData, MetricsReporterActor
 from moozi.parameter_optimizer import ParameterOptimizer
-from moozi.policy.mcts_async import MCTSAsync, make_async_planner_law
-from moozi.replay import (
-    ReplayBuffer,
-    StepSample,
-    TrajectorySample,
-    make_target_from_traj,
-)
-from moozi.rollout_worker import RolloutWorkerWithWeights
-from moozi.utils import WallTimer, as_coroutine, check_ray_gpu
-from trio_asyncio import aio_as_trio
+from moozi.replay import ReplayBuffer
+from moozi.utils import WallTimer
 
-logging.set_verbosity(logging.INFO)
-
+from utils import *
 
 ray.init(ignore_reinit_error=True)
 
 
 # %%
 config = mz.Config().update(
+    env=f"catch(columns=6,rows=6)",
     batch_size=256,
     discount=0.99,
     num_unroll_steps=3,
@@ -67,13 +42,12 @@ print(f"num_interactions: {num_interactions}")
 
 # %%
 metrics_reporter = MetricsReporterActor.remote()
-# %%
 param_opt = ray.remote(ParameterOptimizer).options(num_gpus=0.5).remote()
 
 ray.get(
     [
         param_opt.build.remote(partial(make_param_opt_properties, config=config)),
-        param_opt.set_loggers.remote(
+        param_opt.build_loggers.remote(
             lambda: [
                 # TerminalLogger(label="Parameter Optimizer", print_fn=print),
                 mz.logging.JAXBoardLogger(name="param_opt"),
@@ -87,28 +61,26 @@ ray.get(
 replay_buffer = ray.remote(ReplayBuffer).remote(config)
 
 # %%
-def make_worker(config, param_opt):
+def build_worker(config, param_opt):
     worker = ray.remote(RolloutWorkerWithWeights).remote()
     worker.set_network.remote(param_opt.get_network.remote())
     worker.set_params.remote(param_opt.get_params.remote())
-    worker.build_batching_layers.remote(make_rollout_worker_batching_layers)
+    worker.build_batching_layers.remote(
+        partial(make_rollout_worker_batching_layers, config=config)
+    )
     worker.build_universes.remote(partial(make_rollout_worker_universes, config=config))
     return worker
 
 
 rollout_workers = [
-    make_worker(config, param_opt) for _ in range(config.num_rollout_workers)
+    build_worker(config, param_opt) for _ in range(config.num_rollout_workers)
 ]
-
-# %%
-# ray.get(worker.run.remote(10))
-
 
 # %%
 evaluator = ray.remote(RolloutWorkerWithWeights).options(name="Evaluator").remote()
 evaluator.set_network.remote(param_opt.get_network.remote())
 evaluator.set_params.remote(param_opt.get_params.remote())
-evaluator.set_universes.remote(partial(make_evaluator_universes, config=config))
+evaluator.build_universes.remote(partial(make_evaluator_universes, config=config))
 
 
 @ray.remote
@@ -117,6 +89,10 @@ def evaluation_post_process(output_buffer):
         scalars=dict(last_run_avr_reward=np.mean(output_buffer)), histograms=dict()
     )
 
+
+# sanity check
+# %% 
+ray.get([w.run.remote(config.num_ticks_per_epoch) for w in rollout_workers])
 
 # %%
 def evaluate(num_ticks):

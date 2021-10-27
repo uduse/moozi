@@ -6,8 +6,7 @@ import dm_env
 import numpy as np
 from absl import logging
 from acme.utils.tree_utils import stack_sequence_fields
-from moozi.link import link
-from moozi.policies.policy import PolicyFeed
+from moozi.core import link, PolicyFeed
 from moozi.replay import StepSample
 
 
@@ -45,9 +44,11 @@ class FrameStacker:
 
 
 @link
-def update_episode_stats(timestep, sum_episodic_reward, num_episodes, universe_id):
-    if timestep.last():
-        sum_episodic_reward = sum_episodic_reward + float(timestep.reward)
+def update_episode_stats(
+    is_last, reward, sum_episodic_reward, num_episodes, universe_id
+):
+    if is_last:
+        sum_episodic_reward = sum_episodic_reward + reward
         num_episodes = num_episodes + 1
         avg_episodic_reward = round(sum_episodic_reward / num_episodes, 3)
 
@@ -166,4 +167,4 @@ def set_policy_feed(is_last, stacked_frames, legal_actions_mask):
             legal_actions_mask=legal_actions_mask,
             random_key=None,
         )
-        return dict(feed=feed)
+        return dict(policy_feed=feed)

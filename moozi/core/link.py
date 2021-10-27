@@ -135,7 +135,7 @@ class Universe:
 
 @dataclass
 class UniverseAsync:
-    tape: MutableMapping
+    tape: object
     laws: List[Callable[[object], Awaitable]]
 
     async def tick(self, times=1):

@@ -40,16 +40,17 @@ aiohttp = "==3.7"
 matplotlib = "*"
 typing-extensions = "*"
 trio = "*"
-attrs = "*"
 pytest-trio = "*"
 trio-asyncio = "*"
 filelock = "==v3.0.12"
+attrs = "*"
 
 [dev-packages]
 mypy = "*"
 ipykernel = "*"
 black = "*"
 scikit-image = "*"
+pycln = "*"
 
 [requires]
 python_version = "3.8"

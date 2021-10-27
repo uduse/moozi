@@ -28,7 +28,7 @@ class MCTSAsync:
         if not inspect.iscoroutinefunction(self.recurr_inf_fn):
             self.recurr_inf_fn = as_coroutine(self.recurr_inf_fn)
 
-    async def __call__(self, feed: PolicyFeed) -> Node:
+    async def run(self, feed: PolicyFeed) -> Node:
         root = await self.get_root(feed)
 
         for _ in range(self.num_simulations):
@@ -65,13 +65,14 @@ def make_async_planner_law(init_inf_fn, recurr_inf_fn, dim_actions, num_simulati
     @link
     async def planner(is_last, policy_feed):
         if not is_last:
-            mcts_tree = await mcts(policy_feed)
+            mcts_tree = await mcts.run(policy_feed)
             action, _ = mcts_tree.select_child()
 
-            action_probs = np.zeros((3,), dtype=np.float32)
+            action_probs = np.zeros((dim_actions,), dtype=np.float32)
             for a, visit_count in mcts_tree.get_children_visit_counts().items():
                 action_probs[a] = visit_count
             action_probs /= np.sum(action_probs)
+
             return dict(action=action, action_probs=action_probs)
 
     return planner

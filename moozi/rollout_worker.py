@@ -1,11 +1,7 @@
 import os
 from dataclasses import dataclass, field
 from functools import partial
-from typing import (
-    Any,
-    Callable,
-    List
-)
+from typing import Any, Callable, List
 
 import jax
 import ray
@@ -14,8 +10,8 @@ import trio_asyncio
 from absl import logging
 
 import moozi as mz
+from moozi.core import UniverseAsync, link
 from moozi.batching_layer import BatchingClient, BatchingLayer
-from moozi.link import UniverseAsync, link
 from moozi.replay import StepSample, TrajectorySample, make_target_from_traj
 
 
@@ -31,10 +27,10 @@ class RolloutWorkerWithWeights:
     recurr_inf_fn: Callable = field(init=False)
 
     def build_batching_layers(self, factory):
-        self.batching_layers = factory(self)
+        self.batching_layers = factory(self=self)
 
     def build_universes(self, factory):
-        self.universes = factory(self)
+        self.universes = factory(self=self)
 
     def set_verbosity(self, verbosity):
         logging.set_verbosity(verbosity)

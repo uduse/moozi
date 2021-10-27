@@ -8,9 +8,9 @@ import rlax
 from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 from acme.jax.variable_utils import VariableClient
 from jax.ops import index_add, index
-from moozi.nn import NeuralNetwork, NNOutput
 
-from .policy import PolicyFn, PolicyFeed, PolicyResult
+from moozi.core import PolicyFeed
+from moozi.nn import NeuralNetwork, NNOutput
 
 
 class Node(NamedTuple):

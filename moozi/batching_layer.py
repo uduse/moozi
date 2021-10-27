@@ -7,7 +7,6 @@ from typing import (
     ClassVar
 )
 from absl import logging
-import numpy as np
 import contextlib
 import trio
 

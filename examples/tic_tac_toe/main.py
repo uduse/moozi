@@ -27,9 +27,9 @@ config = mz.Config().update(
     dim_repr=64,
     num_epochs=20,
     num_ticks_per_epoch=10,
-    num_updates_per_samples_added=30,
-    num_rollout_workers=8,
-    num_rollout_universes_per_worker=100,
+    num_updates_per_samples_added=10,
+    num_rollout_workers=1,
+    num_rollout_universes_per_worker=1,
 )
 
 num_interactions = (
@@ -39,6 +39,7 @@ num_interactions = (
     * config.num_rollout_universes_per_worker
 )
 print(f"num_interactions: {num_interactions}")
+config.print()
 
 # %%
 param_opt = ParameterOptimizer()
@@ -55,37 +56,43 @@ param_opt.log_stats(),
 replay_buffer = ray.remote(ReplayBuffer).remote(config)
 
 # %%
-def build_worker(config, param_opt):
-    worker = ray.remote(RolloutWorkerWithWeights).remote()
-    worker.set_network.remote(param_opt.get_network.remote())
-    worker.set_params.remote(param_opt.get_params.remote())
-    worker.build_batching_layers.remote(
-        partial(make_rollout_worker_batching_layers, config=config)
-    )
-    worker.build_universes.remote(partial(make_rollout_worker_universes, config=config))
-    return worker
+def make_rollout_worker_universes(
+    self: RolloutWorkerWithWeights, config: Config
+) -> List[UniverseAsync]:
+    dim_actions = make_env_spec(config.env).actions.num_values
 
+    def make_rollout_universe(index):
+        tape = Tape(index)
+        planner_law = make_async_planner_law(
+            lambda x: self.init_inf_fn_unbatched(self.params, x),
+            lambda x: self.recurr_inf_fn_unbatched(self.params, x[0], x[1]),
+            dim_actions=dim_actions,
+        )
+        laws = [
+            EnvironmentLaw(make_env(config.env)),
+            FrameStacker(num_frames=config.num_stacked_frames, player=0),
+            set_policy_feed,
+            planner_law,
+            TrajectoryOutputWriter(),
+            update_episode_stats,
+            increment_tick,
+        ]
+        return UniverseAsync(tape, laws)
 
-rollout_workers = [
-    build_worker(config, param_opt) for _ in range(config.num_rollout_workers)
-]
+    universes = [
+        make_rollout_universe(i) for i in range(config.num_rollout_universes_per_worker)
+    ]
+    return universes
+
 
 # %%
-evaluator = ray.remote(RolloutWorkerWithWeights).options(name="Evaluator").remote()
-evaluator.set_network.remote(param_opt.get_network.remote())
-evaluator.set_params.remote(param_opt.get_params.remote())
-evaluator.build_universes.remote(partial(make_evaluator_universes, config=config))
+worker = RolloutWorkerWithWeights()
+worker.set_network(param_opt.get_network())
+worker.set_params(param_opt.get_params())
+worker.build_universes(partial(make_rollout_worker_universes, config=config))
 
 
-@ray.remote
-def evaluation_post_process(output_buffer):
-    return JAXBoardStepData(
-        scalars=dict(last_run_avr_reward=np.mean(output_buffer)), histograms=dict()
-    )
-
-
-# sanity check
-# %% 
+# %%
 ray.get([w.run.remote(config.num_ticks_per_epoch) for w in rollout_workers])
 
 # %%

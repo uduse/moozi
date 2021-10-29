@@ -1,8 +1,9 @@
 import collections
 from dataclasses import dataclass, field
-from typing import Any, Deque, Optional
+from typing import Any, Deque, List, Optional, Union
 
 import dm_env
+from jax._src.numpy.lax_numpy import isin
 import numpy as np
 from absl import logging
 from acme.utils.tree_utils import stack_sequence_fields
@@ -14,6 +15,7 @@ from moozi.replay import StepSample
 @dataclass
 class FrameStacker:
     num_frames: int = 1
+    player: int = 0
 
     padding: Optional[np.ndarray] = None
     deque: Deque = field(init=False)
@@ -21,14 +23,14 @@ class FrameStacker:
     def __post_init__(self):
         self.deque = collections.deque(maxlen=self.num_frames)
 
-    def __call__(self, obs, is_last) -> Any:
+    def __call__(self, obs: List[np.ndarray], is_last) -> Any:
         if self.padding is None:
-            self.padding = np.zeros_like(obs)
+            self.padding = np.zeros_like(obs[self.player])
 
         if is_last:
             self.deque.clear()
 
-        self.deque.append(obs)
+        self.deque.append(obs[self.player])
 
         return dict(stacked_frames=self._get_stacked_frames())
 
@@ -73,6 +75,7 @@ def output_last_step_reward(is_last, reward, output_buffer):
 @dataclass
 class EnvironmentLaw:
     env_state: dm_env.Environment
+    num_players: int = 1
 
     def __call__(self, obs, is_last, action: int):
         if obs is None or is_last:
@@ -80,35 +83,42 @@ class EnvironmentLaw:
         else:
             timestep = self.env_state.step([action])
 
-        if timestep.reward is None:
-            reward = 0.0
-        else:
-            reward = float(np.nan_to_num(timestep.reward))
-
         return dict(
             obs=self._get_observation(timestep),
             is_first=timestep.first(),
             is_last=timestep.last(),
             to_play=self.env_state.current_player,
-            reward=reward,
+            reward=self._get_reward(timestep, self.num_players),
             legal_actions_mask=self._get_legal_actions(timestep),
         )
 
     @staticmethod
     def _get_observation(timestep: dm_env.TimeStep):
         if isinstance(timestep.observation, list):
-            assert len(timestep.observation) == 1
-            return timestep.observation[0].observation
+            return [
+                timestep.observation[i].observation
+                for i in range(len(timestep.observation))
+            ]
         else:
             raise NotImplementedError
 
     @staticmethod
     def _get_legal_actions(timestep: dm_env.TimeStep):
         if isinstance(timestep.observation, list):
-            assert len(timestep.observation) == 1
-            return timestep.observation[0].legal_actions
+            return [
+                timestep.observation[i].legal_actions_mask
+                for i in range(len(timestep.observation))
+            ]
         else:
             raise NotImplementedError
+
+    @staticmethod
+    def _get_reward(timestep: dm_env.TimeStep, num_players: int):
+        if timestep.reward is None:
+            return [0.0] * num_players
+        elif isinstance(timestep.reward, np.ndarray):
+            assert len(timestep.reward) == num_players
+            return timestep.reward
 
 
 @link

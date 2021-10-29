@@ -1,7 +1,6 @@
 import socket
 
 import pyspiel
-import absl
 
 def main():
     print('hello, ', socket.gethostname())

@@ -13,6 +13,7 @@ import moozi as mz
 
 class TrainingState(typing.NamedTuple):
     params: chex.ArrayTree
+    target_params: chex.ArrayTree
     opt_state: optax.OptState
     steps: int
     rng_key: jax.random.KeyArray

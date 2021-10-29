@@ -69,7 +69,7 @@ class RolloutWorkerWithWeights:
 
     def set_network(self, network: mz.nn.NeuralNetwork):
         logging.info("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
-        logging.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
+        logging.info(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', None)}")
         logging.info(f"jax.devices(): {jax.devices()}")
         self.network = network
 

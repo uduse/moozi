@@ -55,35 +55,6 @@ def make_rollout_worker_batching_layers(self: RolloutWorkerWithWeights, config: 
     return bl_init_inf, bl_recurr_inf
 
 
-def make_rollout_worker_universes(
-    self: RolloutWorkerWithWeights, config: Config
-) -> List[UniverseAsync]:
-    assert len(self.batching_layers) == 2
-    bl_init_inf, bl_recurr_inf = self.batching_layers
-
-    def make_rollout_universe(index):
-        tape = Tape(-1)
-        planner_law = make_async_planner_law(
-            bl_init_inf.spawn_client().request,
-            bl_recurr_inf.spawn_client().request,
-            dim_actions=3,
-        )
-        laws = [
-            EnvironmentLaw(make_env(config.env)),
-            FrameStacker(num_frames=config.num_stacked_frames),
-            set_policy_feed,
-            planner_law,
-            TrajectoryOutputWriter(),
-            update_episode_stats,
-            increment_tick,
-        ]
-        return UniverseAsync(tape, laws)
-
-    universes = [
-        make_rollout_universe(i) for i in range(config.num_rollout_universes_per_worker)
-    ]
-    return universes
-
 
 def make_evaluator_universes(self, config: Config) -> List[UniverseAsync]:
     tape = Tape(-1)

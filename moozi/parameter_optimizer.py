@@ -22,24 +22,40 @@ class LoggerActor:
         self.logger.write(data)
 
 
-def make_sgd_step_fn(network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, optimizer):
+def make_sgd_step_fn(
+    network: mz.nn.NeuralNetwork,
+    loss_fn: mz.loss.LossFn,
+    optimizer,
+    target_update_period: int = 1,
+):
     # @partial(jax.jit, backend="cpu")
     @jax.jit
     @chex.assert_max_traces(n=1)
-    def sgd_step_fn(training_state: TrainingState, batch: mz.replay.TrainTarget):
+    def sgd_step_fn(state: TrainingState, batch: mz.replay.TrainTarget):
         # gradient descend
-        _, new_key = jax.random.split(training_state.rng_key)
+        _, new_key = jax.random.split(state.rng_key)
         grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
-            network, training_state.params, batch
+            network, state.params, batch
         )
-        updates, new_opt_state = optimizer.update(grads, training_state.opt_state)
-        new_params = optax.apply_updates(training_state.params, updates)
-        steps = training_state.steps + 1
-        new_training_state = TrainingState(new_params, new_opt_state, steps, new_key)
+        updates, new_opt_state = optimizer.update(grads, state.opt_state)
+        new_params = optax.apply_updates(state.params, updates)
+        new_steps = state.steps + 1
+
+        target_params = rlax.periodic_update(
+            new_params, state.target_params, new_steps, target_update_period
+        )
+
+        new_training_state = TrainingState(
+            params=new_params,
+            target_params=target_params,
+            opt_state=new_opt_state,
+            steps=new_steps,
+            rng_key=new_key,
+        )
 
         # KL calculation
         orig_logits = network.initial_inference(
-            training_state.params, batch.stacked_frames
+            state.params, batch.stacked_frames
         ).policy_logits
         new_logits = network.initial_inference(
             new_params, batch.stacked_frames
@@ -50,7 +66,7 @@ def make_sgd_step_fn(network: mz.nn.NeuralNetwork, loss_fn: mz.loss.LossFn, opti
         step_data = mz.logging.JAXBoardStepData(scalars={}, histograms={})
         step_data.update(extra)
         step_data.scalars["prior_kl"] = prior_kl
-        # step_data.histograms["reward"] = batch.last_reward
+        step_data.histograms["reward"] = batch.last_reward
         step_data.add_hk_params(new_params)
 
         return new_training_state, step_data

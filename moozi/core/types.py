@@ -4,6 +4,6 @@ import numpy as np
 
 
 class PolicyFeed(NamedTuple):
-    stacked_frames: np.ndarray
+    features: np.ndarray
     legal_actions_mask: np.ndarray
     random_key: np.ndarray

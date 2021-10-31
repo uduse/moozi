@@ -37,7 +37,7 @@ class MCTSAsync:
         return root
 
     async def get_root(self, feed: PolicyFeed) -> Node:
-        root_nn_output = await self.init_inf_fn(feed.stacked_frames)
+        root_nn_output = await self.init_inf_fn(feed.features)
         root = Node(0)
         root.expand_node(root_nn_output, feed.legal_actions_mask)
         root.add_exploration_noise()

@@ -11,11 +11,9 @@ from moozi.core import link, PolicyFeed
 from moozi.replay import StepSample
 
 
-@link
 @dataclass
-class FrameStacker:
+class _FrameStacker:
     num_frames: int = 1
-    player: int = 0
 
     padding: Optional[np.ndarray] = None
     deque: Deque = field(init=False)
@@ -23,14 +21,15 @@ class FrameStacker:
     def __post_init__(self):
         self.deque = collections.deque(maxlen=self.num_frames)
 
-    def __call__(self, obs: List[np.ndarray], is_last) -> Any:
+    def __call__(self, obs: np.ndarray, is_last) -> Any:
+        assert isinstance(obs, np.ndarray)
         if self.padding is None:
-            self.padding = np.zeros_like(obs[self.player])
+            self.padding = np.zeros_like(obs)
 
         if is_last:
             self.deque.clear()
 
-        self.deque.append(obs[self.player])
+        self.deque.append(obs)
 
         return dict(stacked_frames=self._get_stacked_frames())
 
@@ -43,6 +42,19 @@ class FrameStacker:
             )
             stacked_frames = np.append(paddings, np.array(list(self.deque)), axis=0)
         return stacked_frames
+
+
+FrameStacker = link(_FrameStacker)
+
+
+@link
+@dataclass
+class PlayerFrameStacker(_FrameStacker):
+    player: int = 0
+
+    def __call__(self, obs: List[np.ndarray], is_last) -> Any:
+        assert isinstance(obs, list)
+        return super().__call__(obs[self.player], is_last)
 
 
 @link
@@ -173,7 +185,7 @@ class TrajectoryOutputWriter:
 def set_policy_feed(is_last, stacked_frames, legal_actions_mask):
     if not is_last:
         feed = PolicyFeed(
-            stacked_frames=stacked_frames,
+            features=stacked_frames,
             legal_actions_mask=legal_actions_mask,
             random_key=None,
         )

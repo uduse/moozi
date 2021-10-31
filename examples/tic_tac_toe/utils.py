@@ -11,6 +11,7 @@ from moozi.core import UniverseAsync, Tape
 from moozi.laws import (
     EnvironmentLaw,
     FrameStacker,
+    PlayerFrameStacker,
     TrajectoryOutputWriter,
     increment_tick,
     set_policy_feed,
@@ -55,24 +56,25 @@ def make_rollout_worker_batching_layers(self: RolloutWorkerWithWeights, config: 
     return bl_init_inf, bl_recurr_inf
 
 
+# def make_evaluator_universes(self, config: Config) -> List[UniverseAsync]:
+#     tape = Tape(-1)
+#     planner_law = make_async_planner_law(
+#         lambda x: self.init_inf_fn_unbatched(self.params, x),
+#         lambda x: self.recurr_inf_fn_unbatched(self.params, x[0], x[1]),
+#         dim_actions=3,
+#     )
+#     laws = [
+#         EnvironmentLaw(make_env(config.env)),
 
-def make_evaluator_universes(self, config: Config) -> List[UniverseAsync]:
-    tape = Tape(-1)
-    planner_law = make_async_planner_law(
-        lambda x: self.init_inf_fn_unbatched(self.params, x),
-        lambda x: self.recurr_inf_fn_unbatched(self.params, x[0], x[1]),
-        dim_actions=3,
-    )
-    laws = [
-        EnvironmentLaw(make_env(config.env)),
-        FrameStacker(num_frames=config.num_stacked_frames),
-        set_policy_feed,
-        planner_law,
-        output_last_step_reward,
-        update_episode_stats,
-        increment_tick,
-    ]
-    return [UniverseAsync(tape, laws)]
+#         PlayerFrameStacker(num_frames=config.num_stacked_frames, player=0),
+#         set_policy_feed,
+#         planner_law,
+
+#         output_last_step_reward,
+#         update_episode_stats,
+#         increment_tick,
+#     ]
+#     return [UniverseAsync(tape, laws)]
 
 
 def make_param_opt_properties(config):

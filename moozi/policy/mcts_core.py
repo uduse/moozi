@@ -16,7 +16,7 @@ from moozi import PolicyFeed
 from typing import Optional
 
 
-# TODO: not necessary CPU?
+# TODO: findout the most efficient version of softmax implementation
 _safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")
 # softmax = jax.jit(jax.nn.softmax, backend="cpu")
 
@@ -28,7 +28,6 @@ def softmax(x):
     return e_x / jnp.sum(e_x)
 
 
-# @attr.s(auto_attribs=True, repr=False)
 @dataclass
 class Node(object):
     prior: float
@@ -88,10 +87,16 @@ class Node(object):
         for a, n in zip(actions, noise):
             self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
 
-    def backpropagate(self, value: float, discount: float):
+    def backpropagate(self, value: float, discount: float, player: int = 0):
         node = self
         while True:
-            node.value_sum += value
+
+            # zero-sum game
+            if node.player == player:
+                node.value_sum += value
+            else:
+                node.value_sum -= value
+
             node.visit_count += 1
             value = node.reward + value * discount
             if node.parent:

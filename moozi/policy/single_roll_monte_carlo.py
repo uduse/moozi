@@ -52,7 +52,7 @@ def make_single_roll_monte_carlo_fn(
         action_space_size = jnp.size(feed.legal_actions_mask)
 
         root_network_output = network.initial_inference_unbatched(
-            params, feed.features
+            params, feed.stacked_frames
         )
 
         root_node = Node(

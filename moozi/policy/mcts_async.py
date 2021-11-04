@@ -41,7 +41,7 @@ class MCTSAsync:
         return root
 
     async def get_root(self, feed: PolicyFeed) -> Node:
-        root_nn_output = await self.init_inf_fn(feed.features)
+        root_nn_output = await self.init_inf_fn(feed.stacked_frames)
         root = Node(0)
         to_play = next_player(self.strategy, feed.to_play)
         root.expand_node(root_nn_output, feed.legal_actions_mask, to_play)

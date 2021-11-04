@@ -229,7 +229,7 @@ class TrajectoryOutputWriter:
 def set_policy_feed(is_last, stacked_frames, legal_actions_mask, to_play):
     if not is_last:
         feed = PolicyFeed(
-            features=stacked_frames,
+            stacked_frames=stacked_frames,
             to_play=to_play,
             legal_actions_mask=legal_actions_mask,
             random_key=None,

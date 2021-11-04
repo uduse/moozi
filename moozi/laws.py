@@ -12,8 +12,9 @@ from moozi.replay import StepSample
 
 
 @dataclass
-class _FrameStacker:
+class FrameStacker:
     num_frames: int = 1
+    player: int = 0
 
     padding: Optional[np.ndarray] = None
     deque: Deque = field(init=False)
@@ -21,17 +22,25 @@ class _FrameStacker:
     def __post_init__(self):
         self.deque = collections.deque(maxlen=self.num_frames)
 
-    def __call__(self, obs: np.ndarray, is_last) -> Any:
-        assert isinstance(obs, np.ndarray)
+    def __call__(self, obs: Union[np.ndarray, List[np.ndarray]], is_last) -> Any:
+        assert isinstance(obs, (np.ndarray, list))
+        player_obs = self._get_player_obs(obs)
+
         if self.padding is None:
-            self.padding = np.zeros_like(obs)
+            self.padding = np.zeros_like(player_obs)
 
         if is_last:
             self.deque.clear()
 
-        self.deque.append(obs)
+        self.deque.append(player_obs)
 
         return dict(stacked_frames=self._get_stacked_frames())
+
+    def _get_player_obs(self, obs: Union[np.ndarray, List[np.ndarray]]) -> np.ndarray:
+        if isinstance(obs, np.ndarray):
+            return obs
+        elif isinstance(obs, list):
+            return obs[self.player]
 
     def _get_stacked_frames(self):
         stacked_frames = np.array(list(self.deque))
@@ -44,17 +53,52 @@ class _FrameStacker:
         return stacked_frames
 
 
-FrameStacker = link(_FrameStacker)
+@dataclass
+class FrameStackerV2:
+    num_frames: int = 1
+    player: int = 0
+    padding: Optional[np.ndarray] = None
+    deque: Deque = field(init=False)
+
+    def __post_init__(self):
+        self.deque = collections.deque(maxlen=self.num_frames)
+
+
+def get_stacked_frames(deque, num_frames, padding):
+    stacked_frames = np.array(list(deque))
+    num_frames_to_pad = num_frames - len(deque)
+    if num_frames_to_pad > 0:
+        paddings = np.stack(
+            [np.copy(padding) for _ in range(num_frames_to_pad)], axis=0
+        )
+        stacked_frames = np.append(paddings, np.array(list(deque)), axis=0)
+    return stacked_frames
+
+
+def scratch(obj, law):
+    law.scratch = obj
+    return law
 
 
 @link
-@dataclass
-class PlayerFrameStacker(_FrameStacker):
-    player: int = 0
+def stack_frames(obs: np.ndarray, is_last: bool):
+    assert isinstance(obs, np.ndarray)
 
-    def __call__(self, obs: List[np.ndarray], is_last) -> Any:
-        assert isinstance(obs, list)
-        return super().__call__(obs[self.player], is_last)
+    frame_stacker: FrameStackerV2 = stack_frames.scratch
+
+    if frame_stacker.padding is None:
+        frame_stacker.padding = np.zeros_like(obs)
+
+    if is_last:
+        frame_stacker.deque.clear()
+
+    frame_stacker.deque.append(obs)
+
+    return dict(
+        stacked_frames=get_stacked_frames(
+            frame_stacker.deque, frame_stacker.num_frames, frame_stacker.padding
+        )
+    )
 
 
 @link
@@ -182,10 +226,11 @@ class TrajectoryOutputWriter:
 
 
 @link
-def set_policy_feed(is_last, stacked_frames, legal_actions_mask):
+def set_policy_feed(is_last, stacked_frames, legal_actions_mask, to_play):
     if not is_last:
         feed = PolicyFeed(
             features=stacked_frames,
+            to_play=to_play,
             legal_actions_mask=legal_actions_mask,
             random_key=None,
         )

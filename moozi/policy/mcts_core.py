@@ -1,6 +1,7 @@
 import functools
 import uuid
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Optional
 
 import anytree
@@ -10,17 +11,42 @@ import numpy as np
 import ray.util.queue
 import rlax
 import trio
-from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
 from moozi import PolicyFeed
+from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
 
-from typing import Optional
+
+class SearchStrategy(Enum):
+    # default MuZero strategy
+    TWO_PLAYER = auto()
+
+    # VQVAE + MuZero
+    ONE_PLAYER = auto()
+
+    # TODO: VQVAE + MuZero
+    VQ_HYBRID = auto()
+    VQ_PURE = auto()
+    VQ_JUMPY = auto()
+
+
+def next_player(strategy: SearchStrategy, to_play: int):
+    if strategy == SearchStrategy.TWO_PLAYER:
+        if to_play == 0:
+            return 1
+        elif to_play == 1:
+            return 0
+        else:
+            raise ValueError(f"Invalid to_play: {to_play}")
+
+    elif strategy == SearchStrategy.ONE_PLAYER:
+        return 0
+
+    else:
+        raise NotImplementedError(f"{strategy} not implemented")
 
 
 # TODO: findout the most efficient version of softmax implementation
-_safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")
+# _safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")
 # softmax = jax.jit(jax.nn.softmax, backend="cpu")
-
-
 @functools.partial(jax.jit, backend="cpu")
 def softmax(x):
     """Compute softmax values for each sets of scores in x."""
@@ -31,7 +57,7 @@ def softmax(x):
 @dataclass
 class Node(object):
     prior: float
-    player: int = 0
+    to_play: int = 0
     parent: Optional["Node"] = None
     children: dict = field(default_factory=dict)
     value_sum: float = 0.0
@@ -50,7 +76,9 @@ class Node(object):
     def is_expanded(self) -> bool:
         return len(self.children) > 0
 
-    def expand_node(self, network_output: NNOutput, legal_actions_mask: np.ndarray):
+    def expand_node(
+        self, network_output: NNOutput, legal_actions_mask: np.ndarray, to_play
+    ):
         self.hidden_state = network_output.hidden_state
         self.reward = float(network_output.reward)
         # action_probs = np.array(_safe_epsilon_softmax(network_output.policy_logits))
@@ -61,6 +89,7 @@ class Node(object):
         for action, prob in enumerate(action_probs):
             self.children[action] = Node(
                 prior=prob,
+                to_play=to_play,
                 parent=self,
                 children={},
                 value_sum=0.0,
@@ -74,6 +103,7 @@ class Node(object):
             (Node.ucb_score(parent=self, child=child), action, child)
             for action, child in self.children.items()
         ]
+        # TODO: break ties randomly?
         _, action, child = max(scores)
         return action, child
 
@@ -87,12 +117,12 @@ class Node(object):
         for a, n in zip(actions, noise):
             self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
 
-    def backpropagate(self, value: float, discount: float, player: int = 0):
+    def backpropagate(self, value: float, discount: float, to_play):
         node = self
         while True:
 
-            # zero-sum game
-            if node.player == player:
+            # zero-sum two player game
+            if node.to_play == to_play:
                 node.value_sum += value
             else:
                 node.value_sum -= value

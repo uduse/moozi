@@ -2,24 +2,28 @@ from dataclasses import InitVar, dataclass
 from typing import Awaitable, Callable
 
 import inspect
+from jax._src.numpy.lax_numpy import isin
 import jax.numpy as jnp
 import numpy as np
 from moozi import link
 from moozi.batching_layer import BatchingClient
 from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
-from moozi.policy.mcts_core import Node
+from moozi.policy.mcts_core import Node, SearchStrategy, next_player
 from moozi import PolicyFeed
 from moozi.utils import as_coroutine
 
 
 @dataclass
 class MCTSAsync:
+    dim_action: InitVar[int]
+
     init_inf_fn: Callable[..., Awaitable[NNOutput]]
     recurr_inf_fn: Callable[..., Awaitable[NNOutput]]
     num_simulations: int
-    dim_action: InitVar[int]
     all_actions_mask: np.ndarray = None
     discount: float = 1.0
+
+    strategy: SearchStrategy = SearchStrategy.TWO_PLAYER
 
     def __post_init__(self, dim_action):
         self.all_actions_mask = np.ones((dim_action,), dtype=np.int32)
@@ -39,7 +43,8 @@ class MCTSAsync:
     async def get_root(self, feed: PolicyFeed) -> Node:
         root_nn_output = await self.init_inf_fn(feed.features)
         root = Node(0)
-        root.expand_node(root_nn_output, feed.legal_actions_mask)
+        to_play = next_player(self.strategy, feed.to_play)
+        root.expand_node(root_nn_output, feed.legal_actions_mask, to_play)
         root.add_exploration_noise()
         return root
 
@@ -47,11 +52,9 @@ class MCTSAsync:
         action, node = root.select_leaf()
         assert node.parent
         nn_output = await self.recurr_inf_fn((node.parent.hidden_state, action))
-        node.expand_node(nn_output, self.all_actions_mask)
-        node.backpropagate(float(nn_output.value), self.discount)
-
-    def __del__(self):
-        """TODO: relase recurrent states stored remotely."""
+        to_play = next_player(self.strategy, node.to_play)
+        node.expand_node(nn_output, self.all_actions_mask, to_play)
+        node.backpropagate(float(nn_output.value), self.discount, to_play)
 
 
 def make_async_planner_law(init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10):

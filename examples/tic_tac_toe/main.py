@@ -4,7 +4,8 @@ from functools import partial
 import moozi as mz
 import ray
 from absl import logging
-from moozi.laws import PlayerFrameStacker
+
+# from moozi.laws import PlayerFrameStacker
 from moozi.logging import JAXBoardStepData, MetricsReporterActor
 from moozi.parameter_optimizer import ParameterOptimizer
 from moozi.replay import ReplayBuffer
@@ -56,6 +57,7 @@ param_opt.log_stats(),
 # %%
 replay_buffer = ray.remote(ReplayBuffer).remote(config)
 
+
 def make_rollout_worker_universes(
     self: RolloutWorkerWithWeights, config: Config
 ) -> List[UniverseAsync]:
@@ -70,18 +72,10 @@ def make_rollout_worker_universes(
         )
         laws = [
             EnvironmentLaw(make_env(config.env)),
-
-            PlayerFrameStacker(num_frames=config.num_stacked_frames, player=0),
-            set_policy_feed,
-            planner_law,
-
-            TrajectoryOutputWriter(),
             FrameStacker(num_frames=config.num_stacked_frames),
             set_policy_feed,
             planner_law,
             TrajectoryOutputWriter(),
-            # update_episode_stats,
-            # increment_tick,
         ]
         return UniverseAsync(tape, laws)
 
@@ -89,6 +83,7 @@ def make_rollout_worker_universes(
         make_rollout_universe(i) for i in range(config.num_rollout_universes_per_worker)
     ]
     return universes
+
 
 # %%
 worker = RolloutWorkerWithWeights()

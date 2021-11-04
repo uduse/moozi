@@ -11,7 +11,6 @@ from moozi.core import UniverseAsync, Tape
 from moozi.laws import (
     EnvironmentLaw,
     FrameStacker,
-    PlayerFrameStacker,
     TrajectoryOutputWriter,
     increment_tick,
     set_policy_feed,

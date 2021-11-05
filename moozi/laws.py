@@ -199,6 +199,7 @@ class TrajectoryOutputWriter:
     def __call__(
         self,
         obs,
+        to_play,
         action,
         reward,
         root_value,
@@ -209,12 +210,13 @@ class TrajectoryOutputWriter:
     ):
         step_record = StepSample(
             frame=obs,
-            reward=reward,
+            last_reward=reward,
             is_first=is_first,
             is_last=is_last,
-            action=action,
+            to_play=to_play,
             root_value=root_value,
             action_probs=action_probs,
+            action=action,
         ).cast()
 
         self.traj_buffer.append(step_record)

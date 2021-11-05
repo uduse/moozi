@@ -6,13 +6,14 @@ from numpy.testing import assert_allclose
 
 SAMPLE = mz.replay.TrajectorySample(
     frame=[[11], [22], [33], [44], [55], [66]],
-    reward=[0, 200, 300, 400, 500, 600],
+    last_reward=[0, 200, 300, 400, 500, 600],
     is_first=[True, False, False, False, False, False],
     is_last=[False, False, False, False, False, True],
-    action=[101, 102, 103, 104, 105, -1],
+    to_play=[0, 0, 0, 0, 0, 0],
     root_value=[10, 20, 30, 40, 50, -1],
     action_probs=[np.arange(i, i + 3) / sum(list(range(i, i + 3))) for i in range(5)]
-    + [np.array([0, 0, 0])],
+    + [np.ones(3) / 3],
+    action=[101, 102, 103, 104, 105, -1],
 ).cast()
 
 TEST_CASES = []
@@ -92,7 +93,7 @@ TEST_CASES.append(
             action=[-1],
             value=[0, 0],
             last_reward=[0, 0],
-            action_probs=[np.zeros(3), np.zeros(3)],
+            action_probs=[np.ones(3) / 3, np.ones(3) / 3],
         ).cast(),
     )
 )
@@ -113,9 +114,9 @@ TEST_CASES.append(
             last_reward=[0, 600, 0, 0],
             action_probs=[
                 SAMPLE.action_probs[4],
-                np.zeros(3),
-                np.zeros(3),
-                np.zeros(3),
+                np.ones(3) / 3,
+                np.ones(3) / 3,
+                np.ones(3) / 3,
             ],
         ).cast(),
     )
@@ -135,7 +136,47 @@ TEST_CASES.append(
             action=[-1, -1, -1],
             value=[0, 0, 0, 0],
             last_reward=[0, 0, 0, 0],
-            action_probs=[np.zeros(3), np.zeros(3), np.zeros(3), np.zeros(3)],
+            action_probs=[
+                np.ones(3) / 3,
+                np.ones(3) / 3,
+                np.ones(3) / 3,
+                np.ones(3) / 3,
+            ],
+        ).cast(),
+    )
+)
+
+
+TWO_PLAYER_SAMPLE = mz.replay.TrajectorySample(
+    frame=[[11], [22], [33], [44]],
+    last_reward=[0, 200, 300, 400],
+    is_first=[True, False, False, False],
+    is_last=[False, False, False, True],
+    to_play=[0, 1, 0, 1],
+    root_value=[10, 20, 30, -1],
+    action_probs=[np.arange(i, i + 3) / sum(list(range(i, i + 3))) for i in range(3)]
+    + [np.ones(3) / 3],
+    action=[101, 102, 103, -1],
+).cast()
+
+TEST_CASES.append(
+    dict(
+        name="test 7",
+        sample=TWO_PLAYER_SAMPLE,
+        start_idx=0,
+        discount=0.5,
+        num_unroll_steps=1,
+        num_td_steps=100,
+        num_stacked_frames=1,
+        expected_target=mz.replay.TrainTarget(
+            stacked_frames=[[11]],
+            action=[101],
+            value=[
+                200 + -300 * 0.5 + 400 * 0.5 ** 2,
+                300 + -400 * 0.5,
+            ],
+            last_reward=[0, 200],
+            action_probs=TWO_PLAYER_SAMPLE.action_probs[0:2],
         ).cast(),
     )
 )

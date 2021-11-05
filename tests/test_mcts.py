@@ -1,25 +1,36 @@
-from dataclasses import dataclass
 import functools
-from typing import Callable
-from acme.utils.tree_utils import unstack_sequence_fields
-import trio
-from trio_asyncio import aio_as_trio
-import jax
-import ray
-import numpy as np
 import operator
+from dataclasses import dataclass
+from typing import Callable
 
+import jax
+import numpy as np
+import ray
 import tree
-from acme.jax.networks.base import NetworkOutput
+import trio
 import trio_asyncio
+from acme.jax.networks.base import NetworkOutput
+from acme.utils.tree_utils import unstack_sequence_fields
 from moozi.batching_layer import BatchingClient, BatchingLayer
-from moozi.nn import NeuralNetwork
-from moozi.policies.mcts_async import MCTSAsync
-from moozi.policies.mcts_core import anytree_to_text, convert_to_anytree
-from moozi.policies.policy import PolicyFeed
+from moozi.core import PolicyFeed
+from moozi.nn import NNOutput, NeuralNetwork
+from moozi.policy.mcts_async import MCTSAsync
+from moozi.policy.mcts_core import Node, anytree_to_text, convert_to_anytree, get_next_player, SearchStrategy
 from moozi.utils import as_coroutine
+from trio_asyncio import aio_as_trio
 
 from tests.utils import with_trio_asyncio
+
+
+def test_node():
+    node = Node(prior=0.5, player=0)
+    node.expand_node(
+        network_output=NNOutput(
+            value=0.5, reward=1, policy_logits=np.array([0.5, 0.5]), hidden_state=None
+        ),
+        legal_actions_mask=np.array([1, 1, 1]),
+        next_player=get_next_player(SearchStrategy.TWO_PLAYER, node.player)
+    )
 
 
 async def test_async_mcts(
@@ -39,7 +50,7 @@ async def test_async_mcts(
         dim_action=env_spec.actions.num_values,
     )
 
-    root = await mcts_async(policy_feed)
+    root = await mcts_async.run(policy_feed)
     assert root
 
 
@@ -78,7 +89,7 @@ async def test_async_mcts_with_ray(
         dim_action=env_spec.actions.num_values,
     )
 
-    root = await mcts_async(policy_feed)
+    root = await mcts_async.run(policy_feed)
     assert root
 
 
@@ -138,6 +149,6 @@ async def test_async_mcts_with_ray_and_batching(
         async with bl_init_inf.open_context(), bl_recurr_inf.open_context():
             async with trio.open_nursery() as nn:
                 for mcts in mctses:
-                    nn.start_soon(mcts, policy_feed)
+                    nn.start_soon(mcts.run, policy_feed)
 
     assert mctses

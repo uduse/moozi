@@ -8,7 +8,7 @@ import numpy as np
 from moozi import link
 from moozi.batching_layer import BatchingClient
 from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
-from moozi.policy.mcts_core import Node, SearchStrategy, next_player
+from moozi.policy.mcts_core import Node, SearchStrategy, get_next_player
 from moozi import PolicyFeed
 from moozi.utils import as_coroutine
 
@@ -34,6 +34,7 @@ class MCTSAsync:
 
     async def run(self, feed: PolicyFeed) -> Node:
         root = await self.get_root(feed)
+        root.add_exploration_noise()
 
         for _ in range(self.num_simulations):
             await self.simulate_once(root)
@@ -43,18 +44,35 @@ class MCTSAsync:
     async def get_root(self, feed: PolicyFeed) -> Node:
         root_nn_output = await self.init_inf_fn(feed.stacked_frames)
         root = Node(0)
-        to_play = next_player(self.strategy, feed.to_play)
-        root.expand_node(root_nn_output, feed.legal_actions_mask, to_play)
-        root.add_exploration_noise()
+        next_player = get_next_player(self.strategy, feed.to_play)
+        root.expand_node(
+            network_output=root_nn_output,
+            legal_actions_mask=feed.legal_actions_mask,
+            root_player=root.player,
+            next_player=next_player,
+        )
+        root.backpropagate(
+            value=float(root_nn_output.value),
+            discount=self.discount,
+            root_player=root.player,
+        )
         return root
 
     async def simulate_once(self, root: Node):
-        action, node = root.select_leaf()
-        assert node.parent
-        nn_output = await self.recurr_inf_fn((node.parent.hidden_state, action))
-        to_play = next_player(self.strategy, node.to_play)
-        node.expand_node(nn_output, self.all_actions_mask, to_play)
-        node.backpropagate(float(nn_output.value), self.discount, to_play)
+        action, leaf = root.select_leaf()
+        assert leaf.parent
+        nn_output = await self.recurr_inf_fn((leaf.parent.hidden_state, action))
+        leaf.expand_node(
+            network_output=nn_output,
+            legal_actions_mask=self.all_actions_mask,
+            root_player=root.player,
+            next_player=get_next_player(self.strategy, leaf.player),
+        )
+        leaf.backpropagate(
+            value=float(nn_output.value),
+            discount=self.discount,
+            root_player=root.player,
+        )
 
 
 def make_async_planner_law(init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10):

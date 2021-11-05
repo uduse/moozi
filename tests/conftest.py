@@ -14,14 +14,14 @@ from acme.jax.variable_utils import VariableClient
 
 from pytest_trio.enable_trio_mode import *
 
-from moozi.policies.policy import PolicyFeed
+from moozi.core import PolicyFeed
 
 
 def update_jax_config():
     jax.config.update("jax_disable_jit", True)
-    print('conftest JAX: disabled jit')
+    print("conftest JAX: disabled jit")
     jax.config.update("jax_platform_name", "cpu")
-    print('conftest JAX: platform cpu')
+    print("conftest JAX: platform cpu")
 
 
 update_jax_config()
@@ -102,6 +102,7 @@ def policy_feed(env, env_spec, num_frames, random_key) -> PolicyFeed:
 
     return PolicyFeed(
         stacked_frames=stacked_frames,
+        to_play=0,
         legal_actions_mask=legal_actions_mask,
         random_key=random_key,
     )

@@ -66,8 +66,10 @@ def make_rollout_worker_universes(
     def make_rollout_universe(index):
         tape = Tape(index)
         planner_law = make_async_planner_law(
-            lambda x: self.init_inf_fn_unbatched(self.params, x),
-            lambda x: self.recurr_inf_fn_unbatched(self.params, x[0], x[1]),
+            init_inf_fn=lambda x: self.init_inf_fn_unbatched(self.params, x),
+            recurr_inf_fn=lambda x: self.recurr_inf_fn_unbatched(
+                self.params, x[0], x[1]
+            ),
             dim_actions=dim_actions,
         )
         laws = [

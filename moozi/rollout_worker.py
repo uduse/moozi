@@ -69,18 +69,16 @@ class RolloutWorkerWithWeights:
 
     def set_network(self, network: mz.nn.NeuralNetwork):
         logging.info("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
-        logging.info(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', None)}")
+        logging.info(
+            f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', None)}"
+        )
         logging.info(f"jax.devices(): {jax.devices()}")
         self.network = network
 
-        self.init_inf_fn = jax.jit(network.initial_inference, backend="cpu")
-        self.recurr_inf_fn = jax.jit(network.recurrent_inference, backend="cpu")
-        self.init_inf_fn_unbatched = jax.jit(
-            network.initial_inference_unbatched, backend="cpu"
-        )
-        self.recurr_inf_fn_unbatched = jax.jit(
-            network.recurrent_inference_unbatched, backend="cpu"
-        )
+        self.init_inf_fn = jax.jit(network.initial_inference)
+        self.recurr_inf_fn = jax.jit(network.recurrent_inference)
+        self.init_inf_fn_unbatched = jax.jit(network.initial_inference_unbatched)
+        self.recurr_inf_fn_unbatched = jax.jit(network.recurrent_inference_unbatched)
 
     def exec(self, fn):
         return fn(self)

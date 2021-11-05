@@ -1,7 +1,9 @@
 import collections
 from dataclasses import dataclass, field
+from enum import EnumMeta
 import random
 from typing import Deque, List, NamedTuple
+from acme.adders.reverb.base import Trajectory
 
 import chex
 import dm_env
@@ -19,37 +21,59 @@ from nptyping import NDArray
 import moozi as mz
 
 
+# current support:
+# - single player games
+# - two-player turn-based zero-sum games
 class StepSample(NamedTuple):
     frame: NDArray[np.float32]
-    reward: NDArray[np.float32]
+
+    # last reward from the environment
+    last_reward: NDArray[np.float32]
     is_first: NDArray[np.bool8]
     is_last: NDArray[np.bool8]
-    action: NDArray[np.int32]
+    to_play: NDArray[np.int32]
+
+    # root value after the search
     root_value: NDArray[np.float32]
     action_probs: NDArray[np.float32]
+    action: NDArray[np.int32]
 
     def cast(self) -> "StepSample":
         return StepSample(
             frame=np.asarray(self.frame, dtype=np.float32),
-            reward=np.asarray(self.reward, dtype=np.float32),
+            last_reward=np.asarray(self.last_reward, dtype=np.float32),
             is_first=np.asarray(self.is_first, dtype=np.bool8),
             is_last=np.asarray(self.is_last, dtype=np.bool8),
-            action=np.asarray(self.action, dtype=np.int32),
+            to_play=np.asarray(self.to_play, dtype=np.int32),
             root_value=np.asarray(self.root_value, dtype=np.float32),
             action_probs=np.asarray(self.action_probs, dtype=np.float32),
+            action=np.asarray(self.action, dtype=np.int32),
         )
 
 
 # Trajectory is a StepSample with stacked values
-class TrajectorySample(StepSample):
-    pass
+TrajectorySample = StepSample
+# class TrajectorySample(StepSample):
+#     pass
 
 
 class TrainTarget(NamedTuple):
+    # right now we only support perfect information games
+    # so stacked_frames is a history of symmetric observations
     stacked_frames: NDArray[np.float32]
+
+    # action taken in in each step, -1 means no action taken (terminal state)
     action: NDArray[np.int32]
+
+    # value is computed based on the player of each timestep instead of the
+    # player at the first timestep as the root player
+    # this means if all rewards are positive, the values are always positive too
     value: NDArray[np.float32]
+
+    # a faithful slice of the trajectory rewards, not flipped for multi-player games
     last_reward: NDArray[np.float32]
+
+    # action probabilities from the search result
     action_probs: NDArray[np.float32]
 
     def cast(self) -> "TrainTarget":
@@ -85,7 +109,7 @@ class ReplayBuffer:
         trajs = random.choices(self.store, k=batch_size)
         batch = []
         for traj in trajs:
-            random_start_idx = random.randrange(len(traj.reward))
+            random_start_idx = random.randrange(len(traj.last_reward))
             target = make_target_from_traj(
                 traj,
                 start_idx=random_start_idx,
@@ -110,12 +134,13 @@ def make_target_from_traj(
     num_stacked_frames,
 ):
     # assert not batched
-    assert len(sample.reward.shape) == 1
+    assert len(sample.last_reward.shape) == 1
 
     last_step_idx = sample.is_last.argmax()
 
     # unroll
     unrolled_data = []
+    # root_player = sample.to_play[start_idx]
     for curr_idx in range(start_idx, start_idx + num_unroll_steps + 1):
         value = _get_value(sample, curr_idx, last_step_idx, num_td_steps, discount)
         last_reward = _get_last_reward(sample, start_idx, curr_idx, last_step_idx)
@@ -154,29 +179,76 @@ def _get_stacked_frames(sample, start_idx, num_stacked_frames):
     return frame
 
 
-def _get_value(sample, curr_idx, last_step_idx, num_td_steps, discount):
+def _get_value(
+    sample: TrajectorySample,
+    curr_idx,
+    last_step_idx,
+    num_td_steps,
+    discount,
+    # root_player,
+):
+    # value is computed based on current player instead of root player
+    if curr_idx >= last_step_idx:
+        return 0
+
+    curr_player = sample.to_play[curr_idx]
     bootstrap_idx = curr_idx + num_td_steps
+
+    accumulated_reward = _get_accumulated_reward(
+        sample, curr_idx, discount, curr_player, bootstrap_idx
+    )
+    bootstrap_value = _get_bootstrap_value(
+        sample, last_step_idx, num_td_steps, discount, curr_player, bootstrap_idx
+    )
+
+    return accumulated_reward + bootstrap_value
+
+
+def _get_bootstrap_value(
+    sample: TrajectorySample,
+    last_step_idx,
+    num_td_steps,
+    discount,
+    curr_player,
+    bootstrap_idx,
+) -> float:
     if bootstrap_idx <= last_step_idx:
-        value = sample.root_value[bootstrap_idx] * discount ** num_td_steps
+        value = sample.root_value[bootstrap_idx] * (discount ** num_td_steps)
+        if curr_player != sample.to_play[bootstrap_idx]:
+            value = -value
+        return value
     else:
-        value = 0
-
-    for i, reward in enumerate(sample.reward[curr_idx + 1 : bootstrap_idx + 1]):
-        value += reward * discount ** i
-    return value
+        return 0.0
 
 
-def _get_last_reward(sample, start_idx, curr_idx, last_step_idx):
+def _get_accumulated_reward(
+    sample: TrajectorySample, curr_idx, discount, curr_player, bootstrap_idx
+) -> float:
+    reward_sum = 0.0
+    last_rewards = sample.last_reward[curr_idx + 1 : bootstrap_idx + 1]
+    players_of_last_rewards = sample.to_play[curr_idx:bootstrap_idx]
+    for i, (last_rewrad, player) in enumerate(
+        zip(last_rewards, players_of_last_rewards)
+    ):
+        discounted_reward = last_rewrad * (discount ** i)
+        if player == curr_player:
+            reward_sum += discounted_reward
+        else:
+            reward_sum -= discounted_reward
+    return reward_sum
+
+
+def _get_last_reward(sample: TrajectorySample, start_idx, curr_idx, last_step_idx):
     if curr_idx == start_idx:
         return 0
     elif curr_idx <= last_step_idx:
-        return sample.reward[curr_idx]
+        return sample.last_reward[curr_idx]
     else:
         return 0
 
 
-def _get_action_probs(sample, curr_idx, last_step_idx):
+def _get_action_probs(sample: TrajectorySample, curr_idx, last_step_idx):
     if curr_idx <= last_step_idx:
         return sample.action_probs[curr_idx]
     else:
-        return np.zeros_like(sample.action_probs[0])
+        return np.ones_like(sample.action_probs[0]) / len(sample.action_probs[0])

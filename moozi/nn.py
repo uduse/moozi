@@ -13,7 +13,6 @@ import moozi as mz
 class NNOutput(NamedTuple):
     value: jnp.ndarray
     reward: jnp.ndarray
-    # policy_logits: typing.Dict[mz.Action, float]
     policy_logits: jnp.ndarray
     hidden_state: jnp.ndarray
 

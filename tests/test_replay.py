@@ -4,13 +4,13 @@ import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-SAMPLE = mz.replay.TrajectorySample(
+SINGLE_PLAYER_SAMPLE = mz.replay.TrajectorySample(
     frame=[[11], [22], [33], [44], [55], [66]],
     last_reward=[0, 200, 300, 400, 500, 600],
     is_first=[True, False, False, False, False, False],
     is_last=[False, False, False, False, False, True],
     to_play=[0, 0, 0, 0, 0, 0],
-    root_value=[10, 20, 30, 40, 50, -1],
+    root_value=[10, 20, 30, 40, 50, 0],
     action_probs=[np.arange(i, i + 3) / sum(list(range(i, i + 3))) for i in range(5)]
     + [np.ones(3) / 3],
     action=[101, 102, 103, 104, 105, -1],
@@ -21,7 +21,7 @@ TEST_CASES = []
 TEST_CASES.append(
     dict(
         name="test 1",
-        sample=SAMPLE,
+        sample=SINGLE_PLAYER_SAMPLE,
         start_idx=0,
         discount=0.5,
         num_unroll_steps=1,
@@ -32,7 +32,7 @@ TEST_CASES.append(
             action=[101],
             value=[200 + 20 * 0.5, 300 + 30 * 0.5],
             last_reward=[0, 200],
-            action_probs=SAMPLE.action_probs[0:2],
+            action_probs=SINGLE_PLAYER_SAMPLE.action_probs[0:2],
         ).cast(),
     )
 )
@@ -40,7 +40,7 @@ TEST_CASES.append(
 TEST_CASES.append(
     dict(
         name="test 2",
-        sample=SAMPLE,
+        sample=SINGLE_PLAYER_SAMPLE,
         start_idx=0,
         discount=0.5,
         num_unroll_steps=2,
@@ -55,7 +55,7 @@ TEST_CASES.append(
                 400 + 500 * 0.5 + 50 * 0.5 ** 2,
             ],
             last_reward=[0, 200, 300],
-            action_probs=SAMPLE.action_probs[0:3],
+            action_probs=SINGLE_PLAYER_SAMPLE.action_probs[0:3],
         ).cast(),
     )
 )
@@ -63,7 +63,7 @@ TEST_CASES.append(
 TEST_CASES.append(
     dict(
         name="test 3",
-        sample=SAMPLE,
+        sample=SINGLE_PLAYER_SAMPLE,
         start_idx=2,
         discount=0.5,
         num_unroll_steps=1,
@@ -74,7 +74,7 @@ TEST_CASES.append(
             action=[103],
             value=[400 + 40 * 0.5, 500 + 50 * 0.5],
             last_reward=[0, 400],
-            action_probs=SAMPLE.action_probs[2:4],
+            action_probs=SINGLE_PLAYER_SAMPLE.action_probs[2:4],
         ).cast(),
     ),
 )
@@ -82,7 +82,7 @@ TEST_CASES.append(
 TEST_CASES.append(
     dict(
         name="test 4",
-        sample=SAMPLE,
+        sample=SINGLE_PLAYER_SAMPLE,
         start_idx=5,
         discount=0.5,
         num_unroll_steps=1,
@@ -101,7 +101,7 @@ TEST_CASES.append(
 TEST_CASES.append(
     dict(
         name="test 5",
-        sample=SAMPLE,
+        sample=SINGLE_PLAYER_SAMPLE,
         start_idx=4,
         discount=0.5,
         num_unroll_steps=3,
@@ -113,7 +113,7 @@ TEST_CASES.append(
             value=[600, 0, 0, 0],
             last_reward=[0, 600, 0, 0],
             action_probs=[
-                SAMPLE.action_probs[4],
+                SINGLE_PLAYER_SAMPLE.action_probs[4],
                 np.ones(3) / 3,
                 np.ones(3) / 3,
                 np.ones(3) / 3,
@@ -125,7 +125,7 @@ TEST_CASES.append(
 TEST_CASES.append(
     dict(
         name="test 6",
-        sample=SAMPLE,
+        sample=SINGLE_PLAYER_SAMPLE,
         start_idx=5,
         discount=0.5,
         num_unroll_steps=3,
@@ -153,7 +153,7 @@ TWO_PLAYER_SAMPLE = mz.replay.TrajectorySample(
     is_first=[True, False, False, False],
     is_last=[False, False, False, True],
     to_play=[0, 1, 0, 1],
-    root_value=[10, 20, 30, -1],
+    root_value=[10, 20, 30, 0],
     action_probs=[np.arange(i, i + 3) / sum(list(range(i, i + 3))) for i in range(3)]
     + [np.ones(3) / 3],
     action=[101, 102, 103, -1],
@@ -173,10 +173,33 @@ TEST_CASES.append(
             action=[101],
             value=[
                 200 + -300 * 0.5 + 400 * 0.5 ** 2,
-                300 + -400 * 0.5,
+                -300 + 400 * 0.5,
             ],
             last_reward=[0, 200],
             action_probs=TWO_PLAYER_SAMPLE.action_probs[0:2],
+        ).cast(),
+    )
+)
+
+TEST_CASES.append(
+    dict(
+        name="test 8",
+        sample=TWO_PLAYER_SAMPLE,
+        start_idx=1,
+        discount=0.5,
+        num_unroll_steps=2,
+        num_td_steps=1,
+        num_stacked_frames=2,
+        expected_target=mz.replay.TrainTarget(
+            stacked_frames=[[11], [22]],
+            action=[102, 103],
+            value=[
+                -300 + 400 * 0.5,
+                400,
+                400
+            ],
+            last_reward=[0, 200, -300],
+            action_probs=TWO_PLAYER_SAMPLE.action_probs[1:4],
         ).cast(),
     )
 )

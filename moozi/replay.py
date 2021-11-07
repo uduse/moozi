@@ -125,6 +125,9 @@ class ReplayBuffer:
         return len(self.store)
 
 
+BASE_PLAYER: int = 0
+
+
 def make_target_from_traj(
     sample: TrajectorySample,
     start_idx,
@@ -138,6 +141,8 @@ def make_target_from_traj(
 
     last_step_idx = sample.is_last.argmax()
 
+    stacked_frames = _get_stacked_frames(sample, start_idx, num_stacked_frames)
+
     # unroll
     unrolled_data = []
     # root_player = sample.to_play[start_idx]
@@ -149,7 +154,6 @@ def make_target_from_traj(
 
     unrolled_data_stacked = tree_utils.stack_sequence_fields(unrolled_data)
 
-    stacked_frames = _get_stacked_frames(sample, start_idx, num_stacked_frames)
     action = _get_action(sample, start_idx, num_unroll_steps)
 
     return TrainTarget(
@@ -191,14 +195,13 @@ def _get_value(
     if curr_idx >= last_step_idx:
         return 0
 
-    curr_player = sample.to_play[curr_idx]
     bootstrap_idx = curr_idx + num_td_steps
 
     accumulated_reward = _get_accumulated_reward(
-        sample, curr_idx, discount, curr_player, bootstrap_idx
+        sample, curr_idx, discount, bootstrap_idx
     )
     bootstrap_value = _get_bootstrap_value(
-        sample, last_step_idx, num_td_steps, discount, curr_player, bootstrap_idx
+        sample, last_step_idx, num_td_steps, discount, bootstrap_idx
     )
 
     return accumulated_reward + bootstrap_value
@@ -209,20 +212,20 @@ def _get_bootstrap_value(
     last_step_idx,
     num_td_steps,
     discount,
-    curr_player,
     bootstrap_idx,
 ) -> float:
     if bootstrap_idx <= last_step_idx:
         value = sample.root_value[bootstrap_idx] * (discount ** num_td_steps)
-        if curr_player != sample.to_play[bootstrap_idx]:
-            value = -value
-        return value
+        if sample.to_play[bootstrap_idx] != BASE_PLAYER:
+            return -value
+        else:
+            return value
     else:
         return 0.0
 
 
 def _get_accumulated_reward(
-    sample: TrajectorySample, curr_idx, discount, curr_player, bootstrap_idx
+    sample: TrajectorySample, curr_idx, discount, bootstrap_idx
 ) -> float:
     reward_sum = 0.0
     last_rewards = sample.last_reward[curr_idx + 1 : bootstrap_idx + 1]
@@ -231,7 +234,7 @@ def _get_accumulated_reward(
         zip(last_rewards, players_of_last_rewards)
     ):
         discounted_reward = last_rewrad * (discount ** i)
-        if player == curr_player:
+        if player == BASE_PLAYER:
             reward_sum += discounted_reward
         else:
             reward_sum -= discounted_reward
@@ -242,7 +245,11 @@ def _get_last_reward(sample: TrajectorySample, start_idx, curr_idx, last_step_id
     if curr_idx == start_idx:
         return 0
     elif curr_idx <= last_step_idx:
-        return sample.last_reward[curr_idx]
+        player_of_reward = sample.to_play[curr_idx - 1]
+        if player_of_reward == BASE_PLAYER:
+            return sample.last_reward[curr_idx]
+        else:
+            return -sample.last_reward[curr_idx]
     else:
         return 0
 

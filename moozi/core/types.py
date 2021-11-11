@@ -8,3 +8,6 @@ class PolicyFeed(NamedTuple):
     to_play: int
     legal_actions_mask: np.ndarray
     random_key: np.ndarray
+
+
+BASE_PLAYER: int = 0

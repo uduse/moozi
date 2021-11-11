@@ -8,8 +8,13 @@ import numpy as np
 from moozi import link
 from moozi.batching_layer import BatchingClient
 from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
-from moozi.policy.mcts_core import Node, SearchStrategy, get_next_player
-from moozi import PolicyFeed
+from moozi.policy.mcts_core import (
+    Node,
+    SearchStrategy,
+    get_next_player,
+    get_prev_player,
+)
+from moozi import PolicyFeed, BASE_PLAYER
 from moozi.utils import as_coroutine
 
 
@@ -46,13 +51,16 @@ class MCTSAsync:
         root = Node(0)
         next_player = get_next_player(self.strategy, feed.to_play)
         root.expand_node(
-            network_output=root_nn_output,
+            hidden_state=root_nn_output.hidden_state,
+            reward=0.0,
+            policy_logits=root_nn_output.policy_logits,
             legal_actions_mask=feed.legal_actions_mask,
-            root_player=root.player,
             next_player=next_player,
         )
+
+        value = self._reorient(float(root_nn_output.value), root.player, feed.to_play)
         root.backpropagate(
-            value=float(root_nn_output.value),
+            value=value,
             discount=self.discount,
             root_player=root.player,
         )
@@ -61,18 +69,43 @@ class MCTSAsync:
     async def simulate_once(self, root: Node):
         action, leaf = root.select_leaf()
         assert leaf.parent
-        nn_output = await self.recurr_inf_fn((leaf.parent.hidden_state, action))
-        leaf.expand_node(
-            network_output=nn_output,
-            legal_actions_mask=self.all_actions_mask,
+        leaf_nn_output = await self.recurr_inf_fn((leaf.parent.hidden_state, action))
+
+        reward = self._reorient(
+            float(leaf_nn_output.reward),
             root_player=root.player,
+            target_player=get_prev_player(self.strategy, leaf.player),
+        )
+
+        value = self._reorient(
+            float(leaf_nn_output.value),
+            root_player=root.player,
+            target_player=root.player,
+        )
+
+        leaf.expand_node(
+            hidden_state=leaf_nn_output.hidden_state,
+            reward=reward,
+            policy_logits=leaf_nn_output.policy_logits,
+            legal_actions_mask=self.all_actions_mask,
             next_player=get_next_player(self.strategy, leaf.player),
         )
+
         leaf.backpropagate(
-            value=float(nn_output.value),
+            value=value,
             discount=self.discount,
             root_player=root.player,
         )
+
+    def _reorient(self, item: float, root_player: int, target_player: int) -> float:
+        """Reorient value or reward to the root_player's perspective."""
+        is_same_player = root_player == target_player
+        if (root_player == BASE_PLAYER and not is_same_player) or (
+            root_player != BASE_PLAYER and is_same_player
+        ):
+            return -item
+        else:
+            return item
 
 
 def make_async_planner_law(init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10):

@@ -126,27 +126,19 @@ class MuZeroLoss(LossFn):
         )
 
         for i in range(self._num_unroll_steps):
-            # is_valid_action = batch.action.take(i, axis=1) != -1
-            # # step_loss_mask = is_valid_action
-
             network_output = network.recurrent_inference(
                 params, network_output.hidden_state, batch.action.take(0, axis=1)
             )
 
-            losses[f"loss_reward_{str(i + 1)}"] = (
-                vmap(mse)(batch.last_reward.take(i + 1, axis=1), network_output.reward)
-                # * step_loss_mask
+            losses[f"loss_reward_{str(i + 1)}"] = vmap(mse)(
+                batch.last_reward.take(i + 1, axis=1), network_output.reward
             )
-            losses[f"loss_value_{str(i + 1)}"] = (
-                vmap(mse)(batch.value.take(i + 1, axis=1), network_output.value)
-                # * step_loss_mask
+            losses[f"loss_value_{str(i + 1)}"] = vmap(mse)(
+                batch.value.take(i + 1, axis=1), network_output.value
             )
-            losses[f"loss_action_probs_{str(i + 1)}"] = (
-                vmap(rlax.categorical_cross_entropy)(
-                    batch.action_probs.take(i + 1, axis=1), network_output.policy_logits
-                )
-                # * step_loss_mask
-            )
+            losses[f"loss_action_probs_{str(i + 1)}"] = vmap(
+                rlax.categorical_cross_entropy
+            )(batch.action_probs.take(i + 1, axis=1), network_output.policy_logits)
 
         losses["loss_l2"] = jnp.reshape(
             params_l2_loss(params) * self._weight_decay, (1,)

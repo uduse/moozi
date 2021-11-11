@@ -12,8 +12,7 @@ import numpy as np
 import ray.util.queue
 import rlax
 import trio
-from moozi import PolicyFeed
-from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
+from moozi import BASE_PLAYER
 
 
 class SearchStrategy(Enum):
@@ -76,6 +75,7 @@ class Node(object):
     prior: float
     player: int = 0
     parent: Optional["Node"] = None
+    name: str = ""
     children: dict = field(default_factory=dict)
     value_sum: float = 0.0
     visit_count: int = 0
@@ -95,16 +95,16 @@ class Node(object):
 
     def expand_node(
         self,
-        network_output: NNOutput,
+        hidden_state: np.ndarray,
+        reward: float,
+        policy_logits: np.ndarray,
         legal_actions_mask: np.ndarray,
-        root_player: int,
         next_player: int,
     ):
-        self.hidden_state = network_output.hidden_state
 
-        self._set_reward(network_output, root_player)
-
-        action_probs = self._compute_action_probs(network_output, legal_actions_mask)
+        self.hidden_state = hidden_state
+        self.last_reward = reward
+        action_probs = self._compute_action_probs(policy_logits, legal_actions_mask)
 
         for action, prob in enumerate(action_probs):
             self.children[action] = Node(
@@ -118,18 +118,8 @@ class Node(object):
                 hidden_state=None,
             )
 
-    def _set_reward(self, network_output, root_player):
-        reward = float(network_output.reward)
-        # assume zero-sum two-player game
-        is_reward_from_opponent = self.parent and self.parent.player != root_player
-        if is_reward_from_opponent:
-            reward = -reward
-        self.last_reward = reward
-
-    def _compute_action_probs(self, network_output, legal_actions_mask):
-        # action_probs = np.array(_safe_epsilon_softmax(network_output.policy_logits))
-        # action_probs = softmax(np.array(network_output.policy_logits))
-        action_probs = np.array(softmax(network_output.policy_logits))
+    def _compute_action_probs(self, policy_logits, legal_actions_mask):
+        action_probs = np.array(softmax(policy_logits))
         action_probs *= legal_actions_mask
         action_probs /= np.sum(action_probs)
         return action_probs
@@ -153,8 +143,18 @@ class Node(object):
         for a, n in zip(actions, noise):
             self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
 
-    def backpropagate(self, value: float, discount: float, root_player):
-        """Nega-max"""
+    def backpropagate(self, value: float, discount: float, root_player: int):
+        """[summary]
+
+        [extended_summary]
+
+        :param value: value based on the root_player
+        :type value: float
+        :param discount: [description]
+        :type discount: float
+        :param root_player: [description]
+        :type root_player: int
+        """
         node = self
         while True:
             if node.player == root_player:
@@ -200,7 +200,10 @@ class Node(object):
         prior_score = pb_c * child.prior
 
         if child.visit_count > 0:
-            value_score = child.last_reward + discount * child.value
+            reward = child.last_reward
+            if parent.player != child.player:
+                reward = -reward
+            value_score = reward + discount * child.value
         else:
             value_score = 0.0
         return prior_score + value_score

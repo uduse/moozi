@@ -152,7 +152,7 @@ TWO_PLAYER_SAMPLE = mz.replay.TrajectorySample(
     last_reward=[0, 200, 300, 400],
     is_first=[True, False, False, False],
     is_last=[False, False, False, True],
-    to_play=[0, 1, 0, 1],
+    to_play=[0, 1, 0, -1],
     root_value=[10, 20, 30, 0],
     action_probs=[np.arange(i, i + 3) / sum(list(range(i, i + 3))) for i in range(3)]
     + [np.ones(3) / 3],
@@ -193,13 +193,33 @@ TEST_CASES.append(
         expected_target=mz.replay.TrainTarget(
             stacked_frames=[[11], [22]],
             action=[102, 103],
-            value=[
-                -300 + 400 * 0.5,
-                400,
-                400
-            ],
-            last_reward=[0, 200, -300],
+            value=[-300 + 30 * 0.5, 400, 0],
+            last_reward=[0, -300, 400],
             action_probs=TWO_PLAYER_SAMPLE.action_probs[1:4],
+        ).cast(),
+    )
+)
+
+TEST_CASES.append(
+    dict(
+        name="test 9",
+        sample=TWO_PLAYER_SAMPLE,
+        start_idx=2,
+        discount=0.5,
+        num_unroll_steps=3,
+        num_td_steps=2,
+        num_stacked_frames=1,
+        expected_target=mz.replay.TrainTarget(
+            stacked_frames=[[33]],
+            action=[103, -1, -1],
+            value=[400, 0, 0, 0],
+            last_reward=[0, 400, 0, 0],
+            action_probs=[
+                TWO_PLAYER_SAMPLE.action_probs[2],
+                np.ones(3) / 3,
+                np.ones(3) / 3,
+                np.ones(3) / 3,
+            ],
         ).cast(),
     )
 )

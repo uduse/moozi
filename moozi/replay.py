@@ -125,9 +125,6 @@ class ReplayBuffer:
         return len(self.store)
 
 
-BASE_PLAYER: int = 0
-
-
 def make_target_from_traj(
     sample: TrajectorySample,
     start_idx,
@@ -216,7 +213,7 @@ def _get_bootstrap_value(
 ) -> float:
     if bootstrap_idx <= last_step_idx:
         value = sample.root_value[bootstrap_idx] * (discount ** num_td_steps)
-        if sample.to_play[bootstrap_idx] != BASE_PLAYER:
+        if sample.to_play[bootstrap_idx] != mz.BASE_PLAYER:
             return -value
         else:
             return value
@@ -234,7 +231,7 @@ def _get_accumulated_reward(
         zip(last_rewards, players_of_last_rewards)
     ):
         discounted_reward = last_rewrad * (discount ** i)
-        if player == BASE_PLAYER:
+        if player == mz.BASE_PLAYER:
             reward_sum += discounted_reward
         else:
             reward_sum -= discounted_reward
@@ -246,7 +243,7 @@ def _get_last_reward(sample: TrajectorySample, start_idx, curr_idx, last_step_id
         return 0
     elif curr_idx <= last_step_idx:
         player_of_reward = sample.to_play[curr_idx - 1]
-        if player_of_reward == BASE_PLAYER:
+        if player_of_reward == mz.BASE_PLAYER:
             return sample.last_reward[curr_idx]
         else:
             return -sample.last_reward[curr_idx]

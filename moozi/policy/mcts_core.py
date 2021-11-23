@@ -60,6 +60,14 @@ def get_prev_player(strategy: SearchStrategy, to_play: int) -> int:
         raise NotImplementedError(f"{strategy} not implemented")
 
 
+def reorient(item: float, root_player: int, target_player: int) -> float:
+    """Reorient value or reward to the root_player's perspective."""
+    if root_player == BASE_PLAYER and root_player == target_player:
+        return item
+    else:
+        return -item
+
+
 # TODO: findout the most efficient version of softmax implementation
 # _safe_epsilon_softmax = jax.jit(rlax.safe_epsilon_softmax(1e-7, 1).probs, backend="cpu")
 # softmax = jax.jit(jax.nn.softmax, backend="cpu")
@@ -111,6 +119,7 @@ class Node(object):
                 prior=prob,
                 player=next_player,
                 parent=self,
+                name=self.name + f"_{action}",
                 children={},
                 value_sum=0.0,
                 visit_count=0,
@@ -200,10 +209,7 @@ class Node(object):
         prior_score = pb_c * child.prior
 
         if child.visit_count > 0:
-            reward = child.last_reward
-            if parent.player != child.player:
-                reward = -reward
-            value_score = reward + discount * child.value
+            value_score = child.last_reward + discount * child.value
         else:
             value_score = 0.0
         return prior_score + value_score
@@ -213,10 +219,11 @@ def get_uuid():
     return uuid.uuid4().hex[:8]
 
 
-def convert_to_anytree(node: Node, anytree_node=None, action="_"):
+def convert_to_anytree(node: Node, anytree_node=None, last_action: int = 0):
     anytree_node = anytree.Node(
         id=get_uuid(),
-        name=action,
+        name=node.name,
+        last_action=last_action,
         parent=anytree_node,
         to_play=node.player,
         prior=np.round(node.prior, 3),
@@ -230,14 +237,14 @@ def convert_to_anytree(node: Node, anytree_node=None, action="_"):
 
 
 def nodeattrfunc(node):
-    str = f'label="V: {node.value}\nN: {node.visits}"'
+    str = f'label="{node.name}\nV: {node.value}\nN: {node.visits}"'
     if node.to_play == 1:
         str += ", shape=box"
     return str
 
 
 def edgeattrfunc(parent, child):
-    return f'label="A: {child.name} \np: {str(child.prior)}\nR: {child.reward}"'
+    return f'label="A: {child.last_action} \np: {str(child.prior)}\nR: {child.reward}"'
 
 
 _partial_dot_exporter = functools.partial(

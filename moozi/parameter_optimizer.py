@@ -89,6 +89,7 @@ class ParameterOptimizer:
         self.network = network
         self.state = TrainingState(
             params=params,
+            target_params=params,
             opt_state=optimizer.init(params),
             steps=0,
             rng_key=jax.random.PRNGKey(0),

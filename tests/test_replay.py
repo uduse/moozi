@@ -16,9 +16,9 @@ SINGLE_PLAYER_SAMPLE = mz.replay.TrajectorySample(
     action=[101, 102, 103, 104, 105, -1],
 ).cast()
 
-TEST_CASES = []
+REORIENT_TEST_CASES = []
 
-TEST_CASES.append(
+REORIENT_TEST_CASES.append(
     dict(
         name="test 1",
         sample=SINGLE_PLAYER_SAMPLE,
@@ -37,7 +37,7 @@ TEST_CASES.append(
     )
 )
 
-TEST_CASES.append(
+REORIENT_TEST_CASES.append(
     dict(
         name="test 2",
         sample=SINGLE_PLAYER_SAMPLE,
@@ -60,7 +60,7 @@ TEST_CASES.append(
     )
 )
 
-TEST_CASES.append(
+REORIENT_TEST_CASES.append(
     dict(
         name="test 3",
         sample=SINGLE_PLAYER_SAMPLE,
@@ -79,7 +79,7 @@ TEST_CASES.append(
     ),
 )
 
-TEST_CASES.append(
+REORIENT_TEST_CASES.append(
     dict(
         name="test 4",
         sample=SINGLE_PLAYER_SAMPLE,
@@ -98,7 +98,7 @@ TEST_CASES.append(
     )
 )
 
-TEST_CASES.append(
+REORIENT_TEST_CASES.append(
     dict(
         name="test 5",
         sample=SINGLE_PLAYER_SAMPLE,
@@ -122,7 +122,7 @@ TEST_CASES.append(
     )
 )
 
-TEST_CASES.append(
+REORIENT_TEST_CASES.append(
     dict(
         name="test 6",
         sample=SINGLE_PLAYER_SAMPLE,
@@ -159,7 +159,7 @@ TWO_PLAYER_SAMPLE = mz.replay.TrajectorySample(
     action=[101, 102, 103, -1],
 ).cast()
 
-TEST_CASES.append(
+REORIENT_TEST_CASES.append(
     dict(
         name="test 7",
         sample=TWO_PLAYER_SAMPLE,
@@ -181,7 +181,7 @@ TEST_CASES.append(
     )
 )
 
-TEST_CASES.append(
+REORIENT_TEST_CASES.append(
     dict(
         name="test 8",
         sample=TWO_PLAYER_SAMPLE,
@@ -200,7 +200,7 @@ TEST_CASES.append(
     )
 )
 
-TEST_CASES.append(
+REORIENT_TEST_CASES.append(
     dict(
         name="test 9",
         sample=TWO_PLAYER_SAMPLE,
@@ -224,11 +224,11 @@ TEST_CASES.append(
     )
 )
 
-names = list(map(lambda x: x["name"], TEST_CASES))
+names = list(map(lambda x: x["name"], REORIENT_TEST_CASES))
 assert len(names) == len(set(names)), "Duplicate test cases name."
 
 
-@pytest.mark.kwparametrize(*TEST_CASES)
+@pytest.mark.kwparametrize(*REORIENT_TEST_CASES)
 def test_make_target(
     name,
     sample,

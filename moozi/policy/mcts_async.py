@@ -13,6 +13,7 @@ from moozi.policy.mcts_core import (
     SearchStrategy,
     get_next_player,
     get_prev_player,
+    reorient,
 )
 from moozi import PolicyFeed, BASE_PLAYER
 from moozi.utils import as_coroutine
@@ -48,7 +49,7 @@ class MCTSAsync:
 
     async def get_root(self, feed: PolicyFeed) -> Node:
         root_nn_output = await self.init_inf_fn(feed.stacked_frames)
-        root = Node(0)
+        root = Node(0, player=feed.to_play, name="s")
         next_player = get_next_player(self.strategy, feed.to_play)
         root.expand_node(
             hidden_state=root_nn_output.hidden_state,
@@ -58,7 +59,11 @@ class MCTSAsync:
             next_player=next_player,
         )
 
-        value = self._reorient(float(root_nn_output.value), root.player, feed.to_play)
+        value = reorient(
+            float(root_nn_output.value),
+            root_player=root.player,
+            target_player=feed.to_play,
+        )
         root.backpropagate(
             value=value,
             discount=self.discount,
@@ -71,13 +76,13 @@ class MCTSAsync:
         assert leaf.parent
         leaf_nn_output = await self.recurr_inf_fn((leaf.parent.hidden_state, action))
 
-        reward = self._reorient(
+        reward = reorient(
             float(leaf_nn_output.reward),
             root_player=root.player,
             target_player=get_prev_player(self.strategy, leaf.player),
         )
 
-        value = self._reorient(
+        value = reorient(
             float(leaf_nn_output.value),
             root_player=root.player,
             target_player=root.player,
@@ -96,16 +101,6 @@ class MCTSAsync:
             discount=self.discount,
             root_player=root.player,
         )
-
-    def _reorient(self, item: float, root_player: int, target_player: int) -> float:
-        """Reorient value or reward to the root_player's perspective."""
-        is_same_player = root_player == target_player
-        if (root_player == BASE_PLAYER and not is_same_player) or (
-            root_player != BASE_PLAYER and is_same_player
-        ):
-            return -item
-        else:
-            return item
 
 
 def make_async_planner_law(init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10):

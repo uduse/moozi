@@ -1,4 +1,5 @@
 import functools
+import pytest
 import operator
 from dataclasses import dataclass
 from typing import Callable
@@ -15,7 +16,14 @@ from moozi.batching_layer import BatchingClient, BatchingLayer
 from moozi.core import PolicyFeed
 from moozi.nn import NNOutput, NeuralNetwork
 from moozi.policy.mcts_async import MCTSAsync
-from moozi.policy.mcts_core import Node, anytree_to_text, convert_to_anytree, get_next_player, SearchStrategy
+from moozi.policy.mcts_core import (
+    Node,
+    anytree_to_text,
+    convert_to_anytree,
+    get_next_player,
+    SearchStrategy,
+    reorient,
+)
 from moozi.utils import as_coroutine
 from trio_asyncio import aio_as_trio
 
@@ -24,13 +32,17 @@ from tests.utils import with_trio_asyncio
 
 def test_node():
     node = Node(prior=0.5, player=0)
-    node.expand_node(
-        network_output=NNOutput(
-            value=0.5, reward=1, policy_logits=np.array([0.5, 0.5]), hidden_state=None
-        ),
-        legal_actions_mask=np.array([1, 1, 1]),
-        next_player=get_next_player(SearchStrategy.TWO_PLAYER, node.player)
+    nn_output = NNOutput(
+        value=0.5, reward=1, policy_logits=np.array([0.1, 0.1, 0.8]), hidden_state=None
     )
+    node.expand_node(
+        hidden_state=nn_output.hidden_state,
+        reward=nn_output.reward,
+        policy_logits=nn_output.policy_logits,
+        legal_actions_mask=np.array([1, 1, 1]),
+        next_player=get_next_player(SearchStrategy.TWO_PLAYER, node.player),
+    )
+    assert node
 
 
 async def test_async_mcts(
@@ -152,3 +164,21 @@ async def test_async_mcts_with_ray_and_batching(
                     nn.start_soon(mcts.run, policy_feed)
 
     assert mctses
+
+
+x = 10
+
+
+@pytest.mark.parametrize(
+    "item,root_player,target_player,expected",
+    [
+        (x, 0, 0, x),
+        (x, 0, 1, -x),
+        (x, 1, 0, -x),
+        (x, 1, 1, -x),
+    ],
+)
+def test_reorient(item, root_player, target_player, expected):
+    val = reorient(item, root_player=root_player, target_player=target_player)
+
+    assert val == expected

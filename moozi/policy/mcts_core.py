@@ -60,9 +60,10 @@ def get_prev_player(strategy: SearchStrategy, to_play: int) -> int:
         raise NotImplementedError(f"{strategy} not implemented")
 
 
-def reorient(item: float, root_player: int, target_player: int) -> float:
+# TODO: move to NN related file
+def reorient(item: float, player: int) -> float:
     """Reorient value or reward to the root_player's perspective."""
-    if root_player == BASE_PLAYER and root_player == target_player:
+    if player == BASE_PLAYER:
         return item
     else:
         return -item
@@ -134,10 +135,13 @@ class Node(object):
         return action_probs
 
     def select_child(self):
-        scores = [
-            (Node.ucb_score(parent=self, child=child), action, child)
-            for action, child in self.children.items()
-        ]
+        scores = []
+        for action, child in self.children.items():
+            ucb_score = Node.ucb_score(parent=self, child=child)
+            if self.player != child.player:
+                ucb_score = -ucb_score
+            scores.append((ucb_score, action, child))
+
         # TODO: break ties randomly?
         _, action, child = max(scores)
         return action, child

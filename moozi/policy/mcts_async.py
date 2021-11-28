@@ -61,8 +61,7 @@ class MCTSAsync:
 
         value = reorient(
             float(root_nn_output.value),
-            root_player=root.player,
-            target_player=feed.to_play,
+            player=root.player,
         )
         root.backpropagate(
             value=value,
@@ -78,14 +77,15 @@ class MCTSAsync:
 
         reward = reorient(
             float(leaf_nn_output.reward),
-            root_player=root.player,
-            target_player=get_prev_player(self.strategy, leaf.player),
+            player=leaf.parent.player,
         )
+        
+        if root.player != leaf.parent.player:
+            reward = -reward
 
         value = reorient(
             float(leaf_nn_output.value),
-            root_player=root.player,
-            target_player=root.player,
+            player=leaf.player,
         )
 
         leaf.expand_node(

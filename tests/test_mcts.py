@@ -175,7 +175,7 @@ x = 10
         (x, 0, 0, x),
         (x, 0, 1, -x),
         (x, 1, 0, -x),
-        (x, 1, 1, -x),
+        (x, 1, 1, x),
     ],
 )
 def test_reorient(item, root_player, target_player, expected):

@@ -7,7 +7,14 @@ import jax.numpy as jnp
 import numpy as np
 from moozi import link
 from moozi.batching_layer import BatchingClient
-from moozi.nn import NeuralNetwork, NeuralNetworkSpec, NNOutput, get_network
+from moozi.nn import (
+    InitialInferenceFeatures,
+    NeuralNetwork,
+    NeuralNetworkSpec,
+    NNOutput,
+    RecurrentInferenceFeatures,
+    get_network,
+)
 from moozi.policy.mcts_core import (
     Node,
     SearchStrategy,
@@ -23,8 +30,8 @@ from moozi.utils import as_coroutine
 class MCTSAsync:
     dim_action: InitVar[int]
 
-    init_inf_fn: Callable[..., Awaitable[NNOutput]]
-    recurr_inf_fn: Callable[..., Awaitable[NNOutput]]
+    init_inf_fn: Callable[[InitialInferenceFeatures], Awaitable[NNOutput]]
+    recurr_inf_fn: Callable[[RecurrentInferenceFeatures], Awaitable[NNOutput]]
     num_simulations: int
     all_actions_mask: np.ndarray = None
     discount: float = 1.0
@@ -48,7 +55,10 @@ class MCTSAsync:
         return root
 
     async def get_root(self, feed: PolicyFeed) -> Node:
-        root_nn_output = await self.init_inf_fn(feed.stacked_frames)
+        init_inf_features = InitialInferenceFeatures(
+            stacked_frames=feed.stacked_frames, player=np.array(feed.to_play)
+        )
+        root_nn_output = await self.init_inf_fn(init_inf_features)
         root = Node(0, player=feed.to_play, name="s")
         next_player = get_next_player(self.strategy, feed.to_play)
         root.expand_node(
@@ -58,35 +68,21 @@ class MCTSAsync:
             legal_actions_mask=feed.legal_actions_mask,
             next_player=next_player,
         )
-
-        value = reorient(
-            float(root_nn_output.value),
-            player=root.player,
-        )
-        root.backpropagate(
-            value=value,
-            discount=self.discount,
-            root_player=root.player,
-        )
+        value = float(root_nn_output.value)
+        root.backpropagate(value=value, discount=self.discount)
         return root
 
     async def simulate_once(self, root: Node):
         action, leaf = root.select_leaf()
         assert leaf.parent
-        leaf_nn_output = await self.recurr_inf_fn((leaf.parent.hidden_state, action))
 
-        reward = reorient(
-            float(leaf_nn_output.reward),
-            player=leaf.parent.player,
+        recurr_inf_features = RecurrentInferenceFeatures(
+            hidden_state=leaf.parent.hidden_state, action=np.array(action)
         )
-        
-        if root.player != leaf.parent.player:
-            reward = -reward
+        leaf_nn_output = await self.recurr_inf_fn(recurr_inf_features)
 
-        value = reorient(
-            float(leaf_nn_output.value),
-            player=leaf.player,
-        )
+        reward = float(leaf_nn_output.reward)
+        value = float(leaf_nn_output.value)
 
         leaf.expand_node(
             hidden_state=leaf_nn_output.hidden_state,
@@ -96,11 +92,7 @@ class MCTSAsync:
             next_player=get_next_player(self.strategy, leaf.player),
         )
 
-        leaf.backpropagate(
-            value=value,
-            discount=self.discount,
-            root_player=root.player,
-        )
+        leaf.backpropagate(value=value, discount=self.discount)
 
 
 def make_async_planner_law(init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10):

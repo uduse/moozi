@@ -17,12 +17,14 @@ class NNOutput(NamedTuple):
     hidden_state: jnp.ndarray
 
 
-# class AsyncNNOutput(NamedTuple):
-#     value: jnp.ndarray
-#     reward: jnp.ndarray
-#     # policy_logits: typing.Dict[mz.Action, float]
-#     policy_logits: jnp.ndarray
-#     hidden_state_id: jnp.ndarray
+class InitialInferenceFeatures(NamedTuple):
+    stacked_frames: jnp.ndarray
+    player: jnp.ndarray
+
+
+class RecurrentInferenceFeatures(NamedTuple):
+    hidden_state: jnp.ndarray
+    action: jnp.ndarray
 
 
 class NeuralNetwork(NamedTuple):
@@ -47,11 +49,15 @@ def get_network(spec: NeuralNetworkSpec):
     hk_module = functools.partial(MLPNet, spec)
     initial_inference = hk.without_apply_rng(
         hk.transform(
-            lambda stacked_frames: hk_module().initial_inference(stacked_frames)
+            lambda init_inf_features: hk_module().initial_inference(init_inf_features)
         )
     )
     recurrent_inference = hk.without_apply_rng(
-        hk.transform(lambda h, a: hk_module().recurrent_inference(h, a))
+        hk.transform(
+            lambda recurr_inf_features: hk_module().recurrent_inference(
+                recurr_inf_features
+            )
+        )
     )
 
     def init(random_key):
@@ -69,16 +75,14 @@ def get_network(spec: NeuralNetworkSpec):
         )
         return params
 
-    def _initial_inference_unbatched(params, stacked_frames):
+    def _initial_inference_unbatched(params, init_inf_features):
         return squeeze_batch_dim(
-            initial_inference.apply(params, add_batch_dim(stacked_frames))
+            initial_inference.apply(params, add_batch_dim(init_inf_features))
         )
 
-    def _recurrent_inference_unbatched(params, hidden_state, action):
+    def _recurrent_inference_unbatched(params, recurr_inf_features):
         return squeeze_batch_dim(
-            recurrent_inference.apply(
-                params, add_batch_dim(hidden_state), add_batch_dim(action)
-            )
+            recurrent_inference.apply(params, add_batch_dim(recurr_inf_features))
         )
 
     return NeuralNetwork(
@@ -151,10 +155,10 @@ class MLPNet(hk.Module):
         next_rewards = jnp.squeeze(reward_branch(dyna_trunk_out), axis=-1)
         return next_hidden_states, next_rewards
 
-    def initial_inference(self, stacked_frames):
-        chex.assert_rank(stacked_frames, 3)
-        flattened = hk.Flatten()(stacked_frames)
-        hidden_state = self.repr_net(flattened)
+    def initial_inference(self, init_inf_features: InitialInferenceFeatures):
+        chex.assert_rank(init_inf_features.stacked_frames, 3)
+        flattened_stacked_frames = hk.Flatten()(init_inf_features.stacked_frames)
+        hidden_state = self.repr_net(flattened_stacked_frames)
         value, policy_logits = self.pred_net(hidden_state)
         reward = jnp.zeros_like(value)
         chex.assert_rank([value, reward, policy_logits, hidden_state], [1, 1, 2, 2])
@@ -165,14 +169,18 @@ class MLPNet(hk.Module):
             hidden_state=hidden_state,
         )
 
-    def recurrent_inference(self, hidden_state, action):
+    def recurrent_inference(self, recurr_inf_features: RecurrentInferenceFeatures):
         # TODO: a batch-jit that infers K times?
-        hidden_state, reward = self.dyna_net(hidden_state, action)
-        value, policy_logits = self.pred_net(hidden_state)
-        chex.assert_rank([value, reward, policy_logits, hidden_state], [1, 1, 2, 2])
+        next_hidden_state, reward = self.dyna_net(
+            recurr_inf_features.hidden_state, recurr_inf_features.action
+        )
+        value, policy_logits = self.pred_net(next_hidden_state)
+        chex.assert_rank(
+            [value, reward, policy_logits, next_hidden_state], [1, 1, 2, 2]
+        )
         return NNOutput(
             value=value,
             reward=reward,
             policy_logits=policy_logits,
-            hidden_state=hidden_state,
+            hidden_state=next_hidden_state,
         )

@@ -138,8 +138,6 @@ class Node(object):
         scores = []
         for action, child in self.children.items():
             ucb_score = Node.ucb_score(parent=self, child=child)
-            if self.player != child.player:
-                ucb_score = -ucb_score
             scores.append((ucb_score, action, child))
 
         # TODO: break ties randomly?
@@ -156,24 +154,24 @@ class Node(object):
         for a, n in zip(actions, noise):
             self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
 
-    def backpropagate(self, value: float, discount: float, root_player: int):
+    def backpropagate(self, value: float, discount: float):
         """[summary]
 
         [extended_summary]
 
-        :param value: value based on the root_player
+        :param value: value based on the BASE_PLAYER's perspective
         :type value: float
         :param discount: [description]
         :type discount: float
-        :param root_player: [description]
-        :type root_player: int
         """
         node = self
         while True:
-            if node.player == root_player:
-                node.value_sum += value
-            else:
-                node.value_sum -= value
+            # if node.player == BASE_PLAYER:
+            #     node.value_sum += value
+            # else:
+            #     node.value_sum -= value
+
+            node.value_sum += value
 
             node.visit_count += 1
 
@@ -202,7 +200,7 @@ class Node(object):
         return action, node
 
     @classmethod
-    def ucb_score(cls, parent: "Node", child: "Node"):
+    def ucb_score(cls, parent: "Node", child: "Node") -> float:
         pb_c_base = 19652.0
         pb_c_init = 1.25
         # TODO: obviously this `discount` should be a parameter
@@ -214,8 +212,12 @@ class Node(object):
 
         if child.visit_count > 0:
             value_score = child.last_reward + discount * child.value
+            # max(-scores) if the parent player is not the BASE_PLAYER
+            if parent.player != BASE_PLAYER:
+                value_score = -value_score
         else:
             value_score = 0.0
+
         return prior_score + value_score
 
 

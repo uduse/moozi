@@ -3,7 +3,12 @@ import jax
 from IPython import display
 import numpy as np
 from moozi.core.types import PolicyFeed
-from moozi.nn import NNOutput, NeuralNetwork
+from moozi.nn import (
+    InitialInferenceFeatures,
+    NNOutput,
+    NeuralNetwork,
+    RecurrentInferenceFeatures,
+)
 from moozi.policy.mcts_async import MCTSAsync
 from moozi.policy.mcts_core import (
     Node,
@@ -18,13 +23,36 @@ from moozi.policy.mcts_core import (
 
 
 # %%
-def inf_fn(*args, **kwargs):
-    print("inputs:", args, kwargs)
+def init_inf_fn(features: InitialInferenceFeatures):
+    print("features:", features)
+    value = np.round(np.random.rand() * 2 - 1, 1)
     output = NNOutput(
-        value=np.round(np.random.randn(), 1),
-        reward=np.round(np.random.randn(), 1),
+        value=value,
+        reward=np.array(0.0),
         policy_logits=np.array([0.5, 0.5]),
-        hidden_state=None,
+        hidden_state=np.array(features.player),
+    )
+    print(output)
+    return output
+
+
+def recurr_inf_fn(features: RecurrentInferenceFeatures):
+    print("features:", features)
+    next_player = get_next_player(SearchStrategy.TWO_PLAYER, int(features.hidden_state))
+    value = np.round(np.random.rand() * 2 - 1, 1)
+    reward = np.round(np.random.rand() * 2 - 1, 1)
+    if features.action == 0:
+        value -= 0.2
+
+    # if next_player == 0:
+    #     reward = -reward
+    # else:
+    #     value = -value
+    output = NNOutput(
+        value=value,
+        reward=reward,
+        policy_logits=np.array([0.5, 0.5]),
+        hidden_state=np.array(next_player),
     )
     print(output)
     return output
@@ -34,14 +62,14 @@ def inf_fn(*args, **kwargs):
 mcts = MCTSAsync(
     dim_action=2,
     num_simulations=1,
-    init_inf_fn=inf_fn,
-    recurr_inf_fn=inf_fn,
+    init_inf_fn=init_inf_fn,
+    recurr_inf_fn=recurr_inf_fn,
     discount=1.0,
 )
 
 # %%
 feed = PolicyFeed(
-    stacked_frames=None, to_play=1, legal_actions_mask=np.ones(2), random_key=0
+    stacked_frames=None, to_play=0, legal_actions_mask=np.ones(2), random_key=0
 )
 
 # %%

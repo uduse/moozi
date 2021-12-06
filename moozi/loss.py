@@ -10,6 +10,7 @@ import tree
 
 import moozi as mz
 from moozi.logging import JAXBoardStepData
+from moozi.nn import InitialInferenceFeatures, RecurrentInferenceFeatures
 
 
 class LossFn(object):
@@ -111,7 +112,10 @@ class MuZeroLoss(LossFn):
             [3, 2, 2, 2, 3],
         )
 
-        network_output = network.initial_inference(params, batch.stacked_frames)
+        init_inf_features = InitialInferenceFeatures(
+            stacked_frames=batch.stacked_frames, player=None
+        )
+        network_output = network.initial_inference(params, init_inf_features)
 
         losses = {}
 
@@ -126,9 +130,11 @@ class MuZeroLoss(LossFn):
         )
 
         for i in range(self._num_unroll_steps):
-            network_output = network.recurrent_inference(
-                params, network_output.hidden_state, batch.action.take(0, axis=1)
+            recurr_inf_features = RecurrentInferenceFeatures(
+                hidden_state=network_output.hidden_state,
+                action=batch.action.take(0, axis=1),
             )
+            network_output = network.recurrent_inference(params, recurr_inf_features)
 
             losses[f"loss_reward_{str(i + 1)}"] = vmap(mse)(
                 batch.last_reward.take(i + 1, axis=1), network_output.reward

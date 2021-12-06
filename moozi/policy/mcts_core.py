@@ -116,17 +116,18 @@ class Node(object):
         action_probs = self._compute_action_probs(policy_logits, legal_actions_mask)
 
         for action, prob in enumerate(action_probs):
-            self.children[action] = Node(
-                prior=prob,
-                player=next_player,
-                parent=self,
-                name=self.name + f"_{action}",
-                children={},
-                value_sum=0.0,
-                visit_count=0,
-                last_reward=0.0,
-                hidden_state=None,
-            )
+            if prob > 0.0:
+                self.children[action] = Node(
+                    prior=prob,
+                    player=next_player,
+                    parent=self,
+                    name=self.name + f"_{action}",
+                    children={},
+                    value_sum=0.0,
+                    visit_count=0,
+                    last_reward=0.0,
+                    hidden_state=None,
+                )
 
     def _compute_action_probs(self, policy_logits, legal_actions_mask):
         action_probs = np.array(softmax(policy_logits))
@@ -279,6 +280,14 @@ def anytree_to_json(anytree_root, file_path):
     )
     with open(file_path, "w") as f:
         f.write(json_s)
+
+
+def anytree_to_numpy(anytree_root):
+    import PIL
+
+    anytree_to_png(anytree_root, "/tmp/anytree_to_numpy.png")
+    arr = np.asarray(PIL.Image.open("/tmp/anytree_to_numpy.png"))
+    return arr
 
 
 def anytree_to_text(anytree_root) -> str:

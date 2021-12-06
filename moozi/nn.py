@@ -65,12 +65,18 @@ def get_network(spec: NeuralNetworkSpec):
         batch_size = 1
         params = hk.data_structures.merge(
             initial_inference.init(
-                key_1, jnp.ones((batch_size,) + spec.stacked_frames_shape)
+                key_1,
+                InitialInferenceFeatures(
+                    stacked_frames=jnp.ones((batch_size,) + spec.stacked_frames_shape),
+                    player=jnp.array(0),
+                ),
             ),
             recurrent_inference.init(
                 key_2,
-                jnp.ones((batch_size, spec.dim_repr)),
-                jnp.ones((batch_size,)),
+                RecurrentInferenceFeatures(
+                    hidden_state=jnp.ones((batch_size, spec.dim_repr)),
+                    action=jnp.ones((batch_size,)),
+                ),
             ),
         )
         return params

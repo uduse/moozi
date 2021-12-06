@@ -88,7 +88,7 @@ anytree_filter_node(anytree_node, lambda n: n.visits > 0)
 anytree_display_in_notebook(anytree_node)
 
 # %%
-for _ in range(50):
+for _ in range(100):
     await mcts.simulate_once(node)
 anytree_node = convert_to_anytree(node)
 anytree_filter_node(anytree_node, lambda n: n.visits > 0)

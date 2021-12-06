@@ -27,6 +27,7 @@ class Tape:
     # planner
     root_value: float = 0
     action_probs: np.ndarray = None
+    mcts_root: Optional[Any] = None
 
     # player
     stacked_frames: np.ndarray = None

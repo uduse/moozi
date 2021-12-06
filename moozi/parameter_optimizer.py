@@ -1,4 +1,6 @@
 from dataclasses import dataclass, field
+import cloudpickle
+from pprint import pprint
 from typing import Callable, List
 
 import chex
@@ -11,6 +13,7 @@ from absl import logging
 
 import moozi as mz
 from moozi.learner import TrainingState
+from moozi.nn import InitialInferenceFeatures
 
 
 @ray.remote
@@ -22,11 +25,25 @@ class LoggerActor:
         self.logger.write(data)
 
 
+def _compute_prior_kl(network, batch, orig_params, new_params):
+    orig_logits = network.initial_inference(
+        orig_params,
+        InitialInferenceFeatures(stacked_frames=batch.stacked_frames, player=None),
+    ).policy_logits
+    new_logits = network.initial_inference(
+        new_params,
+        InitialInferenceFeatures(stacked_frames=batch.stacked_frames, player=None),
+    ).policy_logits
+    prior_kl = jnp.mean(rlax.categorical_kl_divergence(orig_logits, new_logits))
+    return prior_kl
+
+
 def make_sgd_step_fn(
     network: mz.nn.NeuralNetwork,
     loss_fn: mz.loss.LossFn,
     optimizer,
     target_update_period: int = 1,
+    include_prior_kl: bool = True,
 ):
     # @partial(jax.jit, backend="cpu")
     @jax.jit
@@ -53,21 +70,15 @@ def make_sgd_step_fn(
             rng_key=new_key,
         )
 
-        # KL calculation
-        orig_logits = network.initial_inference(
-            state.params, batch.stacked_frames
-        ).policy_logits
-        new_logits = network.initial_inference(
-            new_params, batch.stacked_frames
-        ).policy_logits
-        prior_kl = jnp.mean(rlax.categorical_kl_divergence(orig_logits, new_logits))
-
         # store data to log
         step_data = mz.logging.JAXBoardStepData(scalars={}, histograms={})
         step_data.update(extra)
-        step_data.scalars["prior_kl"] = prior_kl
         step_data.histograms["reward"] = batch.last_reward
         step_data.add_hk_params(new_params)
+
+        if include_prior_kl:
+            prior_kl = _compute_prior_kl(network, batch, state.params, new_params)
+            step_data.scalars["prior_kl"] = prior_kl
 
         return new_training_state, step_data
 
@@ -109,14 +120,13 @@ class ParameterOptimizer:
     def get_network(self):
         return self.network
 
-    # def save(self, path):
-    #     with open(path, "wb") as f:
-    #         cloudpickle.dump(self, f)
+    def save(self, path):
+        with open(path, "wb") as f:
+            cloudpickle.dump(self.state, f)
 
-    # @classmethod
-    # def restore(path):
-    #     with open(path, "rb") as f:
-    #         return cloudpickle.load(f)
+    def restore(self, path):
+        with open(path, "rb") as f:
+            self.state = cloudpickle.load(f)
 
     def build_loggers(self, loggers_factory: Callable[[], List[mz.logging.Logger]]):
         self.loggers = loggers_factory()
@@ -126,6 +136,8 @@ class ParameterOptimizer:
         for logger in self.loggers:
             if isinstance(logger, mz.logging.JAXBoardLogger):
                 logger.write(step_data)
+            elif logger == "print":
+                pprint(step_data.scalars)
             else:
                 raise NotImplementedError(f"Logger type {type(logger)} not supported")
 

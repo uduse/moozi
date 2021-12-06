@@ -1,12 +1,14 @@
 import time
-from typing import Any, NamedTuple, Dict
+from dataclasses import dataclass
 from pathlib import Path
-from acme.utils.loggers.terminal import TerminalLogger
+from typing import Any, Dict, NamedTuple
 
 import haiku as hk
 import jax.numpy as jnp
-from absl import logging
+import numpy as np
 import ray
+from absl import logging
+from acme.utils.loggers.terminal import TerminalLogger
 
 import moozi as mz
 
@@ -28,6 +30,20 @@ class JAXBoardStepData(NamedTuple):
 
 class Logger:
     pass
+
+
+class StepDataV2:
+    pass
+
+
+@dataclass
+class StepDataText(StepDataV2):
+    text: str
+
+
+@dataclass
+class StepDataImage(StepDataV2):
+    image: np.ndarray
 
 
 class JAXBoardLogger(Logger):
@@ -56,7 +72,50 @@ class JAXBoardLogger(Logger):
                 value=data.scalars[key],
                 step=self._steps,
             )
-        # self._writer.scalar("time", time.time())
+        for key in data.histograms:
+            prefixed_key = self._name + ":" + key
+            num_bins = 50
+            self._writer.histogram(
+                tag=prefixed_key,
+                values=data.histograms[key],
+                bins=num_bins,
+                step=self._steps,
+            )
+
+    def close(self):
+        r"""
+        Always call this method the logging is finished.
+        Otherwise unexpected hangings may occur.
+        """
+        return self._writer.close()
+
+
+class JAXBoardLoggerV2(Logger):
+    def __init__(self, name, log_dir=None, time_delta: float = 0.0):
+        self._name = name
+        self._log_dir = log_dir or "./tensorboard_log/"
+        self._log_dir = str(Path(self._log_dir).resolve())
+        self._time_delta = time_delta
+        self._time = time.time()
+        self._steps = 0
+        self._writer = mz.jaxboard.SummaryWriter(name, log_dir=self._log_dir)
+        logging.info(f"{self._name} is logging to {(self._log_dir)}")
+
+    def write(self, data: JAXBoardStepData):
+        now = time.time()
+        if (now - self._time) > self._time_delta:
+            self._write_now(data)
+            self._time = now
+        self._steps += 1
+
+    def _write_now(self, data: JAXBoardStepData):
+        for key in data.scalars:
+            prefixed_key = self._name + ":" + key
+            self._writer.scalar(
+                tag=prefixed_key,
+                value=data.scalars[key],
+                step=self._steps,
+            )
         for key in data.histograms:
             prefixed_key = self._name + ":" + key
             num_bins = 50

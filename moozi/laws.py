@@ -8,9 +8,11 @@ import numpy as np
 from absl import logging
 from acme.utils.tree_utils import stack_sequence_fields
 from moozi.core import link, PolicyFeed
+from moozi.core.types import BASE_PLAYER
 from moozi.replay import StepSample
 
 
+@link
 @dataclass
 class FrameStacker:
     num_frames: int = 1
@@ -139,13 +141,24 @@ class EnvironmentLaw:
         else:
             timestep = self.env_state.step([action])
 
+        try:
+            to_play = self.env_state.current_player
+        except AttributeError:
+            to_play = 0
+
+        if 0 <= to_play < self.num_players:
+            legal_actions = self._get_legal_actions(timestep)
+            legal_actions_curr_player = legal_actions[to_play]
+        else:
+            legal_actions_curr_player = None
+
         return dict(
             obs=self._get_observation(timestep),
             is_first=timestep.first(),
             is_last=timestep.last(),
-            to_play=self.env_state.current_player,
+            to_play=to_play,
             reward=self._get_reward(timestep, self.num_players),
-            legal_actions_mask=self._get_legal_actions(timestep),
+            legal_actions_mask=legal_actions_curr_player,
         )
 
     @staticmethod
@@ -162,7 +175,7 @@ class EnvironmentLaw:
     def _get_legal_actions(timestep: dm_env.TimeStep):
         if isinstance(timestep.observation, list):
             return [
-                timestep.observation[i].legal_actions_mask
+                timestep.observation[i].legal_actions
                 for i in range(len(timestep.observation))
             ]
         else:
@@ -174,7 +187,7 @@ class EnvironmentLaw:
             return [0.0] * num_players
         elif isinstance(timestep.reward, np.ndarray):
             assert len(timestep.reward) == num_players
-            return timestep.reward
+            return timestep.reward[BASE_PLAYER]
 
 
 @link
@@ -208,6 +221,10 @@ class TrajectoryOutputWriter:
         action_probs,
         output_buffer,
     ):
+        if isinstance(obs, list):
+            # assume perfect information (same obs for both players)
+            obs = obs[BASE_PLAYER]
+
         step_record = StepSample(
             frame=obs,
             last_reward=reward,

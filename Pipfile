@@ -44,6 +44,7 @@ pytest-trio = "*"
 trio-asyncio = "*"
 filelock = "==v3.0.12"
 attrs = "*"
+pillow = "*"
 
 [dev-packages]
 mypy = "*"

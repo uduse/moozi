@@ -96,3 +96,32 @@ def make_param_opt_properties(config):
     )
     optimizer = optax.adam(config.lr)
     return network, params, loss_fn, optimizer
+
+
+def obs_to_ascii(obs):
+    tokens = []
+    for row in obs.reshape(3, 9).T:
+        tokens.append(int(np.argwhere(row == 1)))
+    tokens = np.array(tokens).reshape(3, 3)
+    tokens = [row.tolist() for row in tokens]
+
+    s = ""
+    for row in tokens:
+        for ele in row:
+            if ele == 0:
+                s += "."
+            elif ele == 1:
+                s += "O"
+            else:
+                s += "X"
+        s += "\n"
+    return s
+
+
+def action_probs_to_ascii(action_probs):
+    s = ""
+    for row in action_probs.reshape(3, 3):
+        for ele in row:
+            s += f"{ele:.2f} "
+        s += "\n"
+    return s

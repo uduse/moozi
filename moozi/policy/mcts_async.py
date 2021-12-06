@@ -1,4 +1,5 @@
 from dataclasses import InitVar, dataclass
+import copy
 from typing import Awaitable, Callable
 
 import inspect
@@ -95,7 +96,9 @@ class MCTSAsync:
         leaf.backpropagate(value=value, discount=self.discount)
 
 
-def make_async_planner_law(init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10):
+def make_async_planner_law(
+    init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10, include_tree=False
+):
     mcts = MCTSAsync(
         init_inf_fn=init_inf_fn,
         recurr_inf_fn=recurr_inf_fn,
@@ -106,14 +109,24 @@ def make_async_planner_law(init_inf_fn, recurr_inf_fn, dim_actions, num_simulati
     @link
     async def planner(is_last, policy_feed):
         if not is_last:
-            mcts_tree = await mcts.run(policy_feed)
-            action, _ = mcts_tree.select_child()
+            mcts_root = await mcts.run(policy_feed)
+            action, _ = mcts_root.select_child()
 
             action_probs = np.zeros((dim_actions,), dtype=np.float32)
-            for a, visit_count in mcts_tree.get_children_visit_counts().items():
+            for a, visit_count in mcts_root.get_children_visit_counts().items():
                 action_probs[a] = visit_count
             action_probs /= np.sum(action_probs)
 
-            return dict(action=action, action_probs=action_probs)
+            if policy_feed.legal_actions_mask[action] < 1:
+                print("illegal action")
+
+            if include_tree:
+                return dict(
+                    action=action,
+                    action_probs=action_probs,
+                    mcts_root=copy.deepcopy(mcts_root),
+                )
+            else:
+                return dict(action=action, action_probs=action_probs)
 
     return planner

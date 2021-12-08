@@ -29,18 +29,18 @@ from moozi.utils import as_coroutine
 
 @dataclass
 class MCTSAsync:
-    dim_action: InitVar[int]
+    dim_action: int
 
     init_inf_fn: Callable[[InitialInferenceFeatures], Awaitable[NNOutput]]
     recurr_inf_fn: Callable[[RecurrentInferenceFeatures], Awaitable[NNOutput]]
-    num_simulations: int
+    num_simulations: int = 1
     all_actions_mask: np.ndarray = None
     discount: float = 1.0
 
     strategy: SearchStrategy = SearchStrategy.TWO_PLAYER
 
-    def __post_init__(self, dim_action):
-        self.all_actions_mask = np.ones((dim_action,), dtype=np.int32)
+    def __post_init__(self):
+        self.all_actions_mask = np.ones((self.dim_action,), dtype=np.int32)
         if not inspect.iscoroutinefunction(self.init_inf_fn):
             self.init_inf_fn = as_coroutine(self.init_inf_fn)
         if not inspect.iscoroutinefunction(self.recurr_inf_fn):
@@ -118,7 +118,7 @@ def make_async_planner_law(
             action_probs /= np.sum(action_probs)
 
             if policy_feed.legal_actions_mask[action] < 1:
-                print("illegal action")
+                raise ValueError("Illegal action")
 
             if include_tree:
                 return dict(
@@ -130,3 +130,67 @@ def make_async_planner_law(
                 return dict(action=action, action_probs=action_probs)
 
     return planner
+
+
+def make_async_planner_law_v2(
+    init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10
+):
+    mcts = MCTSAsync(
+        init_inf_fn=init_inf_fn,
+        recurr_inf_fn=recurr_inf_fn,
+        num_simulations=num_simulations,
+        dim_action=dim_actions,
+    )
+
+    @link
+    async def planner(is_last, policy_feed):
+        if not is_last:
+            mcts_root = await mcts.run(policy_feed)
+            action_probs = mcts_root.get_children_visit_counts_as_probs(
+                dim_actions=dim_actions
+            )
+
+            return dict(
+                action_probs=action_probs,
+                mcts_root=copy.deepcopy(mcts_root),
+            )
+
+    return planner
+
+
+@link
+@dataclass
+class PlannerLaw:
+    mcts: MCTSAsync
+
+    async def __call__(self, is_last, policy_feed):
+        if not is_last:
+            mcts_root = await self.mcts.run(policy_feed)
+            action_probs = mcts_root.get_children_visit_counts_as_probs(
+                dim_actions=self.mcts.dim_actions
+            )
+
+            return dict(
+                action_probs=action_probs,
+                mcts_root=copy.deepcopy(mcts_root),
+            )
+
+
+def sample_action(action_probs, temperature=1.0):
+    logits = np.log(action_probs) / temperature
+    action_probs = np.exp(logits) / np.sum(np.exp(logits))
+    return np.random.choice(np.arange(len(action_probs)), p=action_probs)
+
+
+@link
+class ActionSamplerLaw:
+    temperature: float = 1.0
+
+    def __call__(self, action_probs):
+        action = sample_action(action_probs, temperature=self.temperature)
+        return dict(action=action)
+
+
+def temp(arr, temperature=1.0):
+    log = np.log(arr) / temperature
+    return np.exp(log) / np.sum(np.exp(log))

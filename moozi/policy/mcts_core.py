@@ -194,14 +194,21 @@ class Node(object):
             values[action] = child.value
         return values
 
+    def get_children_visit_counts_as_probs(self, dim_actions):
+        action_probs = np.zeros((dim_actions,), dtype=np.float32)
+        for a, visit_count in self.get_children_visit_counts().items():
+            action_probs[a] = visit_count
+        action_probs /= np.sum(action_probs)
+        return action_probs
+
     def select_leaf(self):
         node = self
         while node.is_expanded:
             action, node = node.select_child()
         return action, node
 
-    @classmethod
-    def ucb_score(cls, parent: "Node", child: "Node") -> float:
+    @staticmethod
+    def ucb_score(parent: "Node", child: "Node") -> float:
         pb_c_base = 19652.0
         pb_c_init = 1.25
         # TODO: obviously this `discount` should be a parameter
@@ -291,7 +298,7 @@ def anytree_to_numpy(anytree_root):
 
 
 def anytree_to_text(anytree_root) -> str:
-    return anytree.RenderTree(anytree_root)
+    return str(anytree.RenderTree(anytree_root))
 
 
 def anytree_filter_node(anytree_node, filter_fn):

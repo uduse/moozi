@@ -9,6 +9,7 @@ from moozi.core import link
 from moozi.core.link import Universe
 from moozi.logging import JAXBoardStepData, MetricsReporterActor
 from moozi.parameter_optimizer import ParameterOptimizer
+from moozi.policy.mcts_async import ActionSamplerLaw, make_async_planner_law_v2
 from moozi.policy.mcts_core import (
     Node,
     SearchStrategy,
@@ -31,7 +32,7 @@ ray.init(ignore_reinit_error=True)
 
 
 # %%
-num_epochs = 100
+num_epochs = 300
 
 config = mz.Config().update(
     env=f"tic_tac_toe",
@@ -91,16 +92,28 @@ def make_rollout_worker_universes(
     return universes
 
 
-@link
-def print_evaluation_law(obs, action_probs, action, to_play):
-    print(obs_to_ascii(obs[0]))
-    print(action_probs_to_ascii(action_probs))
+def evaluation_to_str(obs, action_probs, action, to_play, mcts_root):
+    s = ""
+    s += obs_to_ascii(obs[0]) + "\n\n"
+    s += action_probs_to_ascii(action_probs) + "\n\n"
     if to_play == 0:
         to_play_repr = "X"
     else:
         to_play_repr = "O"
-    print(f"{to_play_repr} -> {action}")
-    print("\n")
+    s += f"{to_play_repr} -> {action}" + "\n\n"
+
+    anytree_root = convert_to_anytree(mcts_root)
+    anytree_filter_node(anytree_root, lambda n: n.visits > 0)
+    s += "012\n345\n678\n\n"
+    s += anytree_to_text(anytree_root) + "\n\n\n"
+
+    return s
+
+
+@link
+def log_evaluation_law(obs, action_probs, action, to_play, mcts_root):
+    s = evaluation_to_str(obs, action_probs, action, to_play, mcts_root)
+    logging.info("\n" + s)
 
 
 def make_evaluator_universes(
@@ -110,7 +123,7 @@ def make_evaluator_universes(
 
     def _make_universe():
         tape = Tape(0)
-        planner_law = make_async_planner_law(
+        planner_law = make_async_planner_law_v2(
             init_inf_fn=lambda features: self.init_inf_fn_unbatched(
                 self.params, features
             ),
@@ -126,7 +139,8 @@ def make_evaluator_universes(
             FrameStacker(num_frames=config.num_stacked_frames),
             set_policy_feed,
             planner_law,
-            print_evaluation_law,
+            ActionSamplerLaw(temperature=0.5),
+            log_evaluation_law,
             link(lambda mcts_root: dict(output_buffer=(mcts_root,))),
         ]
         return UniverseAsync(tape, laws)
@@ -135,22 +149,16 @@ def make_evaluator_universes(
 
 
 # %%
-load_if_possible = False
-path = Path("dump.pkl")
-if load_if_possible and path.exists():
-    param_opt = ray.remote(ParameterOptimizer).restore.remote(path)
-    print("restored from", path)
-else:
-    param_opt = ray.remote(ParameterOptimizer).remote()
-    param_opt.build.remote(partial(make_param_opt_properties, config=config)),
-    param_opt.build_loggers.remote(
-        lambda: [
-            # "print",
-            # TerminalLogger(label="Parameter Optimizer", print_fn=print),
-            mz.logging.JAXBoardLogger(name="param_opt"),
-        ]
-    ),
-    param_opt.log_stats.remote()
+param_opt = ray.remote(ParameterOptimizer).remote()
+param_opt.build.remote(partial(make_param_opt_properties, config=config)),
+param_opt.build_loggers.remote(
+    lambda: [
+        # "print",
+        # TerminalLogger(label="Parameter Optimizer", print_fn=print),
+        mz.logging.JAXBoardLogger(name="param_opt"),
+    ]
+),
+param_opt.log_stats.remote()
 
 # %%
 replay_buffer = ray.remote(ReplayBuffer).remote(config)
@@ -171,10 +179,12 @@ rollout_workers = [
     build_worker(config, param_opt) for _ in range(config.num_rollout_workers)
 ]
 
-# evaluator = ray.remote(RolloutWorkerWithWeights).remote()
-# evaluator.set_network.remote(param_opt.get_network.remote())
-# evaluator.set_params.remote(param_opt.get_params.remote())
-# evaluator.build_universes.remote(partial(make_evaluator_universes, config=config))
+evaluation_worker = ray.remote(RolloutWorkerWithWeights).remote()
+evaluation_worker.set_network.remote(param_opt.get_network.remote())
+evaluation_worker.set_params.remote(param_opt.get_params.remote())
+evaluation_worker.build_universes.remote(
+    partial(make_evaluator_universes, config=config)
+)
 
 # %%
 with WallTimer():
@@ -183,18 +193,38 @@ with WallTimer():
 
         samples = [w.run.remote(config.num_ticks_per_epoch) for w in rollout_workers]
         samples_added = [replay_buffer.add_samples.remote(s) for s in samples]
-        # evaluation_done = evaluator.run.remote(50)
+        evaluation_done = evaluation_worker.run.remote(50)
         while samples_added:
             _, samples_added = ray.wait(samples_added)
             for _ in range(config.num_updates_per_samples_added):
                 batch = replay_buffer.get_batch.remote(config.batch_size)
                 param_opt.update.remote(batch)
 
-            for w in rollout_workers:
+            for w in rollout_workers + [evaluation_worker]:
                 w.set_params.remote(param_opt.get_params.remote())
 
             param_opt.log_stats.remote()
             path = Path(f"params_{epoch}.pkl")
             param_opt.save.remote(path)
 
-    # ray.get(evaluation_done)
+
+# %%
+### Evaluation
+# param_opt = ray.remote(ParameterOptimizer).remote()
+# param_opt.build.remote(partial(make_param_opt_properties, config=config)),
+# param_opt.restore.remote(Path("/root/.local/share/virtualenvs/moozi-g1CZ00E9/.guild/runs/75e23c33b9dc4d938fd1445da5938d92/params_48.pkl"))
+# param_opt.log_stats.remote()
+
+# # %%
+# evaluator = RolloutWorkerWithWeights()
+# evaluator.set_network(ray.get(param_opt.get_network.remote()))
+# evaluator.set_params(ray.get(param_opt.get_params.remote()))
+# evaluator.build_universes(partial(make_evaluator_universes, config=config))
+
+# # %%
+# node = evaluator.run(1)[0]
+# anytree_node = convert_to_anytree(node)
+# anytree_filter_node(anytree_node, lambda n: n.visits > 0)
+# print('012\n345\n678')
+# anytree_display_in_notebook(anytree_node)
+# # %%

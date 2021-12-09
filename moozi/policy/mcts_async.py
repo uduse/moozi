@@ -183,6 +183,7 @@ def sample_action(action_probs, temperature=1.0):
 
 
 @link
+@dataclass
 class ActionSamplerLaw:
     temperature: float = 1.0
 

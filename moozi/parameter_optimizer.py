@@ -142,10 +142,28 @@ class ParameterOptimizer:
                 raise NotImplementedError(f"Logger type {type(logger)} not supported")
 
     def get_stats(self):
-        return dict(num_updates=self._num_updates)
+        return dict(
+            num_updates=self._num_updates,
+        )
 
     def log_stats(self):
         logging.info(self.get_stats())
+
+    def get_properties(self):
+        import os
+        import jax
+
+        ray_gpu_ids = str(ray.get_gpu_ids())
+        cuda_visible_devices = str(os.environ["CUDA_VISIBLE_DEVICES"])
+        jax_devices = str(jax.devices())
+        return dict(
+            ray_gpu_ids=ray_gpu_ids,
+            cuda_visible_devices=cuda_visible_devices,
+            jax_devices=jax_devices,
+        )
+
+    def log_properties(self):
+        logging.info(self.get_properties())
 
     def close(self):
         for logger in self._loggers:

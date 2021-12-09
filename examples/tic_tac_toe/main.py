@@ -1,55 +1,52 @@
 # %%
-from dataclasses import dataclass
-from pathlib import Path
+import uuid
 from functools import partial
+from pathlib import Path
 
 import moozi as mz
-
-# import ray
+import ray
 from absl import logging
 from moozi.core import link
 from moozi.core.link import Universe
-
-# from moozi.laws import PlayerFrameStacker
-from moozi.logging import JAXBoardLogger, JAXBoardStepData, MetricsReporterActor
+from moozi.logging import JAXBoardStepData, MetricsReporterActor
 from moozi.parameter_optimizer import ParameterOptimizer
-from moozi.replay import ReplayBuffer
-from moozi.utils import WallTimer, is_notebook
-from moozi.rollout_worker import RolloutWorkerWithWeights
-
-from utils import *
-
-from tqdm import tqdm
-
-# ray.init(ignore_reinit_error=True)
-
+from moozi.policy.mcts_async import ActionSamplerLaw, make_async_planner_law_v2
 from moozi.policy.mcts_core import (
     Node,
+    SearchStrategy,
+    anytree_display_in_notebook,
+    anytree_filter_node,
     anytree_to_png,
     anytree_to_text,
     convert_to_anytree,
-    anytree_display_in_notebook,
-    anytree_filter_node,
     get_next_player,
-    SearchStrategy,
 )
+from moozi.replay import ReplayBuffer
+from moozi.rollout_worker import RolloutWorkerWithWeights
+from moozi.utils import WallTimer, check_ray_gpu, is_notebook
+from tqdm import tqdm
+
+from utils import *
+
+ray.init(ignore_reinit_error=True, num_cpus=10, num_gpus=2)
 
 # %%
+num_epochs = 300
 config = mz.Config().update(
     env=f"tic_tac_toe",
     batch_size=256,
     discount=0.99,
-    num_unroll_steps=3,
+    num_unroll_steps=5,
     num_td_steps=100,
     num_stacked_frames=2,
     lr=2e-3,
     replay_buffer_size=1_000_000,
     dim_repr=128,
-    num_epochs=15000,
-    num_ticks_per_epoch=100,
+    num_epochs=num_epochs,
+    num_ticks_per_epoch=50,
     num_updates_per_samples_added=10,
-    num_rollout_workers=1,
-    num_rollout_universes_per_worker=1,
+    num_rollout_workers=8,
+    num_rollout_universes_per_worker=50,
 )
 
 num_interactions = (
@@ -62,7 +59,7 @@ print(f"num_interactions: {num_interactions}")
 config.print()
 
 
-def make_rollout_worker_universes(
+def make_train_worker_universes(
     self: RolloutWorkerWithWeights, config: Config
 ) -> List[UniverseAsync]:
     dim_actions = make_env_spec(config.env).actions.num_values
@@ -93,41 +90,42 @@ def make_rollout_worker_universes(
     return universes
 
 
-def evaluation_to_str(obs, action_probs, action, to_play):
+def evaluation_to_str(obs, action_probs, action, to_play, mcts_root):
     s = ""
-    s += obs_to_ascii(obs[0]) + "\n"
-    s += action_probs_to_ascii(action_probs) + "\n"
+    s += obs_to_ascii(obs[0]) + "\n\n"
+    s += action_probs_to_ascii(action_probs) + "\n\n"
     if to_play == 0:
         to_play_repr = "X"
     else:
         to_play_repr = "O"
     s += f"{to_play_repr} -> {action}" + "\n\n"
+
+    anytree_root = convert_to_anytree(mcts_root)
+    anytree_filter_node(anytree_root, lambda n: n.visits > 0)
+    s += "012\n345\n678\n\n"
+    s += anytree_to_text(anytree_root) + "\n\n\n"
+
+    fname = str(uuid.uuid4())
+    anytree_to_png(anytree_root, Path(f"/tmp/{fname}.png"))
+    s += f"<img src='/tmp/{fname}.png'>"
+
     return s
 
 
 @link
-def print_evaluation_law(obs, action_probs, action, to_play):
-    print(evaluation_to_str(obs, action_probs, action, to_play))
+def log_evaluation_law(obs, action_probs, action, to_play, mcts_root):
+    s = evaluation_to_str(obs, action_probs, action, to_play, mcts_root)
+    logging.info("\n" + s)
 
 
-@link
-@dataclass
-class EvaluationWrite:
-    logger: JAXBoardLogger = JAXBoardLogger("evaluation", log_dir=Path("evaluation"))
-
-    def write(self, obs, action_probs, action, to_play):
-        evalution_str = evaluation_to_str(obs, action_probs, action, to_play)
-        self.logger.write(evalution_str)
-
-
-def make_evaluator_universes(
+def make_eval_worker_universes(
     self: RolloutWorkerWithWeights, config: Config
 ) -> List[UniverseAsync]:
     dim_actions = make_env_spec(config.env).actions.num_values
 
     def _make_universe():
         tape = Tape(0)
-        planner_law = make_async_planner_law(
+        planner_law = make_async_planner_law_v2(
             init_inf_fn=lambda features: self.init_inf_fn_unbatched(
                 self.params, features
             ),
@@ -136,14 +134,14 @@ def make_evaluator_universes(
             ),
             dim_actions=dim_actions,
             num_simulations=30,
-            include_tree=True,
         )
         laws = [
             EnvironmentLaw(make_env(config.env), num_players=2),
             FrameStacker(num_frames=config.num_stacked_frames),
             set_policy_feed,
             planner_law,
-            print_evaluation_law,
+            ActionSamplerLaw(temperature=0.3),
+            log_evaluation_law,
             link(lambda mcts_root: dict(output_buffer=(mcts_root,))),
         ]
         return UniverseAsync(tape, laws)
@@ -151,55 +149,123 @@ def make_evaluator_universes(
     return [_make_universe()]
 
 
-# %%
-load_if_possible = False
-path = Path("dump.pkl")
-if load_if_possible and path.exists():
-    param_opt = ParameterOptimizer.restore(path)
-    print("restored from", path)
-else:
-    param_opt = ParameterOptimizer()
-    param_opt.build(partial(make_param_opt_properties, config=config)),
-    param_opt.build_loggers(
+def make_parameter_optimizer():
+    param_opt = ray.remote(num_gpus=1)(ParameterOptimizer).remote()
+    param_opt.build.remote(partial(make_param_opt_properties, config=config)),
+    param_opt.build_loggers.remote(
         lambda: [
             # "print",
             # TerminalLogger(label="Parameter Optimizer", print_fn=print),
             mz.logging.JAXBoardLogger(name="param_opt"),
         ]
     ),
-    param_opt.log_stats()
+    param_opt.log_stats.remote()
+    return param_opt
+
+
+def make_replay_buffer():
+    replay_buffer = ray.remote(ReplayBuffer).remote(config)
+    return replay_buffer
+
+
+def build_worker_train(config, param_opt):
+    worker = ray.remote(RolloutWorkerWithWeights).remote()
+    worker.set_network.remote(param_opt.get_network.remote())
+    worker.set_params.remote(param_opt.get_params.remote())
+    worker.build_batching_layers.remote(
+        partial(make_rollout_worker_batching_layers, config=config)
+    )
+    worker.build_universes.remote(partial(make_train_worker_universes, config=config))
+    return worker
+
+
+def make_train_rollout_workers(param_opt):
+    return [
+        build_worker_train(config, param_opt) for _ in range(config.num_rollout_workers)
+    ]
+
+
+def make_eval_rollout_workers(param_opt):
+    eval_worker = ray.remote(RolloutWorkerWithWeights).remote()
+    eval_worker.set_network.remote(param_opt.get_network.remote())
+    eval_worker.set_params.remote(param_opt.get_params.remote())
+    eval_worker.build_universes.remote(
+        partial(make_eval_worker_universes, config=config)
+    )
+    return eval_worker
+
 
 # %%
-replay_buffer = ReplayBuffer(config)
+def train():
+    replay_buffer = make_replay_buffer()
+    param_opt = make_parameter_optimizer()
+    train_workers = make_train_rollout_workers(param_opt)
+
+    with WallTimer():
+        for epoch in range(config.num_epochs):
+            logging.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
+
+            samples = [w.run.remote(config.num_ticks_per_epoch) for w in train_workers]
+            samples_added = [replay_buffer.add_samples.remote(s) for s in samples]
+            while samples_added:
+                _, samples_added = ray.wait(samples_added)
+                for _ in range(config.num_updates_per_samples_added):
+                    batch = replay_buffer.get_batch.remote(config.batch_size)
+                    param_opt.update.remote(batch)
+
+                for w in train_workers:
+                    w.set_params.remote(param_opt.get_params.remote())
+
+                param_opt.log_stats.remote()
+                path = Path(f"params_{epoch}.pkl")
+                param_opt.save.remote(path)
+
 
 # %%
-worker = RolloutWorkerWithWeights()
-worker.set_network(param_opt.get_network())
-worker.set_params(param_opt.get_params())
-worker.build_universes(partial(make_rollout_worker_universes, config=config))
+def eval(param_pkl_path, param_opt=None):
+    if not param_opt:
+        param_opt = make_parameter_optimizer()
+    param_opt.restore.remote(Path(param_pkl_path))
+    eval_worker = make_eval_rollout_workers(param_opt)
+    node = ray.get(eval_worker.run.remote(1))[0]
+    anytree_node = convert_to_anytree(node)
+    anytree_filter_node(anytree_node, lambda n: n.visits > 0)
+
 
 # %%
-for i in tqdm(range(config.num_epochs)):
-    # print(f"Epoch {i}")
-    samples = worker.run(config.num_ticks_per_epoch)
-    replay_buffer.add_samples(samples)
-    batch = replay_buffer.get_batch(config.batch_size)
-    param_opt.update(batch)
-    worker.set_params(param_opt.get_params())
+mode = None
+
+if mode == "train":
+    train()
+elif mode == "train_eval":
+    train()
+    param_opt = make_parameter_optimizer()
+    counter = 0
+    while True:
+        file_path = Path(f"params_{counter}.pkl")
+        if file_path.exists():
+            eval(file_path, param_opt)
+            counter += 1
+        else:
+            break
 
 # %%
-evaluator = RolloutWorkerWithWeights()
-evaluator.set_network(param_opt.get_network())
-evaluator.set_params(param_opt.get_params())
-evaluator.build_universes(partial(make_evaluator_universes, config=config))
+### Evaluation
+# param_opt = ray.remote(ParameterOptimizer).remote()
+# param_opt.build.remote(partial(make_param_opt_properties, config=config)),
+# param_opt.restore.remote(Path("/root/.local/share/virtualenvs/moozi-g1CZ00E9/.guild/runs/75e23c33b9dc4d938fd1445da5938d92/params_48.pkl"))
+# param_opt.log_stats.remote()
 
-for _ in range(50):
-    mcts_root = evaluator.run(1)[0]
-    mcts_root_anytree = convert_to_anytree(mcts_root)
-    anytree_filter_node(mcts_root_anytree, lambda n: n.visits > 0)
-    anytree_display_in_notebook(mcts_root_anytree)
+# # %%
+# evaluator = RolloutWorkerWithWeights()
+# evaluator.set_network(ray.get(param_opt.get_network.remote()))
+# evaluator.set_params(ray.get(param_opt.get_params.remote()))
+# evaluator.build_universes(partial(make_evaluator_universes, config=config))
 
-# %%
-for logger in param_opt.loggers:
-    if hasattr(logger, "close"):
-        logger.close()
+# # %%
+# node = evaluator.run(1)[0]
+# anytree_node = convert_to_anytree(node)
+# anytree_filter_node(anytree_node, lambda n: n.visits > 0)
+# print('012\n345\n678')
+# anytree_display_in_notebook(anytree_node)
+# # %%

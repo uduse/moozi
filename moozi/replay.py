@@ -19,6 +19,7 @@ from acme.wrappers import open_spiel_wrapper
 from nptyping import NDArray
 
 import moozi as mz
+from moozi.logging import LoggerDatum, LoggerDatumScalar
 
 
 # current support:
@@ -123,6 +124,12 @@ class ReplayBuffer:
 
     def size(self):
         return len(self.store)
+
+    def get_stats(self):
+        return dict(size=self.size())
+
+    def get_logger_data(self) -> List[LoggerDatum]:
+        return [LoggerDatumScalar("replay_buffer_size", self.size())]
 
 
 def make_target_from_traj(

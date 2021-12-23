@@ -3,12 +3,18 @@ import uuid
 from functools import partial
 from pathlib import Path
 
+from acme.jax.utils import weighted_softmax
+
 import moozi as mz
 import ray
 from absl import logging
 from moozi.core import link
 from moozi.core.link import Universe
-from moozi.logging import JAXBoardStepData, MetricsReporterActor
+from moozi.logging import (
+    JAXBoardLoggerActor,
+    JAXBoardLoggerV2,
+    JAXBoardStepData,
+)
 from moozi.parameter_optimizer import ParameterOptimizer
 from moozi.policy.mcts_async import ActionSamplerLaw, make_async_planner_law_v2
 from moozi.policy.mcts_core import (
@@ -35,17 +41,18 @@ num_epochs = 300
 config = mz.Config().update(
     env=f"tic_tac_toe",
     batch_size=256,
-    discount=0.99,
-    num_unroll_steps=5,
+    discount=1.0,
+    num_unroll_steps=3,
     num_td_steps=100,
-    num_stacked_frames=2,
-    lr=2e-3,
+    num_stacked_frames=1,
+    weight_decay=3e-4,
+    lr=3e-3,
     replay_buffer_size=1_000_000,
-    dim_repr=128,
+    dim_repr=64,
     num_epochs=num_epochs,
-    num_ticks_per_epoch=50,
+    num_ticks_per_epoch=30,
     num_updates_per_samples_added=10,
-    num_rollout_workers=8,
+    num_rollout_workers=10,
     num_rollout_universes_per_worker=50,
 )
 
@@ -66,7 +73,7 @@ def make_train_worker_universes(
 
     def _make_universe(index):
         tape = Tape(index)
-        planner_law = make_async_planner_law(
+        planner_law = make_async_planner_law_v2(
             init_inf_fn=lambda features: self.init_inf_fn_unbatched(
                 self.params, features
             ),
@@ -74,12 +81,14 @@ def make_train_worker_universes(
                 self.params, features
             ),
             dim_actions=dim_actions,
+            num_simulations=10,
         )
         laws = [
             EnvironmentLaw(make_env(config.env), num_players=2),
             FrameStacker(num_frames=config.num_stacked_frames),
             set_policy_feed,
             planner_law,
+            ActionSamplerLaw(),
             TrajectoryOutputWriter(),
         ]
         return UniverseAsync(tape, laws)
@@ -140,9 +149,8 @@ def make_eval_worker_universes(
             FrameStacker(num_frames=config.num_stacked_frames),
             set_policy_feed,
             planner_law,
-            ActionSamplerLaw(temperature=0.3),
+            ActionSamplerLaw(temperature=0.5),
             log_evaluation_law,
-            link(lambda mcts_root: dict(output_buffer=(mcts_root,))),
         ]
         return UniverseAsync(tape, laws)
 
@@ -156,7 +164,7 @@ def make_parameter_optimizer():
         lambda: [
             # "print",
             # TerminalLogger(label="Parameter Optimizer", print_fn=print),
-            mz.logging.JAXBoardLogger(name="param_opt"),
+            mz.logging.JAXBoardLogger(name="param_opt", time_delta=15),
         ]
     ),
     param_opt.log_stats.remote()
@@ -200,9 +208,10 @@ def train():
     replay_buffer = make_replay_buffer()
     param_opt = make_parameter_optimizer()
     train_workers = make_train_rollout_workers(param_opt)
+    reporter = ray.remote(JAXBoardLoggerV2).remote(name="reporter")
 
     with WallTimer():
-        for epoch in range(config.num_epochs):
+        for epoch in tqdm(range(config.num_epochs)):
             logging.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
 
             samples = [w.run.remote(config.num_ticks_per_epoch) for w in train_workers]
@@ -218,25 +227,44 @@ def train():
 
                 param_opt.log_stats.remote()
                 path = Path(f"params_{epoch}.pkl")
+                reporter.write.remote(replay_buffer.get_logger_data.remote())
                 param_opt.save.remote(path)
 
 
 # %%
 def eval(param_pkl_path, param_opt=None):
+    logging.info(f"\n\nEvaluating {param_pkl_path}")
     if not param_opt:
         param_opt = make_parameter_optimizer()
     param_opt.restore.remote(Path(param_pkl_path))
     eval_worker = make_eval_rollout_workers(param_opt)
-    node = ray.get(eval_worker.run.remote(1))[0]
-    anytree_node = convert_to_anytree(node)
-    anytree_filter_node(anytree_node, lambda n: n.visits > 0)
+    for _ in range(50):
+        ray.get(eval_worker.run.remote(1))
+    logging.info("\n\n")
 
 
 # %%
 mode = None
+eval_path = None
 
 if mode == "train":
     train()
+elif mode == "eval":
+    assert eval_path is not None
+    eval_path = Path(eval_path)
+    assert eval_path.exists()
+    param_opt = make_parameter_optimizer()
+    if eval_path.is_dir():
+        counter = 0
+        while True:
+            file_path = eval_path / Path(f"params_{counter}.pkl")
+            if file_path.exists():
+                eval(file_path, param_opt)
+                counter += 1
+            else:
+                break
+    else:
+        eval(eval_path, param_opt)
 elif mode == "train_eval":
     train()
     param_opt = make_parameter_optimizer()

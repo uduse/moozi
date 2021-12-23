@@ -135,21 +135,17 @@ class Node(object):
         action_probs /= np.sum(action_probs)
         return action_probs
 
-    def select_child(self):
+    def select_child(self, discount: float):
         scores = []
         for action, child in self.children.items():
-            ucb_score = Node.ucb_score(parent=self, child=child)
+            ucb_score = Node.ucb_score(parent=self, child=child, discount=discount)
             scores.append((ucb_score, action, child))
 
         # TODO: break ties randomly?
         _, action, child = max(scores)
         return action, child
 
-    def add_exploration_noise(self):
-        # TODO: adjustable later
-        dirichlet_alpha = 0.2
-        frac = 0.2
-
+    def add_exploration_noise(self, dirichlet_alpha: float = 0.2, frac: float = 0.2):
         actions = list(self.children.keys())
         noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
         for a, n in zip(actions, noise):
@@ -167,13 +163,7 @@ class Node(object):
         """
         node = self
         while True:
-            # if node.player == BASE_PLAYER:
-            #     node.value_sum += value
-            # else:
-            #     node.value_sum -= value
-
             node.value_sum += value
-
             node.visit_count += 1
 
             if node.parent:
@@ -201,18 +191,17 @@ class Node(object):
         action_probs /= np.sum(action_probs)
         return action_probs
 
-    def select_leaf(self):
+    def select_leaf(self, discount: float):
         node = self
         while node.is_expanded:
-            action, node = node.select_child()
+            action, node = node.select_child(discount=discount)
         return action, node
 
     @staticmethod
-    def ucb_score(parent: "Node", child: "Node") -> float:
+    def ucb_score(parent: "Node", child: "Node", discount: float = 1.0) -> float:
         pb_c_base = 19652.0
         pb_c_init = 1.25
         # TODO: obviously this `discount` should be a parameter
-        discount = 0.99
 
         pb_c = np.log((parent.visit_count + pb_c_base + 1) / pb_c_base) + pb_c_init
         pb_c *= np.sqrt(parent.visit_count) / (child.visit_count + 1)
@@ -298,7 +287,14 @@ def anytree_to_numpy(anytree_root):
 
 
 def anytree_to_text(anytree_root) -> str:
-    return str(anytree.RenderTree(anytree_root))
+    s = ""
+    for row in anytree.RenderTree(anytree_root):
+        s += (
+            f"{row.pre} A:{row.node.last_action} R:{row.node.reward} V:{row.node.value}"
+            f"[{row.node.name} ({row.node.to_play})] N:{row.node.visits}"
+        )
+        s += "\n"
+    return s
 
 
 def anytree_filter_node(anytree_node, filter_fn):

@@ -74,7 +74,7 @@ class MCTSAsync:
         return root
 
     async def simulate_once(self, root: Node):
-        action, leaf = root.select_leaf()
+        action, leaf = root.select_leaf(discount=self.discount)
         assert leaf.parent
 
         recurr_inf_features = RecurrentInferenceFeatures(
@@ -110,7 +110,7 @@ def make_async_planner_law(
     async def planner(is_last, policy_feed):
         if not is_last:
             mcts_root = await mcts.run(policy_feed)
-            action, _ = mcts_root.select_child()
+            action, _ = mcts_root.select_child(mcts.discount)
 
             action_probs = np.zeros((dim_actions,), dtype=np.float32)
             for a, visit_count in mcts_root.get_children_visit_counts().items():
@@ -177,8 +177,8 @@ class PlannerLaw:
 
 
 def sample_action(action_probs, temperature=1.0):
-    logits = np.log(action_probs) / temperature
-    action_probs = np.exp(logits) / np.sum(np.exp(logits))
+    log_probs = np.log(np.clip(action_probs, 1e-10, None)) / temperature
+    action_probs = np.exp(log_probs) / np.sum(np.exp(log_probs))
     return np.random.choice(np.arange(len(action_probs)), p=action_probs)
 
 

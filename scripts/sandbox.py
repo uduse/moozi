@@ -84,13 +84,19 @@ class MuZeroResNet(hk.Module):
         self.spec = spec
 
     def _repr_net(self, stacked_frames, dim_repr):
-        # (batch_size, num_frames, height, width, channels)
-        chex.assert_rank(stacked_frames, 5)
+        chex.assert_rank(
+            stacked_frames, 5
+        )  # (batch_size, num_frames, height, width, channels)
+        # TODO: make stacked frames store like this by default so we don't have to do the transpose here
         stacked_frames = stacked_frames.transpose(0, 2, 3, 4, 1)
-        stacked_frames = stacked_frames.reshape(stacked_frames.shape[:-2] + (-1,))
+        stacked_frames = stacked_frames.reshape(
+            stacked_frames.shape[:-2] + (-1,)
+        )  # stack num_frames and channels as features planes
 
         hidden_state = ConvBlock()(stacked_frames)
-        hidden_state = ResTower(num_blocks=20)(hidden_state)
+        hidden_state = ResTower(num_blocks=self.spec.extra["repr_net_num_blocks"])(
+            hidden_state
+        )
         hidden_state = hk.Conv2D(
             output_channels=dim_repr, kernel_shape=(3, 3), padding="same"
         )(hidden_state)
@@ -100,7 +106,9 @@ class MuZeroResNet(hk.Module):
         return hidden_state
 
     def _pred_net(self, hidden_state):
-        pred_trunk = ResTower(num_blocks=20)(hidden_state)
+        pred_trunk = ResTower(num_blocks=self.spec.extra["pred_trunk_num_blocks"])(
+            hidden_state
+        )
         pred_trunk = hk.Conv2D(
             output_channels=dim_repr, kernel_shape=(3, 3), padding="same"
         )(pred_trunk)
@@ -130,13 +138,13 @@ class MuZeroResNet(hk.Module):
         state_action_repr = jnp.concatenate((hidden_state, action_one_hot), axis=-1)
 
         dyna_trunk = ResTowerV2(
-            num_blocks=20,
+            num_blocks=self.spec.extra["dyna_trunk_num_blocks"],
             res_channels=state_action_repr.shape[-1],
             output_channels=self.spec.dim_repr,
         )(state_action_repr)
 
         next_hidden_state = ResTowerV2(
-            num_blocks=20,
+            num_blocks=self.spec.extra["dyna_hidden_num_blocks"],
             res_channels=self.spec.dim_repr,
             output_channels=self.spec.dim_repr,
         )(dyna_trunk)
@@ -275,7 +283,15 @@ dim_repr = 16
 dim_action = 7
 stacked_frames_shape = (num_stacked_frames,) + frame_shape
 spec = NeuralNetworkSpec(
-    stacked_frames_shape=stacked_frames_shape, dim_repr=dim_repr, dim_action=dim_action
+    stacked_frames_shape=stacked_frames_shape,
+    dim_repr=dim_repr,
+    dim_action=dim_action,
+    extra={
+        "repr_net_num_blocks": 1,
+        "pred_trunk_num_blocks": 1,
+        "dyna_trunk_num_blocks": 1,
+        "dyna_hidden_num_blocks": 1,
+    },
 )
 nn = build_network(spec)
 rng = jax.random.PRNGKey(0)
@@ -294,27 +310,20 @@ trans_inf_feats = TransitionInferenceFeatures(
     hidden_state=nn_out.hidden_state, action=jnp.ones((1,))
 )
 nn_out, new_state = nn.trans_inference_unbatched(params, state, trans_inf_feats)
-# %% 
-root_inf = hk.experimental.to_dot(nn.root_inference)(params, state, root_inf_feats)
-root_inf = graphviz.Source(root_inf)
-root_inf.render("./vis/resnet_root_inf", cleanup=True)
-
-# print(tree.map_structure(lambda x: x.shape, nn_out))
-# %%
-# ini_inf = hk.experimental.to_dot(nn.root_inference)(params, state, root_inf_feats)
-# ini_inf = graphviz.Source(ini_inf)
-
-# # %%
-# feat = TransitionInferenceFeatures(hidden_state=state, action=jnp.ones((1,)))
-# dot = hk.experimental.to_dot(nn.trans_inference)(params, state, feat)
-# dot = graphviz.Source(dot)
 
 # %%
-
-
-# %%
-# import pickle
-
-# with open("/tmp/params.pkl", "wb") as f:
-#     pickle.dump(params, f)
-# # %%
+html_info = hk.experimental.tabulate(
+    nn.root_inference_unbatched,
+    filters=["has_params", "has_output"],
+    columns=(
+        "module",
+        "config",
+        "owned_params",
+        "input",
+        "output",
+        "params_size",
+        "params_bytes",
+    ),
+    tabulate_kwargs={"tablefmt": "html"},
+)(params, state, root_inf_feats)
+html_info._repr_html_()

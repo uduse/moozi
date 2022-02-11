@@ -27,9 +27,15 @@ class TransitionInferenceFeatures(NamedTuple):
 
 
 class NeuralNetworkSpec(NamedTuple):
+    # define the shapes of inputs, outputs, and hidden states
+    # common to all networks
     stacked_frames_shape: tuple
     dim_repr: int
     dim_action: int
+
+    # define detailed layers inside of the network
+    extra: dict
+
 
 class NeuralNetwork(NamedTuple):
     init_network: Callable
@@ -37,7 +43,6 @@ class NeuralNetwork(NamedTuple):
     trans_inference: Callable[..., Tuple[NNOutput, ...]]
     root_inference_unbatched: Callable[..., Tuple[NNOutput, ...]]
     trans_inference_unbatched: Callable[..., Tuple[NNOutput, ...]]
-
 
 
 def get_network(spec: NeuralNetworkSpec):
@@ -104,6 +109,7 @@ def get_network(spec: NeuralNetworkSpec):
 #     repr_net_sizes: tuple = (16, 16)
 #     pred_net_sizes: tuple = (16, 16)
 #     dyna_net_sizes: tuple = (16, 16)
+
 
 class MLPNet(hk.Module):
     """

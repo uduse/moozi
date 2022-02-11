@@ -13,7 +13,7 @@ from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 from moozi.nn import (
     InitialInferenceFeatures,
     NeuralNetwork,
-    NeuralNetworkSpec,
+    # NeuralNetworkSpec,
     NNOutput,
     RecurrentInferenceFeatures,
 )
@@ -33,7 +33,7 @@ class NeuralNetworkSpec(NamedTuple):
 
 class ConvBlock(hk.Module):
     def __call__(self, x):
-        x = hk.Conv2D(256, (3, 3), padding="same")(x)
+        x = hk.Conv2D(16, (3, 3), padding="same")(x)
         x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(
             x, is_training=True
         )
@@ -41,15 +41,22 @@ class ConvBlock(hk.Module):
         return x
 
 
+@dataclass
 class ResBlock(hk.Module):
+    output_channels: int = 16
+
     def __call__(self, x):
         orig_x = x
-        x = hk.Conv2D(output_channels=256, kernel_shape=(3, 3), padding="same")(x)
+        x = hk.Conv2D(
+            output_channels=self.output_channels, kernel_shape=(3, 3), padding="same"
+        )(x)
         x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(
             x, is_training=True
         )
         x = jax.nn.relu(x)
-        x = hk.Conv2D(output_channels=256, kernel_shape=(3, 3), padding="same")(x)
+        x = hk.Conv2D(
+            output_channels=self.output_channels, kernel_shape=(3, 3), padding="same"
+        )(x)
         x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(
             x, is_training=True
         )
@@ -68,96 +75,119 @@ class ResTower(hk.Module):
         return x
 
 
+@dataclass
+class ResTowerV2(hk.Module):
+    num_blocks: int
+    res_channels: int
+    output_channels: int
+
+    def __call__(self, x):
+        for _ in range(self.num_blocks):
+            x = ResBlock(output_channels=self.res_channels)(x)
+        x = hk.Conv2D(
+            output_channels=self.output_channels, kernel_shape=(3, 3), padding="same"
+        )(x)
+        return x
+
+
 class MuZeroNet(hk.Module):
     def __init__(self, spec: NeuralNetworkSpec):
         super().__init__()
         self.spec = spec
 
     def repr_net(self, stacked_frames, dim_repr):
-        x = ConvBlock()(stacked_frames)
-        x = ResTower(num_blocks=2)(x)
-        x = hk.Conv2D(output_channels=dim_repr, kernel_shape=(3, 3), padding="same")(x)
-        return x
+        # (batch_size, num_frames, height, width, channels)
+        chex.assert_rank(stacked_frames, 5)
+        stacked_frames = stacked_frames.transpose(0, 2, 3, 4, 1)
+        stacked_frames = stacked_frames.reshape(stacked_frames.shape[:-2] + (-1,))
+
+        hidden_state = ConvBlock()(stacked_frames)
+        hidden_state = ResTower(num_blocks=20)(hidden_state)
+        hidden_state = hk.Conv2D(
+            output_channels=dim_repr, kernel_shape=(3, 3), padding="same"
+        )(hidden_state)
+
+        chex.assert_rank(hidden_state, 4)  # (batch_size, height, width, dim_repr)
+
+        return hidden_state
 
     def pred_net(self, hidden_state):
-        pred_trunk = hk.nets.MLP(
-            output_sizes=self.spec.pred_net_sizes,
-            name="pred_trunk",
-            activation=jnp.tanh,
-            activate_final=True,
-        )
-        v_branch = hk.Linear(output_size=1, name="pred_v")
-        p_branch = hk.Linear(output_size=self.spec.dim_action, name="pred_p")
+        pred_trunk = ResTower(num_blocks=20)(hidden_state)
+        pred_trunk = hk.Conv2D(
+            output_channels=dim_repr, kernel_shape=(3, 3), padding="same"
+        )(pred_trunk)
 
-        pred_trunk_out = pred_trunk(hidden_state)
-        value = jnp.squeeze(v_branch(pred_trunk_out), axis=-1)
-        policy_logits = p_branch(pred_trunk_out)
+        chex.assert_rank(pred_trunk, 4)  # (batch_size, height, width, dim_repr)
+
+        pred_trunk_flat = pred_trunk.reshape((pred_trunk.shape[0], -1))
+        chex.assert_rank(pred_trunk_flat, 2)  # (batch_size, height * width * dim_repr)
+
+        value = hk.Linear(output_size=1, name="pred_v")(pred_trunk_flat)
+        chex.assert_shape(value, (None, 1))  # (batch_size, 1)
+
+        policy_logits = hk.Linear(output_size=self.spec.dim_action, name="pred_p")(
+            pred_trunk_flat
+        )
+        chex.assert_shape(
+            policy_logits, (None, self.spec.dim_action)
+        )  # (batch_size, dim_action)
+
         return value, policy_logits
 
     def dyna_net(self, hidden_state, action):
-        dyna_trunk = hk.nets.MLP(
-            output_sizes=self.spec.dyna_net_sizes,
-            name="dyna_trunk",
-            activation=jnp.tanh,
-            activate_final=True,
-        )
-        trans_branch = hk.nets.MLP(
-            output_sizes=[self.spec.dim_repr],
-            name="dyna_trans",
-            activation=jnp.tanh,
-            activate_final=True,
-        )
-        reward_branch = hk.nets.MLP(
-            output_sizes=[1],
-            name="dyna_reward",
-            activation=jnp.tanh,
-            activate_final=True,
-        )
-
         action_one_hot = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
+        action_one_hot = action_one_hot.tile(hidden_state.shape[0:3] + (1,))
+
         chex.assert_equal_rank([hidden_state, action_one_hot])
         state_action_repr = jnp.concatenate((hidden_state, action_one_hot), axis=-1)
-        dyna_trunk_out = dyna_trunk(state_action_repr)
-        next_hidden_states = trans_branch(dyna_trunk_out)
-        next_rewards = jnp.squeeze(reward_branch(dyna_trunk_out), axis=-1)
-        return next_hidden_states, next_rewards
 
-    def initial_inference(self, init_inf_features: InitialInferenceFeatures):
-        x = self.repr_net(init_inf_features.stacked_frames, self.spec.dim_repr)
-        return NNOutput(
-            value=jnp.zeros((1, 1)),
-            reward=jnp.zeros((1, 1)),
-            policy_logits=jnp.zeros((1, self.spec.dim_action)),
-            hidden_state=jnp.zeros((1, self.spec.dim_repr)),
+        dyna_trunk = ResTowerV2(
+            num_blocks=20,
+            res_channels=state_action_repr.shape[-1],
+            output_channels=self.spec.dim_repr,
+        )(state_action_repr)
+
+        next_hidden_state = ResTowerV2(
+            num_blocks=20,
+            res_channels=self.spec.dim_repr,
+            output_channels=self.spec.dim_repr,
+        )(dyna_trunk)
+
+        reward = hk.Linear(output_size=1, name="dyna_reward")(
+            dyna_trunk.reshape((dyna_trunk.shape[0], -1))
         )
-        # chex.assert_rank(init_inf_features.stacked_frames, 3)
-        # hidden_state = self.repr_net(init_inf_features.stacked_frames)
-        # value, policy_logits = self.pred_net(hidden_state)
-        # reward = jnp.zeros_like(value)
-        # chex.assert_rank([value, reward, policy_logits, hidden_state], [1, 1, 2, 2])
-        # return NNOutput(
-        #     value=value,
-        #     reward=reward,
-        #     policy_logits=policy_logits,
-        #     hidden_state=hidden_state,
-        # )
+        chex.assert_shape(reward, (None, 1))  # (batch_size, 1)
 
-    def recurrent_inference(self, recurr_inf_features: RecurrentInferenceFeatures):
-        pass
-        # # TODO: a batch-jit that infers K times?
-        # next_hidden_state, reward = self.dyna_net(
-        #     recurr_inf_features.hidden_state, recurr_inf_features.action
-        # )
-        # value, policy_logits = self.pred_net(next_hidden_state)
-        # chex.assert_rank(
-        #     [value, reward, policy_logits, next_hidden_state], [1, 1, 2, 2]
-        # )
-        # return NNOutput(
-        #     value=value,
-        #     reward=reward,
-        #     policy_logits=policy_logits,
-        #     hidden_state=next_hidden_state,
-        # )
+        return next_hidden_state, reward
+
+    def initial_inference(self, init_inf_feats: InitialInferenceFeatures):
+        hidden_state = self.repr_net(init_inf_feats.stacked_frames, self.spec.dim_repr)
+        value, policy_logits = self.pred_net(hidden_state)
+        reward = jnp.zeros_like(value)
+
+        chex.assert_rank([value, reward, policy_logits, hidden_state], [2, 2, 2, 4])
+
+        return NNOutput(
+            value=value,
+            reward=reward,
+            policy_logits=policy_logits,
+            hidden_state=hidden_state,
+        )
+
+    def recurrent_inference(self, recurr_inf_feats: RecurrentInferenceFeatures):
+        next_hidden_state, reward = self.dyna_net(
+            recurr_inf_feats.hidden_state, recurr_inf_feats.action
+        )
+        value, policy_logits = self.pred_net(next_hidden_state)
+        chex.assert_rank(
+            [value, reward, policy_logits, next_hidden_state], [2, 2, 2, 4]
+        )
+        return NNOutput(
+            value=value,
+            reward=reward,
+            policy_logits=policy_logits,
+            hidden_state=next_hidden_state,
+        )
 
 
 def get_network(spec: NeuralNetworkSpec):
@@ -177,20 +207,22 @@ def get_network(spec: NeuralNetworkSpec):
 
     def init(random_key):
         key_1, key_2 = jax.random.split(random_key)
-        batch_size = 1
-        init_inf_params, _ = init_inf_pass.init(
+        dummy_batch_dim = 1
+        init_inf_params, init_inf_state = init_inf_pass.init(
             key_1,
             InitialInferenceFeatures(
-                stacked_frames=jnp.ones((batch_size,) + spec.stacked_frames_shape),
+                stacked_frames=jnp.ones((dummy_batch_dim,) + spec.stacked_frames_shape),
                 player=jnp.array(0),
             ),
         )
 
-        recurr_inf_params, _ = recurr_inf_pass.init(
+        recurr_inf_params, recurr_inf_state = recurr_inf_pass.init(
             key_2,
             RecurrentInferenceFeatures(
-                hidden_state=jnp.ones((batch_size, spec.dim_repr)),
-                action=jnp.ones((batch_size,)),
+                hidden_state=jnp.ones(
+                    (dummy_batch_dim, *spec.stacked_frames_shape[1:3], spec.dim_repr)
+                ),
+                action=jnp.ones((dummy_batch_dim,)),
             ),
         )
 
@@ -198,17 +230,23 @@ def get_network(spec: NeuralNetworkSpec):
             init_inf_params,
             recurr_inf_params,
         )
-        return params
-
-    def _initial_inference_unbatched(params, init_inf_features):
-        return squeeze_batch_dim(
-            init_inf_pass.apply(params, add_batch_dim(init_inf_features))
+        state = hk.data_structures.merge(
+            init_inf_state,
+            recurr_inf_state,
         )
+        return params, state
 
-    def _recurrent_inference_unbatched(params, recurr_inf_features):
-        return squeeze_batch_dim(
-            recurr_inf_pass.apply(params, add_batch_dim(recurr_inf_features))
+    def _initial_inference_unbatched(params, state, init_inf_features):
+        nn_out, new_state = init_inf_pass.apply(
+            params, state, add_batch_dim(init_inf_features)
         )
+        return squeeze_batch_dim(nn_out), new_state
+
+    def _recurrent_inference_unbatched(params, state, recurr_inf_features):
+        nn_out, new_state = recurr_inf_pass.apply(
+            params, state, add_batch_dim(recurr_inf_features)
+        )
+        return squeeze_batch_dim(nn_out), new_state
 
     return NeuralNetwork(
         init,
@@ -220,32 +258,42 @@ def get_network(spec: NeuralNetworkSpec):
 
 
 # %%
-spec = NeuralNetworkSpec(stacked_frames_shape=(3, 3, 3 * 2), dim_repr=3, dim_action=9)
-nn = get_network(spec)
-
-# %%
-rng = jax.random.PRNGKey(0)
-info(nn.init(rng))
-
-# %%
-# info(params)
-# info(state)
-
-# # %%
-# output, state = model.apply(params, state, obs)
-# info(output)
-
-# # %%
-obs = jnp.ones((3, 3, 3 * 2))
-print(
-    hk.experimental.tabulate(
-        nn.initial_inference, columns=["config", "input", "output", "params_bytes"]
-    )(InitialInferenceFeatures(obs, 0))
+num_stacked_frames = 4
+frame_shape = (5, 5, 3)
+dim_repr = 16
+dim_action = 7
+stacked_frames_shape = (num_stacked_frames,) + frame_shape
+spec = NeuralNetworkSpec(
+    stacked_frames_shape=stacked_frames_shape, dim_repr=dim_repr, dim_action=dim_action
 )
+nn = get_network(spec)
+rng = jax.random.PRNGKey(0)
+params, state = nn.init(rng)
 
-# # %%
-# dot = hk.experimental.to_dot(model.apply)(params, state, obs)
-# dot = graphviz.Source(dot)
-# # %%
+# %%
+init_inf_feat = InitialInferenceFeatures(
+    stacked_frames=jnp.ones(stacked_frames_shape), player=jnp.array(0)
+)
+nn_out, new_state = nn.initial_inference_unbatched(params, state, init_inf_feat)
 
+# %%
+tree.map_structure(lambda x: x.shape, new_state)
+
+# %%
+ini_inf = hk.experimental.to_dot(nn.initial_inference)(params, state, init_inf_feat)
+ini_inf = graphviz.Source(ini_inf)
+
+# %%
+feat = RecurrentInferenceFeatures(hidden_state=state, action=jnp.ones((1,)))
+dot = hk.experimental.to_dot(nn.recurrent_inference)(params, state, feat)
+dot = graphviz.Source(dot)
+
+# %%
+
+
+# %%
+import pickle
+
+with open("/tmp/params.pkl", "wb") as f:
+    pickle.dump(params, f)
 # %%

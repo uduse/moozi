@@ -52,6 +52,7 @@ async def test_async_mcts(
         return network.root_inference_unbatched(params, frames)
 
     def recurr_inf(inputs):
+        network.
         hidden_state, action = inputs
         return network.trans_inference_unbatched(params, hidden_state, action)
 
@@ -164,21 +165,3 @@ async def test_async_mcts_with_ray_and_batching(
                     nn.start_soon(mcts.run, policy_feed)
 
     assert mctses
-
-
-x = 10
-
-
-@pytest.mark.parametrize(
-    "item,root_player,target_player,expected",
-    [
-        (x, 0, 0, x),
-        (x, 0, 1, -x),
-        (x, 1, 0, -x),
-        (x, 1, 1, x),
-    ],
-)
-def test_reorient(item, root_player, target_player, expected):
-    val = reorient(item, root_player=root_player, target_player=target_player)
-
-    assert val == expected

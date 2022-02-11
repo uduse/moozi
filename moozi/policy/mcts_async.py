@@ -11,10 +11,9 @@ from moozi.batching_layer import BatchingClient
 from moozi.nn import (
     RootInferenceFeatures,
     NeuralNetwork,
-    NeuralNetworkSpec,
+    NNSpec,
     NNOutput,
     TransitionInferenceFeatures,
-    get_network,
 )
 from moozi.policy.mcts_core import (
     Node,

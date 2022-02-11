@@ -42,7 +42,7 @@ def env_spec(env):
 
 
 @pytest.fixture
-def num_frames():
+def num_stacked_frames():
     return 2
 
 
@@ -52,19 +52,23 @@ def num_unroll_steps() -> int:
 
 
 @pytest.fixture
-def network(env_spec, num_frames):
+def network(env_spec, num_stacked_frames):
     dim_action = env_spec.actions.num_values
     frame_shape = env_spec.observations.observation.shape
-    stacked_frames_shape = (num_frames,) + frame_shape
-    nn_spec = mz.nn.NeuralNetworkSpec(
+    stacked_frames_shape = (num_stacked_frames,) + frame_shape
+    nn_spec = mz.nn.NNSpec(
+        architecture=mz.nn.ResNetArchitecture,
         stacked_frames_shape=stacked_frames_shape,
         dim_repr=2,
         dim_action=dim_action,
-        repr_net_sizes=(2, 2),
-        pred_net_sizes=(2, 2),
-        dyna_net_sizes=(2, 2),
+        extra={
+            "repr_net_num_blocks": 1,
+            "pred_trunk_num_blocks": 1,
+            "dyna_trunk_num_blocks": 1,
+            "dyna_hidden_num_blocks": 1,
+        },
     )
-    return mz.nn.get_network(nn_spec)
+    return mz.nn.build_network(nn_spec)
 
 
 @pytest.fixture
@@ -75,19 +79,6 @@ def random_key():
 @pytest.fixture
 def params(network: mz.nn.NeuralNetwork, random_key):
     return network.init_network(random_key)
-
-
-class DummyVariableSource(VariableSource):
-    def __init__(self, params) -> None:
-        self._params = params
-
-    def get_variables(self, names: Sequence[str]) -> List[types.NestedArray]:
-        return [self._params]
-
-
-@pytest.fixture
-def variable_client(params):
-    return VariableClient(DummyVariableSource(params=params), None)
 
 
 @pytest.fixture

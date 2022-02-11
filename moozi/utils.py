@@ -46,44 +46,6 @@ def frame_to_str(frame):
     return "".join(frame_to_str_gen(frame))
 
 
-# def get_uuid():
-#     return uuid.uuid4().hex[:8]
-
-
-# def convert_to_anytree(policy_tree_root, anytree_root=None, action="_"):
-#     anytree_child = anytree.Node(
-#         id=get_uuid(),
-#         name=action,
-#         parent=anytree_root,
-#         prior=policy_tree_root.prior,
-#         reward=np.round(np.array(policy_tree_root.network_output.reward).item(), 3),
-#         value=np.round(np.array(policy_tree_root.network_output.value).item(), 3),
-#     )
-#     for next_action, policy_tree_child in policy_tree_root.children:
-#         convert_to_anytree(policy_tree_child, anytree_child, next_action)
-#     return anytree_child
-
-
-# def nodeattrfunc(node):
-#     return f'label="value: {node.value:.3f}"'
-
-
-# def edgeattrfunc(parent, child):
-#     return f'label="action: {child.name} \nprob: {child.prior:.3f}\nreward: {child.reward:.3f}"'
-
-
-# _partial_exporter = functools.partial(
-#     UniqueDotExporter,
-#     nodenamefunc=lambda node: node.id,
-#     nodeattrfunc=nodeattrfunc,
-#     edgeattrfunc=edgeattrfunc,
-# )
-
-
-# def anytree_to_png(anytree_root, file_path):
-#     _partial_exporter(anytree_root).to_picture(file_path)
-
-
 def as_coroutine(func):
     import inspect
 
@@ -148,6 +110,7 @@ def check_ray_gpu():
 
 
 def is_notebook():
+    """Check if we are running in a Jupyter notebook (and not in a terminal)."""
     # https://stackoverflow.com/questions/15411967/how-can-i-check-if-code-is-executed-in-the-ipython-notebook
     try:
         shell = get_ipython().__class__.__name__

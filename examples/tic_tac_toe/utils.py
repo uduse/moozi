@@ -81,7 +81,7 @@ def make_param_opt_properties(config):
     dim_action = env_spec.actions.num_values
     frame_shape = env_spec.observations.observation.shape
     stacked_frame_shape = (config.num_stacked_frames,) + frame_shape
-    nn_spec = mz.nn.NeuralNetworkSpec(
+    nn_spec = mz.nn.NNSpec(
         stacked_frames_shape=stacked_frame_shape,
         dim_repr=config.dim_repr,
         dim_action=dim_action,

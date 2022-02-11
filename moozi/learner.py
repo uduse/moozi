@@ -1,4 +1,5 @@
 import typing
+import haiku as hk
 
 import acme
 import acme.jax.utils
@@ -12,8 +13,9 @@ import moozi as mz
 
 
 class TrainingState(typing.NamedTuple):
-    params: chex.ArrayTree
-    target_params: chex.ArrayTree
+    params: hk.Params
+    target_params: hk.Params
+    state: hk.State
     opt_state: optax.OptState
     steps: int
     rng_key: jax.random.KeyArray

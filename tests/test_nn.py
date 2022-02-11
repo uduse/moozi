@@ -33,17 +33,13 @@ def test_resnet(num_stacked_frames):
     root_inf_feats = RootInferenceFeatures(
         stacked_frames=jnp.ones(stacked_frames_shape), player=jnp.array(0)
     )
-    nn_out, new_state = nn.root_inference_unbatched(params, state, root_inf_feats)
+    nn_out, new_state = nn.root_inference_unbatched(params, state, root_inf_feats, is_training=False)
     assert nn_out
     assert new_state
 
     trans_inf_feats = TransitionInferenceFeatures(
         hidden_state=nn_out.hidden_state, action=jnp.ones((1,))
     )
-    nn_out, new_state = nn.trans_inference_unbatched(params, state, trans_inf_feats)
+    nn_out, new_state = nn.trans_inference_unbatched(params, state, trans_inf_feats, is_training=False)
     assert nn_out
     assert new_state
-
-
-def test_temp(env_spec):
-    print(env_spec.observations.observation.shape)

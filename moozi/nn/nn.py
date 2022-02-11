@@ -37,20 +37,16 @@ class NNSpec(NamedTuple):
     extra: dict
 
 
-ParamsType = chex.ArrayTree  # trainiable nn parameters
-StateType = chex.ArrayTree  # trainiable nn states (batch norm)
-
-
 # TODO: annotate this class
 class NeuralNetwork(NamedTuple):
     init_network: Callable
-    root_inference: Callable[..., Tuple[NNOutput, ...]]
-    trans_inference: Callable[..., Tuple[NNOutput, ...]]
-    root_inference_unbatched: Callable[..., Tuple[NNOutput, ...]]
-    trans_inference_unbatched: Callable[..., Tuple[NNOutput, ...]]
+    root_inference: Callable[..., NNOutput]
+    trans_inference: Callable[..., NNOutput]
+    root_inference_unbatched: Callable[..., NNOutput]
+    trans_inference_unbatched: Callable[..., NNOutput]
 
 
-def init_root_inference(random_key, spec, root_inference):
+def init_root_inference(random_key, spec, root_inference, is_training):
     dummy_batch_dim = 1
     root_inference_params, root_inference_state = root_inference.init(
         random_key,
@@ -58,12 +54,13 @@ def init_root_inference(random_key, spec, root_inference):
             stacked_frames=jnp.ones((dummy_batch_dim,) + spec.stacked_frames_shape),
             player=jnp.array(0),
         ),
+        is_training,
     )
 
     return root_inference_params, root_inference_state
 
 
-def init_trans_inference(random_key, spec, trans_inference):
+def init_trans_inference(random_key, spec, trans_inference, is_training):
     dummy_batch_dim = 1
     trans_inference_params, trans_inference_state = trans_inference.init(
         random_key,
@@ -73,6 +70,7 @@ def init_trans_inference(random_key, spec, trans_inference):
             ),
             action=jnp.ones((dummy_batch_dim,)),
         ),
+        is_training,
     )
     return trans_inference_params, trans_inference_state
 
@@ -81,10 +79,10 @@ def build_network_init_fn(spec: NNSpec, root_inference, trans_inference):
     def net_work_init(random_key):
         key_1, key_2 = jax.random.split(random_key)
         root_inference_params, root_inference_state = init_root_inference(
-            key_1, spec, root_inference
+            key_1, spec, root_inference, is_training=True
         )
         trans_inference_params, trans_inference_state = init_trans_inference(
-            key_2, spec, trans_inference
+            key_2, spec, trans_inference, is_training=True
         )
 
         merged_params = hk.data_structures.merge(
@@ -100,26 +98,30 @@ def build_network_init_fn(spec: NNSpec, root_inference, trans_inference):
     return net_work_init
 
 
-def build_root_inference(nn):
+def build_root_inference(arch):
     return hk.without_apply_rng(
         hk.transform_with_state(
-            lambda root_inf_feats: nn().initial_inference(root_inf_feats)
+            lambda root_inf_feats, is_training: arch().initial_inference(
+                root_inf_feats, is_training
+            )
         )
     )
 
 
-def build_trans_inference(nn):
+def build_trans_inference(arch):
     return hk.without_apply_rng(
         hk.transform_with_state(
-            lambda trans_inf_feats: nn().recurrent_inference(trans_inf_feats)
+            lambda trans_inf_feats, is_training: arch().recurrent_inference(
+                trans_inf_feats, is_training
+            )
         )
     )
 
 
 def build_unbatched_fn(fn):
-    def _unbatched_wrapper(params, state, feats):
-        out, new_state = fn(params, state, add_batch_dim(feats))
-        return squeeze_batch_dim(out), new_state
+    def _unbatched_wrapper(params, state, feats, is_training):
+        nn_out, new_state = fn(params, state, add_batch_dim(feats), is_training)
+        return squeeze_batch_dim(nn_out), new_state
 
     return _unbatched_wrapper
 

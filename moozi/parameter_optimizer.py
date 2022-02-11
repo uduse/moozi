@@ -48,18 +48,18 @@ def make_sgd_step_fn(
     # @partial(jax.jit, backend="cpu")
     @jax.jit
     @chex.assert_max_traces(n=1)
-    def sgd_step_fn(state: TrainingState, batch: mz.replay.TrainTarget):
+    def sgd_step_fn(training_state: TrainingState, batch: mz.replay.TrainTarget):
         # gradient descend
-        _, new_key = jax.random.split(state.rng_key)
+        _, new_key = jax.random.split(training_state.rng_key)
         grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
-            network, state.params, batch
+            network, training_state.params, batch, is_training=True
         )
-        updates, new_opt_state = optimizer.update(grads, state.opt_state)
-        new_params = optax.apply_updates(state.params, updates)
-        new_steps = state.steps + 1
+        updates, new_opt_state = optimizer.update(grads, training_state.opt_state)
+        new_params = optax.apply_updates(training_state.params, updates)
+        new_steps = training_state.steps + 1
 
         target_params = rlax.periodic_update(
-            new_params, state.target_params, new_steps, target_update_period
+            new_params, training_state.target_params, new_steps, target_update_period
         )
 
         new_training_state = TrainingState(
@@ -77,7 +77,9 @@ def make_sgd_step_fn(
         step_data.add_hk_params(new_params)
 
         if include_prior_kl:
-            prior_kl = _compute_prior_kl(network, batch, state.params, new_params)
+            prior_kl = _compute_prior_kl(
+                network, batch, training_state.params, new_params
+            )
             step_data.scalars["prior_kl"] = prior_kl
 
         return new_training_state, step_data
@@ -96,7 +98,7 @@ class ParameterOptimizer:
     _num_updates: int = 0
 
     def build(self, factory):
-        network, params, loss_fn, optimizer = factory()
+        network, params, state, loss_fn, optimizer = factory()
         self.network = network
         self.state = TrainingState(
             params=params,

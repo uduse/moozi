@@ -1,12 +1,12 @@
-from typing import Tuple, Any
+from typing import Any, Tuple
 
 import chex
+import haiku as hk
 import jax
 import jax.numpy as jnp
 import rlax
-from acme.jax.utils import add_batch_dim
-from jax import vmap
 import tree
+from jax import vmap
 
 import moozi as mz
 from moozi.logging import JAXBoardStepData
@@ -40,7 +40,8 @@ class MuZeroLoss(LossFn):
     def __call__(
         self,
         network: mz.nn.NeuralNetwork,
-        params: chex.ArrayTree,
+        params: hk.Params,
+        state: hk.State,
         batch: mz.replay.TrainTarget,
     ) -> Tuple[chex.ArrayDevice, Any]:
 
@@ -56,9 +57,13 @@ class MuZeroLoss(LossFn):
         )
 
         init_inf_features = RootInferenceFeatures(
-            stacked_frames=batch.stacked_frames, player=None
+            stacked_frames=batch.stacked_frames,
+            # TODO: actually pass player
+            player=jnp.ones((batch.stacked_frames.shape[0], 1)),
         )
-        network_output = network.root_inference(params, init_inf_features)
+        network_output = network.root_inference(
+            params, init_inf_features, is_training=True
+        )
 
         losses = {}
 
@@ -77,7 +82,9 @@ class MuZeroLoss(LossFn):
                 hidden_state=network_output.hidden_state,
                 action=batch.action.take(0, axis=1),
             )
-            network_output = network.trans_inference(params, recurr_inf_features)
+            network_output = network.trans_inference(
+                params, recurr_inf_features, is_training=True
+            )
 
             losses[f"loss_reward_{str(i + 1)}"] = vmap(mse)(
                 batch.last_reward.take(i + 1, axis=1), network_output.reward

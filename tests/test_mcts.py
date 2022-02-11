@@ -52,7 +52,7 @@ async def test_async_mcts(
         return network.root_inference_unbatched(params, frames)
 
     def recurr_inf(inputs):
-        network.
+        network.trans_inference_unbatched(params, state)
         hidden_state, action = inputs
         return network.trans_inference_unbatched(params, hidden_state, action)
 

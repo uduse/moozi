@@ -6,7 +6,6 @@ import dm_env
 import jax
 import moozi as mz
 import pytest
-import reverb
 from acme.agents import agent as acme_agent
 from acme.agents import replay as acme_replay
 from acme.environment_loops.open_spiel_environment_loop import OpenSpielEnvironmentLoop

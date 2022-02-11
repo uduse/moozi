@@ -11,26 +11,14 @@ import jax.numpy as jnp
 import tree
 from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 from moozi.nn import (
-    InitialInferenceFeatures,
     NeuralNetwork,
-    # NeuralNetworkSpec,
     NNOutput,
-    RecurrentInferenceFeatures,
+    NeuralNetworkSpec,
+    RootInferenceFeatures,
+    TransitionInferenceFeatures,
 )
 
-
 # %%
-def info(structure):
-    print(tree.map_structure(lambda x: (x.shape, x.dtype), structure))
-
-
-# %%
-class NeuralNetworkSpec(NamedTuple):
-    stacked_frames_shape: tuple
-    dim_repr: int
-    dim_action: int
-
-
 class ConvBlock(hk.Module):
     def __call__(self, x):
         x = hk.Conv2D(16, (3, 3), padding="same")(x)
@@ -90,12 +78,12 @@ class ResTowerV2(hk.Module):
         return x
 
 
-class MuZeroNet(hk.Module):
+class MuZeroResNet(hk.Module):
     def __init__(self, spec: NeuralNetworkSpec):
         super().__init__()
         self.spec = spec
 
-    def repr_net(self, stacked_frames, dim_repr):
+    def _repr_net(self, stacked_frames, dim_repr):
         # (batch_size, num_frames, height, width, channels)
         chex.assert_rank(stacked_frames, 5)
         stacked_frames = stacked_frames.transpose(0, 2, 3, 4, 1)
@@ -111,7 +99,7 @@ class MuZeroNet(hk.Module):
 
         return hidden_state
 
-    def pred_net(self, hidden_state):
+    def _pred_net(self, hidden_state):
         pred_trunk = ResTower(num_blocks=20)(hidden_state)
         pred_trunk = hk.Conv2D(
             output_channels=dim_repr, kernel_shape=(3, 3), padding="same"
@@ -134,7 +122,7 @@ class MuZeroNet(hk.Module):
 
         return value, policy_logits
 
-    def dyna_net(self, hidden_state, action):
+    def _dyna_net(self, hidden_state, action):
         action_one_hot = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
         action_one_hot = action_one_hot.tile(hidden_state.shape[0:3] + (1,))
 
@@ -160,9 +148,9 @@ class MuZeroNet(hk.Module):
 
         return next_hidden_state, reward
 
-    def initial_inference(self, init_inf_feats: InitialInferenceFeatures):
-        hidden_state = self.repr_net(init_inf_feats.stacked_frames, self.spec.dim_repr)
-        value, policy_logits = self.pred_net(hidden_state)
+    def initial_inference(self, init_inf_feats: RootInferenceFeatures):
+        hidden_state = self._repr_net(init_inf_feats.stacked_frames, self.spec.dim_repr)
+        value, policy_logits = self._pred_net(hidden_state)
         reward = jnp.zeros_like(value)
 
         chex.assert_rank([value, reward, policy_logits, hidden_state], [2, 2, 2, 4])
@@ -174,11 +162,11 @@ class MuZeroNet(hk.Module):
             hidden_state=hidden_state,
         )
 
-    def recurrent_inference(self, recurr_inf_feats: RecurrentInferenceFeatures):
-        next_hidden_state, reward = self.dyna_net(
+    def recurrent_inference(self, recurr_inf_feats: TransitionInferenceFeatures):
+        next_hidden_state, reward = self._dyna_net(
             recurr_inf_feats.hidden_state, recurr_inf_feats.action
         )
-        value, policy_logits = self.pred_net(next_hidden_state)
+        value, policy_logits = self._pred_net(next_hidden_state)
         chex.assert_rank(
             [value, reward, policy_logits, next_hidden_state], [2, 2, 2, 4]
         )
@@ -190,70 +178,93 @@ class MuZeroNet(hk.Module):
         )
 
 
-def get_network(spec: NeuralNetworkSpec):
-    # TODO: rename to build network
-    nn = functools.partial(MuZeroNet, spec)
-
-    init_inf_pass = hk.without_apply_rng(
-        hk.transform_with_state(
-            lambda init_inf_features: nn().initial_inference(init_inf_features)
-        )
-    )
-    recurr_inf_pass = hk.without_apply_rng(
-        hk.transform_with_state(
-            lambda recurr_inf_features: nn().recurrent_inference(recurr_inf_features)
-        )
+def init_root_inference(random_key, spec, root_inference):
+    dummy_batch_dim = 1
+    root_inference_params, root_inference_state = root_inference.init(
+        random_key,
+        RootInferenceFeatures(
+            stacked_frames=jnp.ones((dummy_batch_dim,) + spec.stacked_frames_shape),
+            player=jnp.array(0),
+        ),
     )
 
-    def init(random_key):
+    return root_inference_params, root_inference_state
+
+
+def init_trans_inference(random_key, spec, trans_inference):
+    dummy_batch_dim = 1
+    trans_inference_params, trans_inference_state = trans_inference.init(
+        random_key,
+        TransitionInferenceFeatures(
+            hidden_state=jnp.ones(
+                (dummy_batch_dim, *spec.stacked_frames_shape[1:3], spec.dim_repr)
+            ),
+            action=jnp.ones((dummy_batch_dim,)),
+        ),
+    )
+    return trans_inference_params, trans_inference_state
+
+
+def build_network_init_fn(spec: NeuralNetworkSpec, root_inference, trans_inference):
+    def net_work_init(random_key):
         key_1, key_2 = jax.random.split(random_key)
-        dummy_batch_dim = 1
-        init_inf_params, init_inf_state = init_inf_pass.init(
-            key_1,
-            InitialInferenceFeatures(
-                stacked_frames=jnp.ones((dummy_batch_dim,) + spec.stacked_frames_shape),
-                player=jnp.array(0),
-            ),
+        root_inference_params, root_inference_state = init_root_inference(
+            key_1, spec, root_inference
+        )
+        trans_inference_params, trans_inference_state = init_trans_inference(
+            key_2, spec, trans_inference
         )
 
-        recurr_inf_params, recurr_inf_state = recurr_inf_pass.init(
-            key_2,
-            RecurrentInferenceFeatures(
-                hidden_state=jnp.ones(
-                    (dummy_batch_dim, *spec.stacked_frames_shape[1:3], spec.dim_repr)
-                ),
-                action=jnp.ones((dummy_batch_dim,)),
-            ),
+        merged_params = hk.data_structures.merge(
+            root_inference_params,
+            trans_inference_params,
         )
+        merged_state = hk.data_structures.merge(
+            root_inference_state,
+            trans_inference_state,
+        )
+        return merged_params, merged_state
 
-        params = hk.data_structures.merge(
-            init_inf_params,
-            recurr_inf_params,
-        )
-        state = hk.data_structures.merge(
-            init_inf_state,
-            recurr_inf_state,
-        )
-        return params, state
+    return net_work_init
 
-    def _initial_inference_unbatched(params, state, init_inf_features):
-        nn_out, new_state = init_inf_pass.apply(
-            params, state, add_batch_dim(init_inf_features)
-        )
-        return squeeze_batch_dim(nn_out), new_state
 
-    def _recurrent_inference_unbatched(params, state, recurr_inf_features):
-        nn_out, new_state = recurr_inf_pass.apply(
-            params, state, add_batch_dim(recurr_inf_features)
+def build_root_inference(nn):
+    return hk.without_apply_rng(
+        hk.transform_with_state(
+            lambda root_inf_feats: nn().initial_inference(root_inf_feats)
         )
-        return squeeze_batch_dim(nn_out), new_state
+    )
 
+
+def build_trans_inference(nn):
+    return hk.without_apply_rng(
+        hk.transform_with_state(
+            lambda trans_inf_feats: nn().recurrent_inference(trans_inf_feats)
+        )
+    )
+
+
+def build_unbatched_fn(fn):
+    def _unbatched_wrapper(params, state, feats):
+        out, new_state = fn(params, state, add_batch_dim(feats))
+        return squeeze_batch_dim(out), new_state
+
+    return _unbatched_wrapper
+
+
+def build_network(spec: NeuralNetworkSpec):
+    nn_structure = functools.partial(MuZeroResNet, spec)
+    root_inference = build_root_inference(nn_structure)
+    trans_inference = build_trans_inference(nn_structure)
+    network_init_fn = build_network_init_fn(spec, root_inference, trans_inference)
+    root_inferenc_fn_unbatched = build_unbatched_fn(root_inference.apply)
+    trans_inference_fn_unbatched = build_unbatched_fn(trans_inference.apply)
     return NeuralNetwork(
-        init,
-        init_inf_pass.apply,
-        recurr_inf_pass.apply,
-        _initial_inference_unbatched,
-        _recurrent_inference_unbatched,
+        network_init_fn,
+        root_inference.apply,
+        trans_inference.apply,
+        root_inferenc_fn_unbatched,
+        trans_inference_fn_unbatched,
     )
 
 
@@ -266,34 +277,44 @@ stacked_frames_shape = (num_stacked_frames,) + frame_shape
 spec = NeuralNetworkSpec(
     stacked_frames_shape=stacked_frames_shape, dim_repr=dim_repr, dim_action=dim_action
 )
-nn = get_network(spec)
+nn = build_network(spec)
 rng = jax.random.PRNGKey(0)
-params, state = nn.init(rng)
 
 # %%
-init_inf_feat = InitialInferenceFeatures(
+params, state = nn.init_network(rng)
+
+# %%
+root_inf_feats = RootInferenceFeatures(
     stacked_frames=jnp.ones(stacked_frames_shape), player=jnp.array(0)
 )
-nn_out, new_state = nn.initial_inference_unbatched(params, state, init_inf_feat)
+nn_out, new_state = nn.root_inference_unbatched(params, state, root_inf_feats)
 
 # %%
-tree.map_structure(lambda x: x.shape, new_state)
+trans_inf_feats = TransitionInferenceFeatures(
+    hidden_state=nn_out.hidden_state, action=jnp.ones((1,))
+)
+nn_out, new_state = nn.trans_inference_unbatched(params, state, trans_inf_feats)
+# %% 
+root_inf = hk.experimental.to_dot(nn.root_inference)(params, state, root_inf_feats)
+root_inf = graphviz.Source(root_inf)
+root_inf.render("./vis/resnet_root_inf", cleanup=True)
+
+# print(tree.map_structure(lambda x: x.shape, nn_out))
+# %%
+# ini_inf = hk.experimental.to_dot(nn.root_inference)(params, state, root_inf_feats)
+# ini_inf = graphviz.Source(ini_inf)
+
+# # %%
+# feat = TransitionInferenceFeatures(hidden_state=state, action=jnp.ones((1,)))
+# dot = hk.experimental.to_dot(nn.trans_inference)(params, state, feat)
+# dot = graphviz.Source(dot)
 
 # %%
-ini_inf = hk.experimental.to_dot(nn.initial_inference)(params, state, init_inf_feat)
-ini_inf = graphviz.Source(ini_inf)
-
-# %%
-feat = RecurrentInferenceFeatures(hidden_state=state, action=jnp.ones((1,)))
-dot = hk.experimental.to_dot(nn.recurrent_inference)(params, state, feat)
-dot = graphviz.Source(dot)
-
-# %%
 
 
 # %%
-import pickle
+# import pickle
 
-with open("/tmp/params.pkl", "wb") as f:
-    pickle.dump(params, f)
-# %%
+# with open("/tmp/params.pkl", "wb") as f:
+#     pickle.dump(params, f)
+# # %%

@@ -75,10 +75,10 @@ class RolloutWorkerWithWeights:
         # logging.info(f"jax.devices(): {jax.devices()}")
         self.network = network
 
-        self.init_inf_fn = jax.jit(network.initial_inference)
-        self.recurr_inf_fn = jax.jit(network.recurrent_inference)
-        self.init_inf_fn_unbatched = jax.jit(network.initial_inference_unbatched)
-        self.recurr_inf_fn_unbatched = jax.jit(network.recurrent_inference_unbatched)
+        self.init_inf_fn = jax.jit(network.root_inference)
+        self.recurr_inf_fn = jax.jit(network.trans_inference)
+        self.init_inf_fn_unbatched = jax.jit(network.root_inference_unbatched)
+        self.recurr_inf_fn_unbatched = jax.jit(network.trans_inference_unbatched)
 
     def exec(self, fn):
         return fn(self)

@@ -74,7 +74,7 @@ def random_key():
 
 @pytest.fixture
 def params(network: mz.nn.NeuralNetwork, random_key):
-    return network.init(random_key)
+    return network.init_network(random_key)
 
 
 class DummyVariableSource(VariableSource):

@@ -49,11 +49,11 @@ async def test_async_mcts(
     network: NeuralNetwork, params, policy_feed: PolicyFeed, env_spec
 ):
     async def init_inf(frames):
-        return network.initial_inference_unbatched(params, frames)
+        return network.root_inference_unbatched(params, frames)
 
     def recurr_inf(inputs):
         hidden_state, action = inputs
-        return network.recurrent_inference_unbatched(params, hidden_state, action)
+        return network.trans_inference_unbatched(params, hidden_state, action)
 
     mcts_async = MCTSAsync(
         init_inf_fn=init_inf,
@@ -73,10 +73,10 @@ async def test_async_mcts_with_ray(
     @dataclass
     class SimpleInferenceServer:
         _init_inf_fn: Callable = functools.partial(
-            jax.jit(network.initial_inference_unbatched), params
+            jax.jit(network.root_inference_unbatched), params
         )
         _recurr_inf_fn: Callable = functools.partial(
-            jax.jit(network.recurrent_inference_unbatched), params
+            jax.jit(network.trans_inference_unbatched), params
         )
 
         def init_inf(self, frames):
@@ -112,10 +112,10 @@ async def test_async_mcts_with_ray_and_batching(
     @dataclass
     class SimpleInferenceServer:
         _init_inf_fn: Callable = functools.partial(
-            jax.jit(network.initial_inference), params
+            jax.jit(network.root_inference), params
         )
         _recurr_inf_fn: Callable = functools.partial(
-            jax.jit(network.recurrent_inference), params
+            jax.jit(network.trans_inference), params
         )
 
         def init_inf(self, frames):

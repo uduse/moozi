@@ -1,21 +1,12 @@
 import collections
+import random
 from dataclasses import dataclass, field
 from enum import EnumMeta
-import random
 from typing import Deque, List, NamedTuple
-from acme.adders.reverb.base import Trajectory
 
-import chex
-import dm_env
 import numpy as np
-import reverb
 import tensorflow as tf
-import tree
-from acme import datasets, specs, types
-from acme.adders.reverb import DEFAULT_PRIORITY_TABLE, ReverbAdder
-from acme.agents.replay import ReverbReplay
 from acme.utils import tree_utils
-from acme.wrappers import open_spiel_wrapper
 from nptyping import NDArray
 
 import moozi as mz

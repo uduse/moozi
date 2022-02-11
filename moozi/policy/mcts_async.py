@@ -9,11 +9,11 @@ import numpy as np
 from moozi import link
 from moozi.batching_layer import BatchingClient
 from moozi.nn import (
-    InitialInferenceFeatures,
+    RootInferenceFeatures,
     NeuralNetwork,
     NeuralNetworkSpec,
     NNOutput,
-    RecurrentInferenceFeatures,
+    TransitionInferenceFeatures,
     get_network,
 )
 from moozi.policy.mcts_core import (
@@ -31,8 +31,8 @@ from moozi.utils import as_coroutine
 class MCTSAsync:
     dim_action: int
 
-    init_inf_fn: Callable[[InitialInferenceFeatures], Awaitable[NNOutput]]
-    recurr_inf_fn: Callable[[RecurrentInferenceFeatures], Awaitable[NNOutput]]
+    init_inf_fn: Callable[[RootInferenceFeatures], Awaitable[NNOutput]]
+    recurr_inf_fn: Callable[[TransitionInferenceFeatures], Awaitable[NNOutput]]
     num_simulations: int = 1
     all_actions_mask: np.ndarray = None
     discount: float = 1.0
@@ -56,7 +56,7 @@ class MCTSAsync:
         return root
 
     async def get_root(self, feed: PolicyFeed) -> Node:
-        init_inf_features = InitialInferenceFeatures(
+        init_inf_features = RootInferenceFeatures(
             stacked_frames=feed.stacked_frames, player=np.array(feed.to_play)
         )
         root_nn_output = await self.init_inf_fn(init_inf_features)
@@ -77,7 +77,7 @@ class MCTSAsync:
         action, leaf = root.select_leaf(discount=self.discount)
         assert leaf.parent
 
-        recurr_inf_features = RecurrentInferenceFeatures(
+        recurr_inf_features = TransitionInferenceFeatures(
             hidden_state=leaf.parent.hidden_state, action=np.array(action)
         )
         leaf_nn_output = await self.recurr_inf_fn(recurr_inf_features)

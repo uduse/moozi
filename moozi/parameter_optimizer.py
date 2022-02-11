@@ -13,7 +13,7 @@ from absl import logging
 
 import moozi as mz
 from moozi.learner import TrainingState
-from moozi.nn import InitialInferenceFeatures
+from moozi.nn import RootInferenceFeatures
 
 
 @ray.remote
@@ -28,11 +28,11 @@ class LoggerActor:
 def _compute_prior_kl(network, batch, orig_params, new_params):
     orig_logits = network.initial_inference(
         orig_params,
-        InitialInferenceFeatures(stacked_frames=batch.stacked_frames, player=None),
+        RootInferenceFeatures(stacked_frames=batch.stacked_frames, player=None),
     ).policy_logits
     new_logits = network.initial_inference(
         new_params,
-        InitialInferenceFeatures(stacked_frames=batch.stacked_frames, player=None),
+        RootInferenceFeatures(stacked_frames=batch.stacked_frames, player=None),
     ).policy_logits
     prior_kl = jnp.mean(rlax.categorical_kl_divergence(orig_logits, new_logits))
     return prior_kl

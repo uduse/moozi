@@ -53,7 +53,7 @@ def test_single_roll_monte_carlo(
 
 
 def test_mcts_backpropagate(policy_feed: PolicyFeed, network: NeuralNetwork, params):
-    nn_output = network.initial_inference_unbatched(params, policy_feed.stacked_frames)
+    nn_output = network.root_inference_unbatched(params, policy_feed.stacked_frames)
     root = mcts.make_root_node(nn_output.hidden_state)
     child = copy.deepcopy(root)._replace(parent=root)
     child_child = copy.deepcopy(child)._replace(parent=child)

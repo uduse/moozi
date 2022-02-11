@@ -1,14 +1,12 @@
 from dataclasses import dataclass
 import functools
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Tuple
 from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 
 import chex
 import haiku as hk
 import jax
 import jax.numpy as jnp
-
-import moozi as mz
 
 
 class NNOutput(NamedTuple):
@@ -18,31 +16,28 @@ class NNOutput(NamedTuple):
     hidden_state: jnp.ndarray
 
 
-class InitialInferenceFeatures(NamedTuple):
+class RootInferenceFeatures(NamedTuple):
     stacked_frames: jnp.ndarray
     player: jnp.ndarray
 
 
-class RecurrentInferenceFeatures(NamedTuple):
+class TransitionInferenceFeatures(NamedTuple):
     hidden_state: jnp.ndarray
     action: jnp.ndarray
-
-
-class NeuralNetwork(NamedTuple):
-    init: Callable
-    initial_inference: Callable[..., NNOutput]
-    recurrent_inference: Callable[..., NNOutput]
-    initial_inference_unbatched: Callable[..., NNOutput]
-    recurrent_inference_unbatched: Callable[..., NNOutput]
 
 
 class NeuralNetworkSpec(NamedTuple):
     stacked_frames_shape: tuple
     dim_repr: int
     dim_action: int
-    repr_net_sizes: tuple = (16, 16)
-    pred_net_sizes: tuple = (16, 16)
-    dyna_net_sizes: tuple = (16, 16)
+
+class NeuralNetwork(NamedTuple):
+    init_network: Callable
+    root_inference: Callable[..., Tuple[NNOutput, ...]]
+    trans_inference: Callable[..., Tuple[NNOutput, ...]]
+    root_inference_unbatched: Callable[..., Tuple[NNOutput, ...]]
+    trans_inference_unbatched: Callable[..., Tuple[NNOutput, ...]]
+
 
 
 def get_network(spec: NeuralNetworkSpec):
@@ -67,14 +62,14 @@ def get_network(spec: NeuralNetworkSpec):
         params = hk.data_structures.merge(
             initial_inference.init(
                 key_1,
-                InitialInferenceFeatures(
+                RootInferenceFeatures(
                     stacked_frames=jnp.ones((batch_size,) + spec.stacked_frames_shape),
                     player=jnp.array(0),
                 ),
             ),
             recurrent_inference.init(
                 key_2,
-                RecurrentInferenceFeatures(
+                TransitionInferenceFeatures(
                     hidden_state=jnp.ones((batch_size, spec.dim_repr)),
                     action=jnp.ones((batch_size,)),
                 ),
@@ -100,6 +95,15 @@ def get_network(spec: NeuralNetworkSpec):
         _recurrent_inference_unbatched,
     )
 
+
+# deprecated
+# class NeuralNetworkSpec(NamedTuple):
+#     stacked_frames_shape: tuple
+#     dim_repr: int
+#     dim_action: int
+#     repr_net_sizes: tuple = (16, 16)
+#     pred_net_sizes: tuple = (16, 16)
+#     dyna_net_sizes: tuple = (16, 16)
 
 class MLPNet(hk.Module):
     """
@@ -162,7 +166,7 @@ class MLPNet(hk.Module):
         next_rewards = jnp.squeeze(reward_branch(dyna_trunk_out), axis=-1)
         return next_hidden_states, next_rewards
 
-    def initial_inference(self, init_inf_features: InitialInferenceFeatures):
+    def initial_inference(self, init_inf_features: RootInferenceFeatures):
         chex.assert_rank(init_inf_features.stacked_frames, 3)
         flattened_stacked_frames = hk.Flatten()(init_inf_features.stacked_frames)
         hidden_state = self.repr_net(flattened_stacked_frames)
@@ -176,7 +180,7 @@ class MLPNet(hk.Module):
             hidden_state=hidden_state,
         )
 
-    def recurrent_inference(self, recurr_inf_features: RecurrentInferenceFeatures):
+    def recurrent_inference(self, recurr_inf_features: TransitionInferenceFeatures):
         # TODO: a batch-jit that infers K times?
         next_hidden_state, reward = self.dyna_net(
             recurr_inf_features.hidden_state, recurr_inf_features.action
@@ -295,7 +299,7 @@ class MuZeroNet(hk.Module):
         next_rewards = jnp.squeeze(reward_branch(dyna_trunk_out), axis=-1)
         return next_hidden_states, next_rewards
 
-    def initial_inference(self, init_inf_features: InitialInferenceFeatures):
+    def initial_inference(self, init_inf_features: RootInferenceFeatures):
         chex.assert_rank(init_inf_features.stacked_frames, 3)
         hidden_state = self.repr_net(init_inf_features.stacked_frames)
         value, policy_logits = self.pred_net(hidden_state)
@@ -308,7 +312,7 @@ class MuZeroNet(hk.Module):
             hidden_state=hidden_state,
         )
 
-    def recurrent_inference(self, recurr_inf_features: RecurrentInferenceFeatures):
+    def recurrent_inference(self, recurr_inf_features: TransitionInferenceFeatures):
         # TODO: a batch-jit that infers K times?
         next_hidden_state, reward = self.dyna_net(
             recurr_inf_features.hidden_state, recurr_inf_features.action

@@ -43,7 +43,7 @@ nn_spec = mz.nn.NeuralNetworkSpec(
 )
 network = mz.nn.get_network(nn_spec)
 master_key = jax.random.PRNGKey(0)
-params = network.init(master_key)
+params = network.init_network(master_key)
 
 # %%
 @ray.remote
@@ -115,8 +115,8 @@ num_experiments = 5
 num_inputs = 10000
 results = collections.defaultdict(list)
 
-init_inf_fn = jax.jit(network.initial_inference, backend="cpu")
-recurr_inf_fn = jax.jit(network.recurrent_inference, backend="cpu")
+init_inf_fn = jax.jit(network.root_inference, backend="cpu")
+recurr_inf_fn = jax.jit(network.trans_inference, backend="cpu")
 num_recurr_inf = 10
 
 for _ in range(num_experiments):

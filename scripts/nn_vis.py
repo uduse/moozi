@@ -26,18 +26,18 @@ network = mz.nn.get_network(
     )
 )
 key = jax.random.PRNGKey(0)
-params = network.init(key)
+params = network.init_network(key)
 image = jnp.ones((dim_batch, dim_image))
 action = jnp.ones(dim_batch)
 
 # %%
-ini_inf = hk.experimental.to_dot(network.initial_inference)(params, image)
+ini_inf = hk.experimental.to_dot(network.root_inference)(params, image)
 ini_inf = graphviz.Source(ini_inf)
 ini_inf.render(vis_dir / "mlp_initial_inference", cleanup=True)
 
 # %%
-repr_ = network.initial_inference(params, image).hidden_state
-recur_inf = hk.experimental.to_dot(network.recurrent_inference)(params, repr_, action)
+repr_ = network.root_inference(params, image).hidden_state
+recur_inf = hk.experimental.to_dot(network.trans_inference)(params, repr_, action)
 recur_inf = graphviz.Source(recur_inf)
 recur_inf.render(vis_dir / "mlp_recurrent_inference", cleanup=True)
 

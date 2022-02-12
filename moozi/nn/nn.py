@@ -75,8 +75,8 @@ def init_trans_inference(random_key, spec, trans_inference, is_training):
     return trans_inference_params, trans_inference_state
 
 
-def build_network_init_fn(spec: NNSpec, root_inference, trans_inference):
-    def net_work_init(random_key):
+def build_init_network_fn(spec: NNSpec, root_inference, trans_inference):
+    def init_nework(random_key):
         key_1, key_2 = jax.random.split(random_key)
         root_inference_params, root_inference_state = init_root_inference(
             key_1, spec, root_inference, is_training=True
@@ -95,7 +95,7 @@ def build_network_init_fn(spec: NNSpec, root_inference, trans_inference):
         )
         return merged_params, merged_state
 
-    return net_work_init
+    return init_nework
 
 
 def build_root_inference(arch):
@@ -130,7 +130,7 @@ def build_network(spec: NNSpec):
     architecture = functools.partial(spec.architecture, spec)
     root_inference = build_root_inference(architecture)
     trans_inference = build_trans_inference(architecture)
-    network_init_fn = build_network_init_fn(spec, root_inference, trans_inference)
+    network_init_fn = build_init_network_fn(spec, root_inference, trans_inference)
     root_inferenc_fn_unbatched = build_unbatched_fn(root_inference.apply)
     trans_inference_fn_unbatched = build_unbatched_fn(trans_inference.apply)
     return NeuralNetwork(

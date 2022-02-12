@@ -77,8 +77,18 @@ def random_key():
 
 
 @pytest.fixture
-def params(network: mz.nn.NeuralNetwork, random_key):
+def params_and_state(network: mz.nn.NeuralNetwork, random_key):
     return network.init_network(random_key)
+
+
+@pytest.fixture
+def params(params_and_state):
+    return params_and_state[0]
+
+
+@pytest.fixture
+def state(params_and_state):
+    return params_and_state[1]
 
 
 @pytest.fixture

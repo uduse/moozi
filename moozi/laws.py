@@ -55,26 +55,26 @@ class FrameStacker:
         return stacked_frames
 
 
-@dataclass
-class FrameStackerV2:
-    num_frames: int = 1
-    player: int = 0
-    padding: Optional[np.ndarray] = None
-    deque: Deque = field(init=False)
+# @dataclass
+# class FrameStackerV2:
+#     num_frames: int = 1
+#     player: int = 0
+#     padding: Optional[np.ndarray] = None
+#     deque: Deque = field(init=False)
 
-    def __post_init__(self):
-        self.deque = collections.deque(maxlen=self.num_frames)
+#     def __post_init__(self):
+#         self.deque = collections.deque(maxlen=self.num_frames)
 
 
-def get_stacked_frames(deque, num_frames, padding):
-    stacked_frames = np.array(list(deque))
-    num_frames_to_pad = num_frames - len(deque)
-    if num_frames_to_pad > 0:
-        paddings = np.stack(
-            [np.copy(padding) for _ in range(num_frames_to_pad)], axis=0
-        )
-        stacked_frames = np.append(paddings, np.array(list(deque)), axis=0)
-    return stacked_frames
+# def get_stacked_frames(deque, num_frames, padding):
+#     stacked_frames = np.array(list(deque))
+#     num_frames_to_pad = num_frames - len(deque)
+#     if num_frames_to_pad > 0:
+#         paddings = np.stack(
+#             [np.copy(padding) for _ in range(num_frames_to_pad)], axis=0
+#         )
+#         stacked_frames = np.append(paddings, np.array(list(deque)), axis=0)
+#     return stacked_frames
 
 
 def scratch(obj, law):
@@ -82,25 +82,25 @@ def scratch(obj, law):
     return law
 
 
-@link
-def stack_frames(obs: np.ndarray, is_last: bool):
-    assert isinstance(obs, np.ndarray)
+# @link
+# def stack_frames(obs: np.ndarray, is_last: bool):
+#     assert isinstance(obs, np.ndarray)
 
-    frame_stacker: FrameStackerV2 = stack_frames.scratch
+#     frame_stacker: FrameStackerV2 = stack_frames.scratch
 
-    if frame_stacker.padding is None:
-        frame_stacker.padding = np.zeros_like(obs)
+#     if frame_stacker.padding is None:
+#         frame_stacker.padding = np.zeros_like(obs)
 
-    if is_last:
-        frame_stacker.deque.clear()
+#     if is_last:
+#         frame_stacker.deque.clear()
 
-    frame_stacker.deque.append(obs)
+#     frame_stacker.deque.append(obs)
 
-    return dict(
-        stacked_frames=get_stacked_frames(
-            frame_stacker.deque, frame_stacker.num_frames, frame_stacker.padding
-        )
-    )
+#     return dict(
+#         stacked_frames=get_stacked_frames(
+#             frame_stacker.deque, frame_stacker.num_frames, frame_stacker.padding
+#         )
+#     )
 
 
 @link

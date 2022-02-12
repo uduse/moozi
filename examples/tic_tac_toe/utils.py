@@ -89,13 +89,13 @@ def make_param_opt_properties(config):
         pred_net_sizes=(128, 128),
         dyna_net_sizes=(128, 128),
     )
-    network = mz.nn.get_network(nn_spec)
-    params = network.init_network(jax.random.PRNGKey(0))
+    network = mz.nn.build_network(nn_spec)
+    params, state = network.init_network(jax.random.PRNGKey(0))
     loss_fn = mz.loss.MuZeroLoss(
         num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay
     )
     optimizer = optax.adam(config.lr)
-    return network, params, loss_fn, optimizer
+    return network, params, state, loss_fn, optimizer
 
 
 def obs_to_ascii(obs):

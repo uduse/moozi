@@ -9,10 +9,7 @@ import anytree
 import jax
 import jax.numpy as jnp
 import numpy as np
-import ray.util.queue
-import rlax
-import trio
-from moozi import BASE_PLAYER
+from moozi.core import BASE_PLAYER
 
 
 class SearchStrategy(Enum):

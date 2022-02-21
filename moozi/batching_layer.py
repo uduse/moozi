@@ -14,6 +14,7 @@ logging.set_verbosity(logging.INFO)
 
 
 # TODO: rewrite everything in asyncio?
+# TODO: yes, we should rewrite everything in asyncio
 
 
 @dataclass

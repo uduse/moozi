@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any, Tuple
 
 import chex
@@ -10,14 +11,15 @@ from jax import vmap
 
 import moozi as mz
 from moozi.logging import JAXBoardStepData
-from moozi.nn import RootInferenceFeatures, TransitionInferenceFeatures
+from moozi.nn import RootFeatures, TransitionFeatures
 
 
-class LossFn(object):
+class LossFn:
     def __call__(
         self,
-        network: mz.nn.NeuralNetwork,
-        params: chex.ArrayTree,
+        model: mz.nn.NNModel,
+        params: hk.Params,
+        state: hk.State,
         batch: mz.replay.TrainTarget,
     ) -> Tuple[chex.ArrayDevice, Any]:
         r"""Loss function."""
@@ -32,19 +34,18 @@ def mse(a, b):
     return jnp.mean((a - b) ** 2)
 
 
+@dataclass
 class MuZeroLoss(LossFn):
-    def __init__(self, num_unroll_steps, weight_decay=1e-4):
-        self._num_unroll_steps = num_unroll_steps
-        self._weight_decay = weight_decay
+    num_unroll_steps: int
+    weight_decay: float = 1e-4
 
     def __call__(
         self,
-        network: mz.nn.NeuralNetwork,
+        model: mz.nn.NNModel,
         params: hk.Params,
         state: hk.State,
         batch: mz.replay.TrainTarget,
     ) -> Tuple[chex.ArrayDevice, Any]:
-
         chex.assert_rank(
             [
                 batch.stacked_frames,
@@ -53,16 +54,26 @@ class MuZeroLoss(LossFn):
                 batch.last_reward,
                 batch.action_probs,
             ],
-            [3, 2, 2, 2, 3],
+            [4, 2, 2, 2, 3],
         )
+        chex.assert_equal_shape_prefix(
+            [
+                batch.stacked_frames,
+                batch.action,
+                batch.value,
+                batch.last_reward,
+                batch.action_probs,
+            ],
+            prefix_len=1,
+        )  # assert same batch dim
 
-        init_inf_features = RootInferenceFeatures(
+        init_inf_features = RootFeatures(
             stacked_frames=batch.stacked_frames,
             # TODO: actually pass player
             player=jnp.ones((batch.stacked_frames.shape[0], 1)),
         )
-        network_output = network.root_inference(
-            params, init_inf_features, is_training=True
+        network_output, _ = model.root_inference(
+            params, state, init_inf_features, is_training=True
         )
 
         losses = {}
@@ -77,13 +88,13 @@ class MuZeroLoss(LossFn):
             batch.action_probs.take(0, axis=1), network_output.policy_logits
         )
 
-        for i in range(self._num_unroll_steps):
-            recurr_inf_features = TransitionInferenceFeatures(
+        for i in range(self.num_unroll_steps):
+            recurr_inf_features = TransitionFeatures(
                 hidden_state=network_output.hidden_state,
                 action=batch.action.take(0, axis=1),
             )
-            network_output = network.trans_inference(
-                params, recurr_inf_features, is_training=True
+            network_output, _ = model.trans_inference(
+                params, state, recurr_inf_features, is_training=True
             )
 
             losses[f"loss_reward_{str(i + 1)}"] = vmap(mse)(
@@ -97,7 +108,7 @@ class MuZeroLoss(LossFn):
             )(batch.action_probs.take(i + 1, axis=1), network_output.policy_logits)
 
         losses["loss_l2"] = jnp.reshape(
-            params_l2_loss(params) * self._weight_decay, (1,)
+            params_l2_loss(params) * self.weight_decay, (1,)
         )
 
         loss = jnp.sum(jnp.concatenate(tree.flatten(losses)))

@@ -19,24 +19,27 @@ class MockRequester:
         logging.info(f"requester {self.client.client_id} closed")
 
 
-async def test_batching_layer():
-    async def batch_processor_fn(data):
-        return np.array(data) + 1
+def test_batching_layer():
+    async def trio_main():
+        async def batch_processor_fn(data):
+            return np.array(data) + 1
 
-    batching_layer = BatchingLayer(
-        max_batch_size=50, batch_process_period=0.1, process_fn=batch_processor_fn
-    )
-    clients = [batching_layer.spawn_client() for _ in range(10)]
-    requesters = [MockRequester(client=c) for c in clients]
+        batching_layer = BatchingLayer(
+            max_batch_size=50, batch_process_period=0.1, process_fn=batch_processor_fn
+        )
+        clients = [batching_layer.spawn_client() for _ in range(10)]
+        requesters = [MockRequester(client=c) for c in clients]
 
-    async with trio.open_nursery() as nursery:
-        nursery.start_soon(batching_layer.start_processing)
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(batching_layer.start_processing)
 
-        async with trio.open_nursery() as requesters_nursery:
-            for r in requesters:
-                requesters_nursery.start_soon(r.run)
-        logging.info("requesters done")
+            async with trio.open_nursery() as requesters_nursery:
+                for r in requesters:
+                    requesters_nursery.start_soon(r.run)
+            logging.info("requesters done")
 
-        await batching_layer.close()
+            await batching_layer.close()
 
-    logging.info("all done")
+        logging.info("all done")
+
+    trio.run(trio_main)

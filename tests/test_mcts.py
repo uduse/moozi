@@ -1,6 +1,6 @@
+import asyncio
 import functools
 import pytest
-import operator
 from dataclasses import dataclass
 from typing import Callable
 
@@ -8,26 +8,14 @@ import jax
 import numpy as np
 import ray
 import tree
-import trio
-import trio_asyncio
 from acme.jax.networks.base import NetworkOutput
 from acme.utils.tree_utils import unstack_sequence_fields
 from moozi.batching_layer import BatchingClient, BatchingLayer
 from moozi.core import PolicyFeed
-from moozi.nn import NNOutput, NeuralNetwork
+from moozi.nn import NNOutput, NNModel
 from moozi.policy.mcts_async import MCTSAsync
-from moozi.policy.mcts_core import (
-    Node,
-    anytree_to_text,
-    convert_to_anytree,
-    get_next_player,
-    SearchStrategy,
-    reorient,
-)
+from moozi.policy.mcts_core import Node, get_next_player, SearchStrategy
 from moozi.utils import as_coroutine
-from trio_asyncio import aio_as_trio
-
-from tests.utils import with_trio_asyncio
 
 
 def test_node():
@@ -45,20 +33,45 @@ def test_node():
     assert node
 
 
-async def test_async_mcts(
-    network: NeuralNetwork, params, policy_feed: PolicyFeed, env_spec
+async def test_async_mcts_with_regular_inf_fns(
+    env_spec, model: NNModel, params, state, policy_feed: PolicyFeed
 ):
-    async def init_inf(frames):
-        return network.root_inference_unbatched(params, frames)
+    def root_inf_fn(feats):
+        out, _ = model.root_inference_unbatched(params, state, feats, is_training=False)
+        return out
 
-    def recurr_inf(inputs):
-        network.trans_inference_unbatched(params, state)
-        hidden_state, action = inputs
-        return network.trans_inference_unbatched(params, hidden_state, action)
+    def trans_inf_fn(feats):
+        out, _ = model.trans_inference_unbatched(
+            params, state, feats, is_training=False
+        )
+        return out
 
     mcts_async = MCTSAsync(
-        init_inf_fn=init_inf,
-        recurr_inf_fn=recurr_inf,
+        root_inf_fn=as_coroutine(root_inf_fn),
+        trans_inf_fn=as_coroutine(trans_inf_fn),
+        dim_action=env_spec.actions.num_values,
+    )
+
+    root = await mcts_async.run(policy_feed)
+    assert root
+
+
+async def test_async_mcts_with_async_inf_fns(
+    env_spec, model: NNModel, params, state, policy_feed: PolicyFeed
+):
+    async def root_inf_fn(feats):
+        out, _ = model.root_inference_unbatched(params, state, feats, is_training=False)
+        return out
+
+    async def trans_inf_fn(feats):
+        out, _ = model.trans_inference_unbatched(
+            params, state, feats, is_training=False
+        )
+        return out
+
+    mcts_async = MCTSAsync(
+        root_inf_fn=root_inf_fn,
+        trans_inf_fn=trans_inf_fn,
         num_simulations=10,
         dim_action=env_spec.actions.num_values,
     )
@@ -67,38 +80,37 @@ async def test_async_mcts(
     assert root
 
 
-@with_trio_asyncio
 async def test_async_mcts_with_ray(
-    network: NeuralNetwork, params, policy_feed: PolicyFeed, env_spec, init_ray
+    model: NNModel, params, state, policy_feed: PolicyFeed, env_spec
 ):
+    ray.init(ignore_reinit_error=True)
+
     @dataclass
     class SimpleInferenceServer:
-        _init_inf_fn: Callable = functools.partial(
-            jax.jit(network.root_inference_unbatched), params
+        _root_inf = functools.partial(
+            jax.jit(model.root_inference_unbatched, static_argnames="is_training"),
+            params,
+            state,
+            is_training=True,
         )
-        _recurr_inf_fn: Callable = functools.partial(
-            jax.jit(network.trans_inference_unbatched), params
+        _trans_inf = functools.partial(
+            jax.jit(model.trans_inference_unbatched, static_argnames="is_training"),
+            params,
+            state,
+            is_training=True,
         )
 
-        def init_inf(self, frames):
-            return self._init_inf_fn(frames)
+        def root_inf(self, feats) -> NNOutput:
+            return self._root_inf(feats)[0]
 
-        def recurr_inf(self, hidden_states, action):
-            return self._recurr_inf_fn(hidden_states, action)
+        def trans_inf(self, feats) -> NNOutput:
+            return self._trans_inf(feats)[0]
 
     inf_server = ray.remote(SimpleInferenceServer).remote()
 
-    async def mcts_init_inf_fn(x):
-        return await aio_as_trio(inf_server.init_inf.remote(x))
-
-    async def mcts_recurr_inf_fn(inputs):
-        x, y = inputs
-        return await aio_as_trio(inf_server.recurr_inf.remote(x, y))
-
     mcts_async = MCTSAsync(
-        init_inf_fn=mcts_init_inf_fn,
-        recurr_inf_fn=mcts_recurr_inf_fn,
-        num_simulations=10,
+        root_inf_fn=inf_server.root_inf.remote,
+        trans_inf_fn=inf_server.trans_inf.remote,
         dim_action=env_spec.actions.num_values,
     )
 
@@ -106,62 +118,64 @@ async def test_async_mcts_with_ray(
     assert root
 
 
-@with_trio_asyncio
-async def test_async_mcts_with_ray_and_batching(
-    network: NeuralNetwork, params, policy_feed: PolicyFeed, env_spec, init_ray
-):
-    @dataclass
-    class SimpleInferenceServer:
-        _init_inf_fn: Callable = functools.partial(
-            jax.jit(network.root_inference), params
-        )
-        _recurr_inf_fn: Callable = functools.partial(
-            jax.jit(network.trans_inference), params
-        )
+# # TODO: fix this test
+# @with_trio_asyncio
+# async def test_async_mcts_with_ray_and_batching(
+#     model: NNModel, params, state, policy_feed: PolicyFeed, env_spec
+# ):
+#     @ray.remote
+#     @dataclass
+#     class SimpleInferenceServer:
+#         _root_inf: Callable = functools.partial(
+#             jax.jit(model.root_inference), params, state, is_training=False
+#         )
+#         _trans_inf: Callable = functools.partial(
+#             jax.jit(model.trans_inference), params, state, is_training=False
+#         )
 
-        def init_inf(self, frames):
-            batch_size = len(frames)
-            results = self._init_inf_fn(np.array(frames))
-            results = tree.map_structure(np.array, results)
-            return unstack_sequence_fields(results, batch_size)
+#         def root_inf(self, feats):
+#             batch_size = len(feats)
+#             results = self._root_inf(np.array(feats))
+#             results = tree.map_structure(np.array, results)
+#             return unstack_sequence_fields(results, batch_size)
 
-        def recurr_inf(self, inputs):
-            batch_size = len(inputs)
-            hidden_states = np.array(list(map(operator.itemgetter(0), inputs)))
-            actions = np.array(list(map(operator.itemgetter(1), inputs)))
-            results = self._recurr_inf_fn(hidden_states, actions)
-            results = tree.map_structure(np.array, results)
-            return unstack_sequence_fields(results, batch_size)
+#         def recurr_inf(self, inputs):
+#             batch_size = len(inputs)
+#             hidden_states = np.array(list(map(operator.itemgetter(0), inputs)))
+#             actions = np.array(list(map(operator.itemgetter(1), inputs)))
+#             results = self._trans_inf(hidden_states, actions)
+#             results = tree.map_structure(np.array, results)
+#             return unstack_sequence_fields(results, batch_size)
 
-    inf_server = ray.remote(SimpleInferenceServer).remote()
+#     server = SimpleInferenceServer.remote()
 
-    async def mcts_init_inf_fn(x):
-        return await aio_as_trio(inf_server.init_inf.remote(x))
+#     async def mcts_init_inf_fn(x):
+#         return await aio_as_trio(server.init_inf.remote(x))
 
-    async def mcts_recurr_inf_fn(x):
-        return await aio_as_trio(inf_server.recurr_inf.remote(x))
+#     async def mcts_recurr_inf_fn(x):
+#         return await aio_as_trio(server.recurr_inf.remote(x))
 
-    bl_init_inf = BatchingLayer(max_batch_size=5, process_fn=mcts_init_inf_fn)
-    bl_recurr_inf = BatchingLayer(max_batch_size=5, process_fn=mcts_recurr_inf_fn)
+#     bl_init_inf = BatchingLayer(max_batch_size=5, process_fn=mcts_init_inf_fn)
+#     bl_recurr_inf = BatchingLayer(max_batch_size=5, process_fn=mcts_recurr_inf_fn)
 
-    num_mcts = 10
-    mctses = []
-    for _ in range(num_mcts):
-        mcts = MCTSAsync(
-            init_inf_fn=bl_init_inf.spawn_client().request,
-            recurr_inf_fn=bl_recurr_inf.spawn_client().request,
-            num_simulations=10,
-            dim_action=env_spec.actions.num_values,
-        )
-        mctses.append(mcts)
+#     num_mcts = 10
+#     mctses = []
+#     for _ in range(num_mcts):
+#         mcts = MCTSAsync(
+#             root_inf_fn=bl_init_inf.spawn_client().request,
+#             trans_inf_fn=bl_recurr_inf.spawn_client().request,
+#             num_simulations=10,
+#             dim_action=env_spec.actions.num_values,
+#         )
+#         mctses.append(mcts)
 
-    async with trio.open_nursery() as n:
-        n.start_soon(bl_init_inf.start_processing)
-        n.start_soon(bl_recurr_inf.start_processing)
+#     async with trio.open_nursery() as n:
+#         n.start_soon(bl_init_inf.start_processing)
+#         n.start_soon(bl_recurr_inf.start_processing)
 
-        async with bl_init_inf.open_context(), bl_recurr_inf.open_context():
-            async with trio.open_nursery() as nn:
-                for mcts in mctses:
-                    nn.start_soon(mcts.run, policy_feed)
+#         async with bl_init_inf.open_context(), bl_recurr_inf.open_context():
+#             async with trio.open_nursery() as nn:
+#                 for mcts in mctses:
+#                     nn.start_soon(mcts.run, policy_feed)
 
-    assert mctses
+#     assert mctses

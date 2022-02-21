@@ -4,10 +4,10 @@ from IPython import display
 import numpy as np
 from moozi.core.types import PolicyFeed
 from moozi.nn import (
-    RootInferenceFeatures,
+    RootFeatures,
     NNOutput,
-    NeuralNetwork,
-    TransitionInferenceFeatures,
+    NNModel,
+    TransitionFeatures,
 )
 from moozi.policy.mcts_async import MCTSAsync
 from moozi.policy.mcts_core import (
@@ -23,7 +23,7 @@ from moozi.policy.mcts_core import (
 
 
 # %%
-def init_inf_fn(features: RootInferenceFeatures):
+def init_inf_fn(features: RootFeatures):
     print("features:", features)
     value = np.round(np.random.rand() * 2 - 1, 1)
     output = NNOutput(
@@ -36,7 +36,7 @@ def init_inf_fn(features: RootInferenceFeatures):
     return output
 
 
-def recurr_inf_fn(features: TransitionInferenceFeatures):
+def recurr_inf_fn(features: TransitionFeatures):
     print("features:", features)
     next_player = get_next_player(SearchStrategy.TWO_PLAYER, int(features.hidden_state))
     value = np.round(np.random.rand() * 2 - 1, 1)
@@ -62,8 +62,8 @@ def recurr_inf_fn(features: TransitionInferenceFeatures):
 mcts = MCTSAsync(
     dim_action=2,
     num_simulations=1,
-    init_inf_fn=init_inf_fn,
-    recurr_inf_fn=recurr_inf_fn,
+    root_inf_fn=init_inf_fn,
+    trans_inf_fn=recurr_inf_fn,
     discount=1.0,
 )
 

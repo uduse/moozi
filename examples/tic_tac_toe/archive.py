@@ -70,10 +70,10 @@ def make_rollout_worker_universes(
     def _make_universe(index):
         tape = Tape(index)
         planner_law = make_async_planner_law(
-            init_inf_fn=lambda features: self.init_inf_fn_unbatched(
+            root_inf_fn=lambda features: self.root_inf_1(
                 self.params, features
             ),
-            recurr_inf_fn=lambda features: self.recurr_inf_fn_unbatched(
+            trans_inf_fn=lambda features: self.trans_inf_unbatched(
                 self.params, features
             ),
             dim_actions=dim_actions,
@@ -128,10 +128,10 @@ def make_evaluator_universes(
     def _make_universe():
         tape = Tape(0)
         planner_law = make_async_planner_law(
-            init_inf_fn=lambda features: self.init_inf_fn_unbatched(
+            root_inf_fn=lambda features: self.root_inf_1(
                 self.params, features
             ),
-            recurr_inf_fn=lambda features: self.recurr_inf_fn_unbatched(
+            trans_inf_fn=lambda features: self.trans_inf_unbatched(
                 self.params, features
             ),
             dim_actions=dim_actions,
@@ -174,7 +174,7 @@ replay_buffer = ReplayBuffer(config)
 
 # %%
 worker = RolloutWorkerWithWeights()
-worker.set_network(param_opt.get_network())
+worker.set_model(param_opt.get_network())
 worker.set_params(param_opt.get_params())
 worker.build_universes(partial(make_rollout_worker_universes, config=config))
 
@@ -189,7 +189,7 @@ for i in tqdm(range(config.num_epochs)):
 
 # %%
 evaluator = RolloutWorkerWithWeights()
-evaluator.set_network(param_opt.get_network())
+evaluator.set_model(param_opt.get_network())
 evaluator.set_params(param_opt.get_params())
 evaluator.build_universes(partial(make_evaluator_universes, config=config))
 

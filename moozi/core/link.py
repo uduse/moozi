@@ -1,7 +1,9 @@
 import functools
 import inspect
-from typing import Any, Awaitable, Callable, Dict, List, MutableMapping, Union
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, MutableMapping, Union
 from dataclasses import dataclass
+
+from moozi.core import Tape
 
 
 @dataclass
@@ -119,7 +121,7 @@ def link(*args, **kwargs):
 
 @dataclass
 class Universe:
-    tape: object
+    tape: Tape
     laws: List[Callable]
 
     def tick(self, times=1):
@@ -135,7 +137,7 @@ class Universe:
 
 @dataclass
 class UniverseAsync:
-    tape: object
+    tape: Tape
     laws: List[Callable[[object], Awaitable]]
 
     async def tick(self, times=1):

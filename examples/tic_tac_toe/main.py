@@ -16,7 +16,7 @@ from moozi.logging import (
     JAXBoardStepData,
 )
 from moozi.parameter_optimizer import ParameterOptimizer
-from moozi.policy.mcts_async import ActionSamplerLaw, make_async_planner_law_v2
+from moozi.policy.mcts_async import ActionSamplerLaw, make_async_planner_law
 from moozi.policy.mcts_core import (
     Node,
     SearchStrategy,
@@ -73,11 +73,11 @@ def make_train_worker_universes(
 
     def _make_universe(index):
         tape = Tape(index)
-        planner_law = make_async_planner_law_v2(
-            init_inf_fn=lambda features: self.init_inf_fn_unbatched(
+        planner_law = make_async_planner_law(
+            root_inf_fn=lambda features: self.root_inf_1(
                 self.params, features
             ),
-            recurr_inf_fn=lambda features: self.recurr_inf_fn_unbatched(
+            trans_inf_fn=lambda features: self.trans_inf_unbatched(
                 self.params, features
             ),
             dim_actions=dim_actions,
@@ -134,11 +134,11 @@ def make_eval_worker_universes(
 
     def _make_universe():
         tape = Tape(0)
-        planner_law = make_async_planner_law_v2(
-            init_inf_fn=lambda features: self.init_inf_fn_unbatched(
+        planner_law = make_async_planner_law(
+            root_inf_fn=lambda features: self.root_inf_1(
                 self.params, features
             ),
-            recurr_inf_fn=lambda features: self.recurr_inf_fn_unbatched(
+            trans_inf_fn=lambda features: self.trans_inf_unbatched(
                 self.params, features
             ),
             dim_actions=dim_actions,

@@ -1,1 +1,1 @@
-from .mcts_async import MCTSAsync, make_async_planner_law
+from .mcts_async import MCTSAsync

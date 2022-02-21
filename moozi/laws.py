@@ -25,62 +25,37 @@ class FrameStacker:
         self.deque = collections.deque(maxlen=self.num_frames)
 
     def __call__(self, obs: Union[np.ndarray, List[np.ndarray]], is_last) -> Any:
+        if is_last:
+            self.reset()
+        else:
+            self.add(obs)
+            return self.get()
+
+    def add(self, obs: Union[np.ndarray, List[np.ndarray]]):
         assert isinstance(obs, (np.ndarray, list))
         player_obs = self._get_player_obs(obs)
 
         if self.padding is None:
             self.padding = np.zeros_like(player_obs)
 
-        if is_last:
-            self.deque.clear()
-
         self.deque.append(player_obs)
 
-        return dict(stacked_frames=self._get_stacked_frames())
+    def reset(self):
+        self.deque.clear()
+
+    def get(self):
+        stacked_frames = np.concatenate(list(self.deque), axis=-1)
+        num_frames_to_pad = self.num_frames - len(self.deque)
+        if num_frames_to_pad > 0:
+            paddings = self.padding.repeat(num_frames_to_pad, axis=-1)
+            stacked_frames = np.concatenate([paddings, stacked_frames], axis=-1)
+        return stacked_frames
 
     def _get_player_obs(self, obs: Union[np.ndarray, List[np.ndarray]]) -> np.ndarray:
         if isinstance(obs, np.ndarray):
             return obs
         elif isinstance(obs, list):
             return obs[self.player]
-
-    def _get_stacked_frames(self):
-        stacked_frames = np.array(list(self.deque))
-        num_frames_to_pad = self.num_frames - len(self.deque)
-        if num_frames_to_pad > 0:
-            paddings = np.stack(
-                [np.copy(self.padding) for _ in range(num_frames_to_pad)], axis=0
-            )
-            stacked_frames = np.append(paddings, np.array(list(self.deque)), axis=0)
-        return stacked_frames
-
-
-# @dataclass
-# class FrameStackerV2:
-#     num_frames: int = 1
-#     player: int = 0
-#     padding: Optional[np.ndarray] = None
-#     deque: Deque = field(init=False)
-
-#     def __post_init__(self):
-#         self.deque = collections.deque(maxlen=self.num_frames)
-
-
-# def get_stacked_frames(deque, num_frames, padding):
-#     stacked_frames = np.array(list(deque))
-#     num_frames_to_pad = num_frames - len(deque)
-#     if num_frames_to_pad > 0:
-#         paddings = np.stack(
-#             [np.copy(padding) for _ in range(num_frames_to_pad)], axis=0
-#         )
-#         stacked_frames = np.append(paddings, np.array(list(deque)), axis=0)
-#     return stacked_frames
-
-
-def scratch(obj, law):
-    law.scratch = obj
-    return law
-
 
 # @link
 # def stack_frames(obs: np.ndarray, is_last: bool):

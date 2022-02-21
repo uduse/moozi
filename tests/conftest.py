@@ -12,9 +12,8 @@ from acme import types
 from acme.core import VariableSource
 from acme.jax.variable_utils import VariableClient
 
-from pytest_trio.enable_trio_mode import *
 
-from moozi.core import PolicyFeed
+from moozi.core import PolicyFeed, make_catch
 
 
 def update_jax_config():
@@ -29,16 +28,12 @@ update_jax_config()
 
 @pytest.fixture
 def env() -> Environment:
-    raw_env = open_spiel.python.rl_environment.Environment("catch(columns=5,rows=5)")
-    env = acme.wrappers.open_spiel_wrapper.OpenSpielWrapper(raw_env)
-    env = acme.wrappers.SinglePrecisionWrapper(env)
-    return env
+    return make_catch()[0]
 
 
 @pytest.fixture
 def env_spec(env):
-    env_spec = acme.specs.make_environment_spec(env)
-    return env_spec
+    return make_catch()[1]
 
 
 @pytest.fixture
@@ -52,23 +47,17 @@ def num_unroll_steps() -> int:
 
 
 @pytest.fixture
-def network(env_spec, num_stacked_frames):
+def model(env_spec, num_stacked_frames):
     dim_action = env_spec.actions.num_values
     frame_shape = env_spec.observations.observation.shape
-    stacked_frames_shape = (num_stacked_frames,) + frame_shape
-    nn_spec = mz.nn.NNSpec(
-        architecture=mz.nn.ResNetArchitecture,
+    stacked_frames_shape = frame_shape[:-1] + (num_stacked_frames * frame_shape[-1],)
+    nn_spec = mz.nn.ResNetSpec(
         stacked_frames_shape=stacked_frames_shape,
         dim_repr=2,
         dim_action=dim_action,
-        extra={
-            "repr_net_num_blocks": 1,
-            "pred_trunk_num_blocks": 1,
-            "dyna_trunk_num_blocks": 1,
-            "dyna_hidden_num_blocks": 1,
-        },
+        # use default values for other parameters
     )
-    return mz.nn.build_network(nn_spec)
+    return mz.nn.build_model(mz.nn.ResNetArchitecture, nn_spec)
 
 
 @pytest.fixture
@@ -77,8 +66,8 @@ def random_key():
 
 
 @pytest.fixture
-def params_and_state(network: mz.nn.NeuralNetwork, random_key):
-    return network.init_network(random_key)
+def params_and_state(model: mz.nn.NNModel, random_key):
+    return model.init_model(random_key)
 
 
 @pytest.fixture
@@ -92,14 +81,11 @@ def state(params_and_state):
 
 
 @pytest.fixture
-def policy_feed(env, env_spec, num_frames, random_key) -> PolicyFeed:
+def policy_feed(env, env_spec, num_stacked_frames, random_key) -> PolicyFeed:
     legal_actions_mask = np.ones(env_spec.actions.num_values)
-    # legal_actions_indices = [1, 2, 3]
-    # legal_actions_mask[legal_actions_indices] = 1
-    # legal_actions_mask = jnp.array(legal_actions_mask)
     timestep = env.reset()
     frame = timestep.observation[0].observation
-    stacked_frames = jnp.stack([frame.copy() for _ in range(num_frames)])
+    stacked_frames = frame.repeat(num_stacked_frames, axis=-1)
 
     return PolicyFeed(
         stacked_frames=stacked_frames,
@@ -109,6 +95,7 @@ def policy_feed(env, env_spec, num_frames, random_key) -> PolicyFeed:
     )
 
 
+# TODO: this fixutre seems redundent
 @pytest.fixture
 def init_ray():
     import ray

@@ -13,7 +13,7 @@ from absl import logging
 
 import moozi as mz
 from moozi.learner import TrainingState
-from moozi.nn import RootInferenceFeatures
+from moozi.nn import RootFeatures
 
 
 @ray.remote
@@ -28,18 +28,18 @@ class LoggerActor:
 def _compute_prior_kl(network, batch, orig_params, new_params):
     orig_logits = network.initial_inference(
         orig_params,
-        RootInferenceFeatures(stacked_frames=batch.stacked_frames, player=None),
+        RootFeatures(stacked_frames=batch.stacked_frames, player=None),
     ).policy_logits
     new_logits = network.initial_inference(
         new_params,
-        RootInferenceFeatures(stacked_frames=batch.stacked_frames, player=None),
+        RootFeatures(stacked_frames=batch.stacked_frames, player=None),
     ).policy_logits
     prior_kl = jnp.mean(rlax.categorical_kl_divergence(orig_logits, new_logits))
     return prior_kl
 
 
 def make_sgd_step_fn(
-    network: mz.nn.NeuralNetwork,
+    network: mz.nn.NNModel,
     loss_fn: mz.loss.LossFn,
     optimizer,
     target_update_period: int = 1,
@@ -89,7 +89,7 @@ def make_sgd_step_fn(
 
 @dataclass(repr=False)
 class ParameterOptimizer:
-    network: mz.nn.NeuralNetwork = field(init=False)
+    network: mz.nn.NNModel = field(init=False)
     state: TrainingState = field(init=False)
     sgd_step_fn: Callable = field(init=False)
 

@@ -27,7 +27,7 @@ import jax
 def make_rollout_worker_batching_layers(self: RolloutWorkerWithWeights, config: Config):
     def batched_init_inf(list_of_stacked_frames):
         batch_size = len(list_of_stacked_frames)
-        results = self.init_inf_fn(self.params, np.array(list_of_stacked_frames))
+        results = self.root_inf(self.params, np.array(list_of_stacked_frames))
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
 
@@ -36,7 +36,7 @@ def make_rollout_worker_batching_layers(self: RolloutWorkerWithWeights, config: 
         hidden_states, actions = zip(*inputs)
         hidden_states = np.array(hidden_states)
         actions = np.array(actions)
-        results = self.recurr_inf_fn(self.params, hidden_states, actions)
+        results = self.trans_inf(self.params, hidden_states, actions)
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
 

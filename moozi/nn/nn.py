@@ -1,13 +1,15 @@
 import functools
-from typing import Callable, NamedTuple, Tuple
+from dataclasses import dataclass
+from typing import Callable, NamedTuple, Tuple, Union, Type
 import chex
 
 import haiku as hk
 import jax
 import jax.numpy as jnp
 from acme.jax.utils import add_batch_dim, squeeze_batch_dim
+import tree
 
-
+# NOTE: NamedTuple are used for data structures that need to be passed to jax.jit functions
 class NNOutput(NamedTuple):
     value: jnp.ndarray  # (batch_size, 1)
     reward: jnp.ndarray  # (batch_size, 1)
@@ -15,42 +17,64 @@ class NNOutput(NamedTuple):
     hidden_state: jnp.ndarray  # (batch_size, height, width, dim_repr)
 
 
-class RootInferenceFeatures(NamedTuple):
-    stacked_frames: jnp.ndarray  # (batch_size, num_stacked_frames, height, width, channels)
+class RootFeatures(NamedTuple):
+    stacked_frames: jnp.ndarray  # (batch_size, height, width, channels)
     player: jnp.ndarray  # (batch_size, 1)
 
 
-class TransitionInferenceFeatures(NamedTuple):
+class TransitionFeatures(NamedTuple):
     hidden_state: jnp.ndarray  # (batch_size, height, width, dim_repr)
     action: jnp.ndarray  # (batch_size, 1)
 
 
-class NNSpec(NamedTuple):
-    # define the shapes of inputs, outputs, and hidden states
-    # common to all networks
-    architecture: type
+@dataclass
+class NNSpec:
     stacked_frames_shape: tuple
     dim_repr: int
     dim_action: int
 
-    # define detailed layers inside of the network
-    extra: dict
+
+class NNArchitecture(hk.Module):
+    def __init__(self, spec: NNSpec):
+        """Partiallly complete neural network model that defines the basic structure of the model.
+
+        :param spec: more specification that completes the model
+        :type spec: NNSpec
+        """
+        super().__init__()
+        self.spec = spec
 
 
-# TODO: annotate this class
-class NeuralNetwork(NamedTuple):
-    init_network: Callable
-    root_inference: Callable[..., NNOutput]
-    trans_inference: Callable[..., NNOutput]
-    root_inference_unbatched: Callable[..., NNOutput]
-    trans_inference_unbatched: Callable[..., NNOutput]
+@dataclass
+class NNModel:
+    """
+    Complete neural network model that's ready for initiailization and inference.
+
+    Note that inference functions could be jitted, but need to pass with 
+    `jax.jit(..., static_argnames="is_training")` to make `is_training` static.
+    """
+
+    spec: NNSpec
+    init_model: Callable
+    root_inference: Callable[
+        [hk.Params, hk.State, RootFeatures, bool], Tuple[NNOutput, hk.State]
+    ]
+    trans_inference: Callable[
+        [hk.Params, hk.State, TransitionFeatures, bool], Tuple[NNOutput, hk.State]
+    ]
+    root_inference_unbatched: Callable[
+        [hk.Params, hk.State, RootFeatures, bool], Tuple[NNOutput, hk.State]
+    ]
+    trans_inference_unbatched: Callable[
+        [hk.Params, hk.State, TransitionFeatures, bool], Tuple[NNOutput, hk.State]
+    ]
 
 
 def init_root_inference(random_key, spec, root_inference, is_training):
     dummy_batch_dim = 1
     root_inference_params, root_inference_state = root_inference.init(
         random_key,
-        RootInferenceFeatures(
+        RootFeatures(
             stacked_frames=jnp.ones((dummy_batch_dim,) + spec.stacked_frames_shape),
             player=jnp.array(0),
         ),
@@ -60,19 +84,30 @@ def init_root_inference(random_key, spec, root_inference, is_training):
     return root_inference_params, root_inference_state
 
 
-def init_trans_inference(random_key, spec, trans_inference, is_training):
+def init_trans_inference(random_key, spec: NNSpec, trans_inference, is_training):
     dummy_batch_dim = 1
+    height, width, _ = spec.stacked_frames_shape
     trans_inference_params, trans_inference_state = trans_inference.init(
         random_key,
-        TransitionInferenceFeatures(
-            hidden_state=jnp.ones(
-                (dummy_batch_dim, *spec.stacked_frames_shape[1:3], spec.dim_repr)
-            ),
+        TransitionFeatures(
+            hidden_state=jnp.ones((dummy_batch_dim, height, width, spec.dim_repr)),
             action=jnp.ones((dummy_batch_dim,)),
         ),
         is_training,
     )
     return trans_inference_params, trans_inference_state
+
+
+def validate_shapes(x: Union[hk.Params, hk.State], y: Union[hk.Params, hk.State]):
+    x_paths = set([k for k, _ in tree.flatten_with_path(x)])
+    y_paths = set([k for k, _ in tree.flatten_with_path(y)])
+    shared_paths = x_paths & y_paths
+    for path in shared_paths:
+        x_val, y_val = x, y
+        for key in path:
+            x_val = x_val[key]
+            y_val = y_val[key]
+        assert x_val.shape == y_val.shape, (x_val.shape, y_val.shape)
 
 
 def build_init_network_fn(spec: NNSpec, root_inference, trans_inference):
@@ -85,6 +120,8 @@ def build_init_network_fn(spec: NNSpec, root_inference, trans_inference):
             key_2, spec, trans_inference, is_training=True
         )
 
+        validate_shapes(root_inference_params, trans_inference_params)
+        validate_shapes(root_inference_state, trans_inference_state)
         merged_params = hk.data_structures.merge(
             root_inference_params,
             trans_inference_params,
@@ -126,14 +163,15 @@ def build_unbatched_fn(fn):
     return _unbatched_wrapper
 
 
-def build_network(spec: NNSpec):
-    architecture = functools.partial(spec.architecture, spec)
-    root_inference = build_root_inference(architecture)
-    trans_inference = build_trans_inference(architecture)
+def build_model(architecture_cls: Type[NNArchitecture], spec: NNSpec):
+    arch = functools.partial(architecture_cls, spec)
+    root_inference = build_root_inference(arch)
+    trans_inference = build_trans_inference(arch)
     network_init_fn = build_init_network_fn(spec, root_inference, trans_inference)
     root_inferenc_fn_unbatched = build_unbatched_fn(root_inference.apply)
     trans_inference_fn_unbatched = build_unbatched_fn(trans_inference.apply)
-    return NeuralNetwork(
+    return NNModel(
+        spec,
         network_init_fn,
         root_inference.apply,
         trans_inference.apply,

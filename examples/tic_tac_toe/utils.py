@@ -27,7 +27,7 @@ import jax
 def make_rollout_worker_batching_layers(self: RolloutWorkerWithWeights, config: Config):
     def batched_init_inf(list_of_stacked_frames):
         batch_size = len(list_of_stacked_frames)
-        results = self.init_inf_fn(self.params, np.array(list_of_stacked_frames))
+        results = self.root_inf(self.params, np.array(list_of_stacked_frames))
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
 
@@ -36,7 +36,7 @@ def make_rollout_worker_batching_layers(self: RolloutWorkerWithWeights, config: 
         hidden_states, actions = zip(*inputs)
         hidden_states = np.array(hidden_states)
         actions = np.array(actions)
-        results = self.recurr_inf_fn(self.params, hidden_states, actions)
+        results = self.trans_inf(self.params, hidden_states, actions)
         results = tree.map_structure(np.array, results)
         return unstack_sequence_fields(results, batch_size)
 
@@ -55,27 +55,6 @@ def make_rollout_worker_batching_layers(self: RolloutWorkerWithWeights, config: 
     return bl_init_inf, bl_recurr_inf
 
 
-# def make_evaluator_universes(self, config: Config) -> List[UniverseAsync]:
-#     tape = Tape(-1)
-#     planner_law = make_async_planner_law(
-#         lambda x: self.init_inf_fn_unbatched(self.params, x),
-#         lambda x: self.recurr_inf_fn_unbatched(self.params, x[0], x[1]),
-#         dim_actions=3,
-#     )
-#     laws = [
-#         EnvironmentLaw(make_env(config.env)),
-
-#         PlayerFrameStacker(num_frames=config.num_stacked_frames, player=0),
-#         set_policy_feed,
-#         planner_law,
-
-#         output_last_step_reward,
-#         update_episode_stats,
-#         increment_tick,
-#     ]
-#     return [UniverseAsync(tape, laws)]
-
-
 def make_param_opt_properties(config):
     env_spec = make_env_spec(config.env)
     dim_action = env_spec.actions.num_values
@@ -89,7 +68,7 @@ def make_param_opt_properties(config):
         pred_net_sizes=(128, 128),
         dyna_net_sizes=(128, 128),
     )
-    network = mz.nn.build_network(nn_spec)
+    network = mz.nn.build_model(nn_spec)
     params, state = network.init_network(jax.random.PRNGKey(0))
     loss_fn = mz.loss.MuZeroLoss(
         num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay

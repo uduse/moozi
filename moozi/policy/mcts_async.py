@@ -9,11 +9,11 @@ import numpy as np
 from moozi import link
 from moozi.batching_layer import BatchingClient
 from moozi.nn import (
-    RootInferenceFeatures,
-    NeuralNetwork,
+    RootFeatures,
+    NNModel,
     NNSpec,
     NNOutput,
-    TransitionInferenceFeatures,
+    TransitionFeatures,
 )
 from moozi.policy.mcts_core import (
     Node,
@@ -28,22 +28,17 @@ from moozi.utils import as_coroutine
 
 @dataclass
 class MCTSAsync:
+    root_inf_fn: Callable[[RootFeatures], Awaitable[NNOutput]]
+    trans_inf_fn: Callable[[TransitionFeatures], Awaitable[NNOutput]]
     dim_action: int
 
-    init_inf_fn: Callable[[RootInferenceFeatures], Awaitable[NNOutput]]
-    recurr_inf_fn: Callable[[TransitionInferenceFeatures], Awaitable[NNOutput]]
-    num_simulations: int = 1
-    all_actions_mask: np.ndarray = None
+    strategy: SearchStrategy = SearchStrategy.TWO_PLAYER
+    num_simulations: int = 10
+    allow_all_actions_mask: np.ndarray = None
     discount: float = 1.0
 
-    strategy: SearchStrategy = SearchStrategy.TWO_PLAYER
-
     def __post_init__(self):
-        self.all_actions_mask = np.ones((self.dim_action,), dtype=np.int32)
-        if not inspect.iscoroutinefunction(self.init_inf_fn):
-            self.init_inf_fn = as_coroutine(self.init_inf_fn)
-        if not inspect.iscoroutinefunction(self.recurr_inf_fn):
-            self.recurr_inf_fn = as_coroutine(self.recurr_inf_fn)
+        self.allow_all_actions_mask = np.ones((self.dim_action,), dtype=np.int32)
 
     async def run(self, feed: PolicyFeed) -> Node:
         root = await self.get_root(feed)
@@ -55,10 +50,10 @@ class MCTSAsync:
         return root
 
     async def get_root(self, feed: PolicyFeed) -> Node:
-        init_inf_features = RootInferenceFeatures(
+        root_feats = RootFeatures(
             stacked_frames=feed.stacked_frames, player=np.array(feed.to_play)
         )
-        root_nn_output = await self.init_inf_fn(init_inf_features)
+        root_nn_output = await self.root_inf_fn(root_feats)
         root = Node(0, player=feed.to_play, name="s")
         next_player = get_next_player(self.strategy, feed.to_play)
         root.expand_node(
@@ -76,10 +71,10 @@ class MCTSAsync:
         action, leaf = root.select_leaf(discount=self.discount)
         assert leaf.parent
 
-        recurr_inf_features = TransitionInferenceFeatures(
+        trans_feats = TransitionFeatures(
             hidden_state=leaf.parent.hidden_state, action=np.array(action)
         )
-        leaf_nn_output = await self.recurr_inf_fn(recurr_inf_features)
+        leaf_nn_output = await self.trans_inf_fn(trans_feats)
 
         reward = float(leaf_nn_output.reward)
         value = float(leaf_nn_output.value)
@@ -88,55 +83,59 @@ class MCTSAsync:
             hidden_state=leaf_nn_output.hidden_state,
             reward=reward,
             policy_logits=leaf_nn_output.policy_logits,
-            legal_actions_mask=self.all_actions_mask,
+            legal_actions_mask=self.allow_all_actions_mask,
             next_player=get_next_player(self.strategy, leaf.player),
         )
 
         leaf.backpropagate(value=value, discount=self.discount)
 
 
+# def make_async_planner_law(
+#     root_inf_fn, trans_inf_fn, dim_actions, num_simulations=10, include_tree=False
+# ):
+#     mcts = MCTSAsync(
+#         root_inf_fn=root_inf_fn,
+#         trans_inf_fn=trans_inf_fn,
+#         num_simulations=num_simulations,
+#         dim_action=dim_actions,
+#     )
+
+#     @link
+#     async def planner(is_last, policy_feed):
+#         if not is_last:
+#             mcts_root = await mcts.run(policy_feed)
+#             action, _ = mcts_root.select_child(mcts.discount)
+
+#             action_probs = np.zeros((dim_actions,), dtype=np.float32)
+#             for a, visit_count in mcts_root.get_children_visit_counts().items():
+#                 action_probs[a] = visit_count
+#             action_probs /= np.sum(action_probs)
+
+#             if policy_feed.legal_actions_mask[action] < 1:
+#                 raise ValueError("Illegal action")
+
+#             if include_tree:
+#                 return dict(
+#                     action=action,
+#                     action_probs=action_probs,
+#                     mcts_root=copy.deepcopy(mcts_root),
+#                 )
+#             else:
+#                 return dict(action=action, action_probs=action_probs)
+
+#     return planner
+
+
 def make_async_planner_law(
-    init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10, include_tree=False
+    root_inf_fn,
+    trans_inf_fn,
+    dim_actions,
+    num_simulations=10,
+    include_tree: bool = False,
 ):
     mcts = MCTSAsync(
-        init_inf_fn=init_inf_fn,
-        recurr_inf_fn=recurr_inf_fn,
-        num_simulations=num_simulations,
-        dim_action=dim_actions,
-    )
-
-    @link
-    async def planner(is_last, policy_feed):
-        if not is_last:
-            mcts_root = await mcts.run(policy_feed)
-            action, _ = mcts_root.select_child(mcts.discount)
-
-            action_probs = np.zeros((dim_actions,), dtype=np.float32)
-            for a, visit_count in mcts_root.get_children_visit_counts().items():
-                action_probs[a] = visit_count
-            action_probs /= np.sum(action_probs)
-
-            if policy_feed.legal_actions_mask[action] < 1:
-                raise ValueError("Illegal action")
-
-            if include_tree:
-                return dict(
-                    action=action,
-                    action_probs=action_probs,
-                    mcts_root=copy.deepcopy(mcts_root),
-                )
-            else:
-                return dict(action=action, action_probs=action_probs)
-
-    return planner
-
-
-def make_async_planner_law_v2(
-    init_inf_fn, recurr_inf_fn, dim_actions, num_simulations=10
-):
-    mcts = MCTSAsync(
-        init_inf_fn=init_inf_fn,
-        recurr_inf_fn=recurr_inf_fn,
+        root_inf_fn=root_inf_fn,
+        trans_inf_fn=trans_inf_fn,
         num_simulations=num_simulations,
         dim_action=dim_actions,
     )
@@ -149,14 +148,16 @@ def make_async_planner_law_v2(
                 dim_actions=dim_actions
             )
 
-            return dict(
-                action_probs=action_probs,
-                mcts_root=copy.deepcopy(mcts_root),
-            )
+            ret = dict(action_probs=action_probs)
+
+            if include_tree:
+                ret["mcts_root"] = copy.deepcopy(mcts_root)
+            return ret
 
     return planner
 
 
+# TODO: try using this classs instead?
 @link
 @dataclass
 class PlannerLaw:

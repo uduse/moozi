@@ -31,7 +31,7 @@ from moozi.batching_layer import BatchingClient, BatchingLayer
 from moozi.learner import TrainingState
 from moozi.link import UniverseAsync, link
 from moozi.logging import JAXBoardStepData
-from moozi.nn import NeuralNetwork
+from moozi.nn import NNModel
 from moozi.replay import StepSample, TrajectorySample
 from moozi.utils import SimpleBuffer
 from trio_asyncio import aio_as_trio
@@ -42,7 +42,7 @@ from moozi.replay import make_target_from_traj
 
 @dataclass(repr=False)
 class InferenceServer:
-    network: mz.nn.NeuralNetwork = field(init=False)
+    network: mz.nn.NNModel = field(init=False)
     params: Any = field(init=False)
 
     loggers: List[mz.logging.Logger] = field(default_factory=list)

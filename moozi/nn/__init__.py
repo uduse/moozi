@@ -1,10 +1,11 @@
 from .nn import (
-    NeuralNetwork,
+    NNArchitecture,
     NNSpec,
     NNOutput,
-    RootInferenceFeatures,
-    TransitionInferenceFeatures,
-    build_network,
+    NNModel,
+    RootFeatures,
+    TransitionFeatures,
+    build_model,
 )
 
-from .resnet import ResNetArchitecture
+from .resnet import ResNetArchitecture, ResNetSpec

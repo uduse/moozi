@@ -8,7 +8,7 @@ from moozi.nn import (
     ResNetArchitecture,
     RootFeatures,
     TransitionFeatures,
-    build_model,
+    make_model,
     NNModel,
     ResNetSpec,
 )
@@ -63,7 +63,7 @@ def test_resnet(num_stacked_frames):
         dim_repr=dim_repr,
         dim_action=dim_action,
     )
-    nn = build_model(ResNetArchitecture, spec)
+    nn = make_model(ResNetArchitecture, spec)
     rng = jax.random.PRNGKey(0)
     params, state = nn.init_model(rng)
     root_inf_feats = RootFeatures(

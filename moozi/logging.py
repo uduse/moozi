@@ -32,6 +32,7 @@ class Logger:
     pass
 
 
+# NOTE: deprecated
 class JAXBoardLogger(Logger):
     def __init__(self, name, log_dir=None, time_delta: float = 0.0):
         self._name = name
@@ -102,7 +103,7 @@ class LoggerDatumHistogram(LoggerDatum):
 
 
 class JAXBoardLoggerV2(Logger):
-    def __init__(self, name, log_dir=None, time_delta: float = 0.0):
+    def __init__(self, name="logger", log_dir=None, time_delta: float = 0.0):
         self._name = name
         self._log_dir = log_dir or "./tensorboard_log/"
         self._log_dir = str(Path(self._log_dir).resolve())

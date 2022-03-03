@@ -57,7 +57,7 @@ def model(env_spec, num_stacked_frames):
         dim_action=dim_action,
         # use default values for other parameters
     )
-    return mz.nn.build_model(mz.nn.ResNetArchitecture, nn_spec)
+    return mz.nn.make_model(mz.nn.ResNetArchitecture, nn_spec)
 
 
 @pytest.fixture

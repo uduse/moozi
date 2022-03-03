@@ -81,7 +81,7 @@ def make_rollout_worker_universes(
         laws = [
             EnvironmentLaw(make_env(config.env), num_players=2),
             FrameStacker(num_frames=config.num_stacked_frames),
-            set_policy_feed,
+            make_policy_feed,
             planner_law,
             TrajectoryOutputWriter(),
         ]
@@ -141,7 +141,7 @@ def make_evaluator_universes(
         laws = [
             EnvironmentLaw(make_env(config.env), num_players=2),
             FrameStacker(num_frames=config.num_stacked_frames),
-            set_policy_feed,
+            make_policy_feed,
             planner_law,
             print_evaluation_law,
             link(lambda mcts_root: dict(output_buffer=(mcts_root,))),
@@ -159,8 +159,8 @@ if load_if_possible and path.exists():
     print("restored from", path)
 else:
     param_opt = ParameterOptimizer()
-    param_opt.build(partial(make_param_opt_properties, config=config)),
-    param_opt.build_loggers(
+    param_opt.make_nn_suite(partial(make_param_opt_properties, config=config)),
+    param_opt.make_loggers(
         lambda: [
             # "print",
             # TerminalLogger(label="Parameter Optimizer", print_fn=print),
@@ -174,7 +174,7 @@ replay_buffer = ReplayBuffer(config)
 
 # %%
 worker = RolloutWorkerWithWeights()
-worker.set_model(param_opt.get_network())
+worker.set_model(param_opt.get_model())
 worker.set_params(param_opt.get_params())
 worker.build_universes(partial(make_rollout_worker_universes, config=config))
 
@@ -189,7 +189,7 @@ for i in tqdm(range(config.num_epochs)):
 
 # %%
 evaluator = RolloutWorkerWithWeights()
-evaluator.set_model(param_opt.get_network())
+evaluator.set_model(param_opt.get_model())
 evaluator.set_params(param_opt.get_params())
 evaluator.build_universes(partial(make_evaluator_universes, config=config))
 

@@ -1,29 +1,11 @@
-Milestones:
-  ☐ replay buffer with full trajectories and a function that makes targets
-  ☐ search with depth of 1
-
-Network:
-  ☐ target network and behavior network https://github.com/deepmind/acme/blob/926b17ad116578801a0fbbe73c4ddc276a28e23e/acme/agents/jax/dqn/learning_lib.py#L107
-
-Replay Buffer:
-  ✘ n-step replay buffer for semi-gradient @cancelled(21-06-17 19:02)
-  ✔ replay buffer for full trajectories, padded to the same shape @done(21-06-17 21:28)
-  ☐ write test for make_target
-
-MCTS:
-  Python:
-    ☐ finish drafting python MCTS
-    ☐ add python MCTS test
+All:
     ☐ add support to `known_bound` @low
-  C++:
-    ☐ set up a basic C++ PyBind santity check program
+    ☐ fix unconsistent import names
 
-Utils:
-  ☐ coverage report
-  ☐ profiling https://jax.readthedocs.io/en/latest/profiling.html
-  ☐ hyper-parameters tuning https://my.guild.ai/t/hyperparameter-optimization/161
-  ☐ type hints with nptyping/pytype, and other things @low
+    ☐ coverage report
+    ☐ profiling https://jax.readthedocs.io/en/latest/profiling.html
+    ☐ hyper-parameters tuning https://my.guild.ai/t/hyperparameter-optimization/161
+    ☐ type hints with nptyping/pytype, and other things @low
 
-MISCs:
-  ☐ decode guild.yaml flag types, e.g., loguniform to integer
-  ☐ discount usage inconsistency
+    ☐ decode guild.yaml flag types, e.g., loguniform to integer
+    ☐ discount usage inconsistency

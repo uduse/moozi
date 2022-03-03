@@ -1,11 +1,13 @@
 from dataclasses import asdict, dataclass
 import pprint
+from typing import Optional, Type
+
+from moozi.nn import NNArchitecture, NNSpec, ResNetArchitecture, ResNetSpec
 
 
 @dataclass
 class Config:
     seed: int = 0
-
     env: str = ""
 
     num_stacked_frames: int = 1
@@ -13,7 +15,8 @@ class Config:
     num_td_steps: int = 1
     discount: float = 1.0
 
-    dim_repr: int = 10
+    nn_arch_cls: Type[NNArchitecture] = ResNetArchitecture
+    nn_spec: NNSpec = ResNetSpec((1, 1), 1, 1)
 
     weight_decay: float = 1e-4
 

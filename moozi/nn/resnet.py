@@ -98,12 +98,15 @@ class ResNetArchitecture(NNArchitecture):
 
         # pred value head
         value = hk.Linear(output_size=1, name="pred_v")(pred_trunk_flat)
+        # TODO: sigmoid only for reward range [-1, 1]
+        value = jax.nn.sigmoid(value)
         chex.assert_shape(value, (None, 1))
 
         # pred policy head
         policy_logits = hk.Linear(output_size=self.spec.dim_action, name="pred_p")(
             pred_trunk_flat
         )
+        policy_logits = jax.nn.relu(policy_logits)
         chex.assert_shape(policy_logits, (None, self.spec.dim_action))
 
         return value, policy_logits
@@ -114,9 +117,13 @@ class ResNetArchitecture(NNArchitecture):
 
         # make state-action representation
         # TODO: check correctness action one-hot encoding here
+        chex.assert_shape(action, [None])
         action_one_hot = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
-        action_one_hot = action_one_hot.tile(hidden_state.shape[0:3] + (1,))
-        chex.assert_equal_rank([hidden_state, action_one_hot])
+        action_one_hot = jnp.expand_dims(
+            action_one_hot, axis=[1, 2]
+        )  # add height and width dim
+        action_one_hot = action_one_hot.tile((1, height, width, 1))
+        chex.assert_equal_shape_prefix([hidden_state, action_one_hot], prefix_len=3)
 
         state_action_repr = jnp.concatenate((hidden_state, action_one_hot), axis=-1)
         chex.assert_shape(
@@ -147,10 +154,8 @@ class ResNetArchitecture(NNArchitecture):
 
         return next_hidden_state, reward
 
-    def initial_inference(
-        self, init_inf_feats: RootFeatures, is_training: bool
-    ):
-        hidden_state = self._repr_net(init_inf_feats.stacked_frames, is_training)
+    def root_inference(self, root_feats: RootFeatures, is_training: bool):
+        hidden_state = self._repr_net(root_feats.stacked_frames, is_training)
         value, policy_logits = self._pred_net(hidden_state, is_training)
         reward = jnp.zeros_like(value)
 
@@ -163,12 +168,10 @@ class ResNetArchitecture(NNArchitecture):
             hidden_state=hidden_state,
         )
 
-    def recurrent_inference(
-        self, recurr_inf_feats: TransitionFeatures, is_training: bool
-    ):
+    def trans_inference(self, trans_feats: TransitionFeatures, is_training: bool):
         next_hidden_state, reward = self._dyna_net(
-            recurr_inf_feats.hidden_state,
-            recurr_inf_feats.action,
+            trans_feats.hidden_state,
+            trans_feats.action,
             is_training,
         )
         value, policy_logits = self._pred_net(next_hidden_state, is_training)

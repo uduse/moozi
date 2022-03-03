@@ -90,90 +90,31 @@ class MCTSAsync:
         leaf.backpropagate(value=value, discount=self.discount)
 
 
-# def make_async_planner_law(
-#     root_inf_fn, trans_inf_fn, dim_actions, num_simulations=10, include_tree=False
-# ):
-#     mcts = MCTSAsync(
-#         root_inf_fn=root_inf_fn,
-#         trans_inf_fn=trans_inf_fn,
-#         num_simulations=num_simulations,
-#         dim_action=dim_actions,
-#     )
-
-#     @link
-#     async def planner(is_last, policy_feed):
-#         if not is_last:
-#             mcts_root = await mcts.run(policy_feed)
-#             action, _ = mcts_root.select_child(mcts.discount)
-
-#             action_probs = np.zeros((dim_actions,), dtype=np.float32)
-#             for a, visit_count in mcts_root.get_children_visit_counts().items():
-#                 action_probs[a] = visit_count
-#             action_probs /= np.sum(action_probs)
-
-#             if policy_feed.legal_actions_mask[action] < 1:
-#                 raise ValueError("Illegal action")
-
-#             if include_tree:
-#                 return dict(
-#                     action=action,
-#                     action_probs=action_probs,
-#                     mcts_root=copy.deepcopy(mcts_root),
-#                 )
-#             else:
-#                 return dict(action=action, action_probs=action_probs)
-
-#     return planner
-
-
-def make_async_planner_law(
+@link
+async def planner_law(
+    is_last,
+    legal_actions_mask,
+    policy_feed,
     root_inf_fn,
     trans_inf_fn,
-    dim_actions,
-    num_simulations=10,
-    include_tree: bool = False,
+    num_simulations,
 ):
-    mcts = MCTSAsync(
-        root_inf_fn=root_inf_fn,
-        trans_inf_fn=trans_inf_fn,
-        num_simulations=num_simulations,
-        dim_action=dim_actions,
-    )
+    if not is_last:
+        mcts = MCTSAsync(
+            root_inf_fn=root_inf_fn,
+            trans_inf_fn=trans_inf_fn,
+            dim_action=legal_actions_mask.size,
+            num_simulations=num_simulations,
+        )
+        mcts_root = await mcts.run(policy_feed)
+        action_probs = mcts_root.get_children_visit_counts_as_probs(
+            dim_action=mcts.dim_action
+        )
 
-    @link
-    async def planner(is_last, policy_feed):
-        if not is_last:
-            mcts_root = await mcts.run(policy_feed)
-            action_probs = mcts_root.get_children_visit_counts_as_probs(
-                dim_actions=dim_actions
-            )
-
-            ret = dict(action_probs=action_probs)
-
-            if include_tree:
-                ret["mcts_root"] = copy.deepcopy(mcts_root)
-            return ret
-
-    return planner
-
-
-# TODO: try using this classs instead?
-@link
-@dataclass
-class PlannerLaw:
-    mcts: MCTSAsync
-
-    async def __call__(self, is_last, policy_feed):
-        if not is_last:
-            mcts_root = await self.mcts.run(policy_feed)
-            action_probs = mcts_root.get_children_visit_counts_as_probs(
-                dim_actions=self.mcts.dim_actions
-            )
-
-            return dict(
-                action_probs=action_probs,
-                mcts_root=copy.deepcopy(mcts_root),
-            )
+        return dict(
+            action_probs=action_probs,
+            mcts_root=copy.deepcopy(mcts_root),
+        )
 
 
 def sample_action(action_probs, temperature=1.0):

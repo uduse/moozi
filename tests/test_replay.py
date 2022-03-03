@@ -5,7 +5,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 SINGLE_PLAYER_SAMPLE = mz.replay.TrajectorySample(
-    frame=[[11], [22], [33], [44], [55], [66]],
+    frame=np.arange(6).reshape(6, 1, 1, 1),
     last_reward=[0, 200, 300, 400, 500, 600],
     is_first=[True, False, False, False, False, False],
     is_last=[False, False, False, False, False, True],
@@ -28,7 +28,7 @@ REPLAY_TEST_CASES.append(
         num_td_steps=1,
         num_stacked_frames=1,
         expected_target=mz.replay.TrainTarget(
-            stacked_frames=[[11]],
+            stacked_frames=np.array([0]).reshape(1, 1, 1),
             action=[101],
             value=[200 + 20 * 0.5, 300 + 30 * 0.5],
             last_reward=[0, 200],
@@ -47,7 +47,7 @@ REPLAY_TEST_CASES.append(
         num_td_steps=2,
         num_stacked_frames=2,
         expected_target=mz.replay.TrainTarget(
-            stacked_frames=[[0], [11]],
+            stacked_frames=np.array([0, 0]).reshape(1, 1, 2),
             action=[101, 102],
             value=[
                 200 + 300 * 0.5 + 30 * 0.5 ** 2,
@@ -70,7 +70,7 @@ REPLAY_TEST_CASES.append(
         num_td_steps=1,
         num_stacked_frames=1,
         expected_target=mz.replay.TrainTarget(
-            stacked_frames=[[33]],
+            stacked_frames=np.array([2]).reshape(1, 1, 1),
             action=[103],
             value=[400 + 40 * 0.5, 500 + 50 * 0.5],
             last_reward=[0, 400],
@@ -89,7 +89,7 @@ REPLAY_TEST_CASES.append(
         num_td_steps=1,
         num_stacked_frames=3,
         expected_target=mz.replay.TrainTarget(
-            stacked_frames=[[44], [55], [66]],
+            stacked_frames=np.array([3, 4, 5]).reshape(1, 1, 3),
             action=[-1],
             value=[0, 0],
             last_reward=[0, 0],
@@ -108,7 +108,7 @@ REPLAY_TEST_CASES.append(
         num_td_steps=100,
         num_stacked_frames=3,
         expected_target=mz.replay.TrainTarget(
-            stacked_frames=[[33], [44], [55]],
+            stacked_frames=np.array([2, 3, 4]).reshape(1, 1, 3),
             action=[105, -1, -1],
             value=[600, 0, 0, 0],
             last_reward=[0, 600, 0, 0],
@@ -132,7 +132,7 @@ REPLAY_TEST_CASES.append(
         num_td_steps=100,
         num_stacked_frames=3,
         expected_target=mz.replay.TrainTarget(
-            stacked_frames=[[44], [55], [66]],
+            stacked_frames=np.array([3, 4, 5]).reshape(1, 1, 3),
             action=[-1, -1, -1],
             value=[0, 0, 0, 0],
             last_reward=[0, 0, 0, 0],
@@ -148,7 +148,7 @@ REPLAY_TEST_CASES.append(
 
 
 TWO_PLAYER_SAMPLE = mz.replay.TrajectorySample(
-    frame=[[11], [22], [33], [44]],
+    frame=np.arange(4).reshape(4, 1, 1, 1),
     last_reward=[0, 200, -300, 400],
     is_first=[True, False, False, False],
     is_last=[False, False, False, True],
@@ -169,7 +169,7 @@ REPLAY_TEST_CASES.append(
         num_td_steps=100,
         num_stacked_frames=1,
         expected_target=mz.replay.TrainTarget(
-            stacked_frames=[[11]],
+            stacked_frames=np.array([0]).reshape(1, 1, 1),
             action=[101],
             value=[
                 200 + -300 * 0.5 + 400 * 0.5 ** 2,
@@ -191,7 +191,7 @@ REPLAY_TEST_CASES.append(
         num_td_steps=1,
         num_stacked_frames=2,
         expected_target=mz.replay.TrainTarget(
-            stacked_frames=[[11], [22]],
+            stacked_frames=np.array([0, 1]).reshape(1, 1, 2),
             action=[102, 103],
             value=[-300 + 30 * 0.5, 400, 0],
             last_reward=[0, -300, 400],
@@ -210,7 +210,7 @@ REPLAY_TEST_CASES.append(
         num_td_steps=2,
         num_stacked_frames=1,
         expected_target=mz.replay.TrainTarget(
-            stacked_frames=[[33]],
+            stacked_frames=np.array([2]).reshape(1, 1, 1),
             action=[103, -1, -1],
             value=[400, 0, 0, 0],
             last_reward=[0, 400, 0, 0],
@@ -248,10 +248,10 @@ def test_make_target(
         num_stacked_frames,
     )
 
+    # TODO: replace with chex assertions
     assert computed_target.value.shape[0] == computed_target.action_probs.shape[0]
     assert computed_target.value.shape[0] == computed_target.last_reward.shape[0]
     assert computed_target.value.shape[0] == computed_target.action.shape[0] + 1
-    assert computed_target.stacked_frames.shape[0] == num_stacked_frames
 
     def _assert_shape(path, computed, expected):
         assert computed.shape == expected.shape

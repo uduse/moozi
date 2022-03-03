@@ -13,7 +13,7 @@ from moozi.laws import (
     FrameStacker,
     TrajectoryOutputWriter,
     increment_tick,
-    set_policy_feed,
+    make_policy_feed,
     update_episode_stats,
     output_last_step_reward,
 )
@@ -68,7 +68,7 @@ def make_param_opt_properties(config):
         pred_net_sizes=(128, 128),
         dyna_net_sizes=(128, 128),
     )
-    network = mz.nn.build_model(nn_spec)
+    network = mz.nn.make_model(nn_spec)
     params, state = network.init_network(jax.random.PRNGKey(0))
     loss_fn = mz.loss.MuZeroLoss(
         num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay

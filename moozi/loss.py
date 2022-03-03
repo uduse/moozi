@@ -66,18 +66,20 @@ class MuZeroLoss(LossFn):
             ],
             prefix_len=1,
         )  # assert same batch dim
-
+        new_states = []
         init_inf_features = RootFeatures(
             stacked_frames=batch.stacked_frames,
             # TODO: actually pass player
             player=jnp.ones((batch.stacked_frames.shape[0], 1)),
         )
-        network_output, _ = model.root_inference(
+        network_output, new_state = model.root_inference(
             params, state, init_inf_features, is_training=True
         )
+        new_states.append(new_state)
 
         losses = {}
 
+        # TODO: this term should be zero, remote this
         losses["loss_reward_0"] = vmap(mse)(
             batch.last_reward.take(0, axis=1), network_output.reward
         )
@@ -88,14 +90,16 @@ class MuZeroLoss(LossFn):
             batch.action_probs.take(0, axis=1), network_output.policy_logits
         )
 
+        # TODO: scale transition loss by number of steps?
         for i in range(self.num_unroll_steps):
             recurr_inf_features = TransitionFeatures(
                 hidden_state=network_output.hidden_state,
                 action=batch.action.take(0, axis=1),
             )
-            network_output, _ = model.trans_inference(
+            network_output, state = model.trans_inference(
                 params, state, recurr_inf_features, is_training=True
             )
+            new_states.append(state)
 
             losses[f"loss_reward_{str(i + 1)}"] = vmap(mse)(
                 batch.last_reward.take(i + 1, axis=1), network_output.reward
@@ -114,6 +118,9 @@ class MuZeroLoss(LossFn):
         loss = jnp.sum(jnp.concatenate(tree.flatten(losses)))
         losses["loss"] = loss
 
-        return loss, JAXBoardStepData(
-            scalars=tree.map_structure(jnp.mean, losses), histograms={}
+        return loss, dict(
+            state=new_states[0],
+            step_data=JAXBoardStepData(
+                scalars=tree.map_structure(jnp.mean, losses), histograms={}
+            ),
         )

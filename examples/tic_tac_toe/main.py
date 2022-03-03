@@ -74,7 +74,7 @@ def make_train_worker_universes(
     def _make_universe(index):
         tape = Tape(index)
         planner_law = make_async_planner_law(
-            root_inf_fn=lambda features: self.root_inf_1(
+            root_inf_fn=lambda features: self.root_inf_unbatched(
                 self.params, features
             ),
             trans_inf_fn=lambda features: self.trans_inf_unbatched(
@@ -86,7 +86,7 @@ def make_train_worker_universes(
         laws = [
             EnvironmentLaw(make_env(config.env), num_players=2),
             FrameStacker(num_frames=config.num_stacked_frames),
-            set_policy_feed,
+            make_policy_feed,
             planner_law,
             ActionSamplerLaw(),
             TrajectoryOutputWriter(),
@@ -147,7 +147,7 @@ def make_eval_worker_universes(
         laws = [
             EnvironmentLaw(make_env(config.env), num_players=2),
             FrameStacker(num_frames=config.num_stacked_frames),
-            set_policy_feed,
+            make_policy_feed,
             planner_law,
             ActionSamplerLaw(temperature=0.5),
             log_evaluation_law,

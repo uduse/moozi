@@ -5,7 +5,7 @@ from .nn import (
     NNModel,
     RootFeatures,
     TransitionFeatures,
-    build_model,
+    make_model,
 )
 
 from .resnet import ResNetArchitecture, ResNetSpec

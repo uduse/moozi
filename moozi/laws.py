@@ -1,4 +1,8 @@
+import jax.config
+jax.config.update('jax_enable_x64', True)
+
 import collections
+
 from dataclasses import dataclass, field
 from typing import Any, Deque, List, Optional, Union
 
@@ -29,7 +33,7 @@ class FrameStacker:
             self.reset()
         else:
             self.add(obs)
-            return self.get()
+            return dict(stacked_frames=self.get())
 
     def add(self, obs: Union[np.ndarray, List[np.ndarray]]):
         assert isinstance(obs, (np.ndarray, list))
@@ -56,6 +60,7 @@ class FrameStacker:
             return obs
         elif isinstance(obs, list):
             return obs[self.player]
+
 
 # @link
 # def stack_frames(obs: np.ndarray, is_last: bool):
@@ -159,7 +164,7 @@ class EnvironmentLaw:
     @staticmethod
     def _get_reward(timestep: dm_env.TimeStep, num_players: int):
         if timestep.reward is None:
-            return [0.0] * num_players
+            return 0.0
         elif isinstance(timestep.reward, np.ndarray):
             assert len(timestep.reward) == num_players
             return timestep.reward[BASE_PLAYER]
@@ -220,7 +225,7 @@ class TrajectoryOutputWriter:
 
 
 @link
-def set_policy_feed(is_last, stacked_frames, legal_actions_mask, to_play):
+def make_policy_feed(is_last, stacked_frames, legal_actions_mask, to_play):
     if not is_last:
         feed = PolicyFeed(
             stacked_frames=stacked_frames,

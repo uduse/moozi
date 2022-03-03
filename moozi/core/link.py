@@ -29,6 +29,9 @@ class _AsyncLink:
         if not updates:
             updates = {}
 
+        if not isinstance(updates, dict):
+            raise TypeError("updates should either be a dictionary or `None`")
+
         self._validate_once(tape, updates)
 
         _AsyncLink._update_tape(tape, updates)

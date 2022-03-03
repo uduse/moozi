@@ -43,18 +43,15 @@ class TransformObservationWrapper(EnvironmentWrapper):
         return updated_olt
 
 
-def make_catch():
+def make_catch(num_rows=5, num_cols=5):
     prev_verbosity = logging.get_verbosity()
     logging.set_verbosity(logging.WARNING)
 
-    env_rows = 5
-    env_columns = 7
-
     def transform_obs(obs):
-        return obs.reshape((env_rows, env_columns, 1))
+        return obs.reshape((num_rows, num_cols, 1))
 
     raw_env = open_spiel.python.rl_environment.Environment(
-        f"catch(rows={env_rows},columns={env_columns})"
+        f"catch(rows={num_rows},columns={num_cols})"
     )
 
     env = OpenSpielWrapper(raw_env)
@@ -74,7 +71,7 @@ def make_tic_tac_toe():
     return env, env_spec
 
 
-def make_openspiel_env(str):
+def make_openspiel_env_and_spec(str):
     prev_verbosity = logging.get_verbosity()
     logging.set_verbosity(logging.WARNING)
     raw_env = open_spiel.python.rl_environment.Environment(str)
@@ -88,18 +85,22 @@ def make_openspiel_env(str):
 
 def make_env_and_spec(str):
     try:
-        env, env_spec = make_openspiel_env(str)
-        return env, env_spec
+        env, env_spec = make_openspiel_env_and_spec(str)
+        if env.name == "catch":
+            game_params = env.environment._environment._game.get_parameters()
+            num_rows, num_cols = game_params["rows"], game_params["columns"]
+            return make_catch(num_rows=num_rows, num_cols=num_cols)
+        else:
+            return env, env_spec
     except:
         raise ValueError(f"Environment {str} not found")
 
 
 def make_env(str):
-    env, _ = make_openspiel_env(str)
-    return env
+    return make_env_and_spec(str)[0]
 
 
+# environment specs should be the same if the `str` is the same
 @functools.lru_cache(maxsize=None)
 def make_env_spec(str):
-    _, env_spec = make_openspiel_env(str)
-    return env_spec
+    return make_env_and_spec(str)[1]

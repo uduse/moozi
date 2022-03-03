@@ -3,6 +3,7 @@ import random
 from dataclasses import dataclass, field
 from enum import EnumMeta
 from typing import Deque, List, NamedTuple
+import chex
 
 import numpy as np
 import tensorflow as tf
@@ -160,7 +161,7 @@ def make_target_from_traj(
     )
 
 
-def _get_action(sample, start_idx, num_unroll_steps):
+def _get_action(sample: TrajectorySample, start_idx, num_unroll_steps):
     action = sample.action[start_idx : start_idx + num_unroll_steps]
     num_actions_to_pad = num_unroll_steps - action.size
     if num_actions_to_pad > 0:
@@ -168,14 +169,19 @@ def _get_action(sample, start_idx, num_unroll_steps):
     return action
 
 
-def _get_stacked_frames(sample, start_idx, num_stacked_frames):
+def _get_stacked_frames(sample: TrajectorySample, start_idx, num_stacked_frames):
+    _, height, width, num_channels = sample.frame.shape
     frame_idx_lower = max(start_idx - num_stacked_frames + 1, 0)
-    frame = sample.frame[frame_idx_lower : start_idx + 1]
-    num_frames_to_pad = num_stacked_frames - frame.shape[0]
+    stacked_frames = sample.frame[frame_idx_lower : start_idx + 1]
+    num_frames_to_pad = num_stacked_frames - stacked_frames.shape[0]
+    stacked_frames = stacked_frames.reshape((height, width, -1))
     if num_frames_to_pad > 0:
-        padding_shape = (num_frames_to_pad,) + frame.shape[1:]
-        frame = np.concatenate((np.zeros(shape=padding_shape), frame))
-    return frame
+        padding = np.zeros((height, width, num_frames_to_pad * num_channels))
+        stacked_frames = np.concatenate([padding, stacked_frames], axis=-1)
+    chex.assert_shape(
+        stacked_frames, (height, width, num_stacked_frames * num_channels)
+    )
+    return stacked_frames
 
 
 def _get_value(
@@ -241,6 +247,7 @@ def _get_last_reward(sample: TrajectorySample, start_idx, curr_idx, last_step_id
     if curr_idx == start_idx:
         return 0
     elif curr_idx <= last_step_idx:
+        # TODO: is this correct?
         player_of_reward = sample.to_play[curr_idx - 1]
         # if player_of_reward == mz.BASE_PLAYER:
         #     return sample.last_reward[curr_idx]

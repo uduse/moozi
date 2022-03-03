@@ -1,3 +1,4 @@
+import copy
 import functools
 from dataclasses import dataclass
 from typing import Callable, NamedTuple, Tuple, Union, Type
@@ -11,20 +12,20 @@ import tree
 
 # NOTE: NamedTuple are used for data structures that need to be passed to jax.jit functions
 class NNOutput(NamedTuple):
-    value: jnp.ndarray  # (batch_size, 1)
-    reward: jnp.ndarray  # (batch_size, 1)
-    policy_logits: jnp.ndarray  # (batch_size, num_actions)
-    hidden_state: jnp.ndarray  # (batch_size, height, width, dim_repr)
+    value: jnp.ndarray  # (batch_size?, 1)
+    reward: jnp.ndarray  # (batch_size?, 1)
+    policy_logits: jnp.ndarray  # (batch_size?, num_actions)
+    hidden_state: jnp.ndarray  # (batch_size?, height, width, dim_repr)
 
 
 class RootFeatures(NamedTuple):
-    stacked_frames: jnp.ndarray  # (batch_size, height, width, channels)
-    player: jnp.ndarray  # (batch_size, 1)
+    stacked_frames: jnp.ndarray  # (batch_size?, height, width, channels)
+    player: jnp.ndarray  # (batch_size?, 1)
 
 
 class TransitionFeatures(NamedTuple):
-    hidden_state: jnp.ndarray  # (batch_size, height, width, dim_repr)
-    action: jnp.ndarray  # (batch_size, 1)
+    hidden_state: jnp.ndarray  # (batch_size?, height, width, dim_repr)
+    action: jnp.ndarray  # (batch_size?, 1)
 
 
 @dataclass
@@ -45,13 +46,16 @@ class NNArchitecture(hk.Module):
         self.spec = spec
 
 
+# TODO: use static_argnum instead of static_argnames
+# TODO: also use action histories as biased planes
 @dataclass
 class NNModel:
     """
     Complete neural network model that's ready for initiailization and inference.
 
-    Note that inference functions could be jitted, but need to pass with 
-    `jax.jit(..., static_argnames="is_training")` to make `is_training` static.
+    Note that inference functions could be jitted, but need to pass with
+    `jax.jit(..., static_argnames="is_training")` to make `is_training` static,
+    or alternatively `jax.jit(..., static_argnums=3")`.
     """
 
     spec: NNSpec
@@ -68,6 +72,22 @@ class NNModel:
     trans_inference_unbatched: Callable[
         [hk.Params, hk.State, TransitionFeatures, bool], Tuple[NNOutput, hk.State]
     ]
+
+    def with_jit(self):
+        return NNModel(
+            spec=copy.copy(self.spec),
+            init_model=self.init_model,
+            root_inference=jax.jit(self.root_inference, static_argnames="is_training"),
+            trans_inference=jax.jit(
+                self.trans_inference, static_argnames="is_training"
+            ),
+            root_inference_unbatched=jax.jit(
+                self.root_inference_unbatched, static_argnames="is_training"
+            ),
+            trans_inference_unbatched=jax.jit(
+                self.trans_inference_unbatched, static_argnames="is_training"
+            ),
+        )
 
 
 def init_root_inference(random_key, spec, root_inference, is_training):
@@ -110,8 +130,8 @@ def validate_shapes(x: Union[hk.Params, hk.State], y: Union[hk.Params, hk.State]
         assert x_val.shape == y_val.shape, (x_val.shape, y_val.shape)
 
 
-def build_init_network_fn(spec: NNSpec, root_inference, trans_inference):
-    def init_nework(random_key):
+def make_init_fn(spec: NNSpec, root_inference, trans_inference):
+    def init(random_key):
         key_1, key_2 = jax.random.split(random_key)
         root_inference_params, root_inference_state = init_root_inference(
             key_1, spec, root_inference, is_training=True
@@ -132,30 +152,31 @@ def build_init_network_fn(spec: NNSpec, root_inference, trans_inference):
         )
         return merged_params, merged_state
 
-    return init_nework
+    return init
 
 
-def build_root_inference(arch):
+def make_root_inference(arch):
+    # TODO: use hk's multi-transform
     return hk.without_apply_rng(
         hk.transform_with_state(
-            lambda root_inf_feats, is_training: arch().initial_inference(
+            lambda root_inf_feats, is_training: arch().root_inference(
                 root_inf_feats, is_training
             )
         )
     )
 
 
-def build_trans_inference(arch):
+def make_trans_inference(arch):
     return hk.without_apply_rng(
         hk.transform_with_state(
-            lambda trans_inf_feats, is_training: arch().recurrent_inference(
+            lambda trans_inf_feats, is_training: arch().trans_inference(
                 trans_inf_feats, is_training
             )
         )
     )
 
 
-def build_unbatched_fn(fn):
+def make_unbatched_fn(fn):
     def _unbatched_wrapper(params, state, feats, is_training):
         nn_out, new_state = fn(params, state, add_batch_dim(feats), is_training)
         return squeeze_batch_dim(nn_out), new_state
@@ -163,16 +184,16 @@ def build_unbatched_fn(fn):
     return _unbatched_wrapper
 
 
-def build_model(architecture_cls: Type[NNArchitecture], spec: NNSpec):
+def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec):
     arch = functools.partial(architecture_cls, spec)
-    root_inference = build_root_inference(arch)
-    trans_inference = build_trans_inference(arch)
-    network_init_fn = build_init_network_fn(spec, root_inference, trans_inference)
-    root_inferenc_fn_unbatched = build_unbatched_fn(root_inference.apply)
-    trans_inference_fn_unbatched = build_unbatched_fn(trans_inference.apply)
+    root_inference = make_root_inference(arch)
+    trans_inference = make_trans_inference(arch)
+    model_init_fn = make_init_fn(spec, root_inference, trans_inference)
+    root_inferenc_fn_unbatched = make_unbatched_fn(root_inference.apply)
+    trans_inference_fn_unbatched = make_unbatched_fn(trans_inference.apply)
     return NNModel(
         spec,
-        network_init_fn,
+        model_init_fn,
         root_inference.apply,
         trans_inference.apply,
         root_inferenc_fn_unbatched,

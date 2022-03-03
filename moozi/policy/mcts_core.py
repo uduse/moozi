@@ -181,8 +181,8 @@ class Node(object):
             values[action] = child.value
         return values
 
-    def get_children_visit_counts_as_probs(self, dim_actions):
-        action_probs = np.zeros((dim_actions,), dtype=np.float32)
+    def get_children_visit_counts_as_probs(self, dim_action):
+        action_probs = np.zeros((dim_action,), dtype=np.float32)
         for a, visit_count in self.get_children_visit_counts().items():
             action_probs[a] = visit_count
         action_probs /= np.sum(action_probs)

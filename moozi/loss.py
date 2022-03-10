@@ -80,13 +80,13 @@ class MuZeroLoss(LossFn):
         losses = {}
 
         # TODO: this term should be zero, remote this
-        losses["loss_reward_0"] = vmap(mse)(
+        losses["loss:reward_0"] = vmap(mse)(
             batch.last_reward.take(0, axis=1), network_output.reward
         )
-        losses["loss_value_0"] = vmap(mse)(
+        losses["loss:value_0"] = vmap(mse)(
             batch.value.take(0, axis=1), network_output.value
         )
-        losses["loss_action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
+        losses["loss:action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
             batch.action_probs.take(0, axis=1), network_output.policy_logits
         )
 
@@ -101,17 +101,17 @@ class MuZeroLoss(LossFn):
             )
             new_states.append(state)
 
-            losses[f"loss_reward_{str(i + 1)}"] = vmap(mse)(
+            losses[f"loss:reward_{str(i + 1)}"] = vmap(mse)(
                 batch.last_reward.take(i + 1, axis=1), network_output.reward
             )
-            losses[f"loss_value_{str(i + 1)}"] = vmap(mse)(
+            losses[f"loss:value_{str(i + 1)}"] = vmap(mse)(
                 batch.value.take(i + 1, axis=1), network_output.value
             )
-            losses[f"loss_action_probs_{str(i + 1)}"] = vmap(
+            losses[f"loss:action_probs_{str(i + 1)}"] = vmap(
                 rlax.categorical_cross_entropy
             )(batch.action_probs.take(i + 1, axis=1), network_output.policy_logits)
 
-        losses["loss_l2"] = jnp.reshape(
+        losses["loss:l2"] = jnp.reshape(
             params_l2_loss(params) * self.weight_decay, (1,)
         )
 
@@ -119,7 +119,7 @@ class MuZeroLoss(LossFn):
         losses["loss"] = loss
 
         return loss, dict(
-            state=new_states[0],
+            state=new_states,
             step_data=JAXBoardStepData(
                 scalars=tree.map_structure(jnp.mean, losses), histograms={}
             ),

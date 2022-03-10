@@ -59,7 +59,7 @@ class NNModel:
     """
 
     spec: NNSpec
-    init_model: Callable
+    init_params_and_state: Callable
     root_inference: Callable[
         [hk.Params, hk.State, RootFeatures, bool], Tuple[NNOutput, hk.State]
     ]
@@ -75,14 +75,12 @@ class NNModel:
 
     def with_jit(self):
         return NNModel(
-            spec=copy.copy(self.spec),
-            init_model=self.init_model,
-            root_inference=jax.jit(self.root_inference, static_argnames="is_training"),
-            trans_inference=jax.jit(
-                self.trans_inference, static_argnames="is_training"
-            ),
+            spec=copy.deepcopy(self.spec),
+            init_params_and_state=self.init_params_and_state,
+            root_inference=jax.jit(self.root_inference, static_argnums=3),
+            trans_inference=jax.jit(self.trans_inference, static_argnums=3),
             root_inference_unbatched=jax.jit(
-                self.root_inference_unbatched, static_argnames="is_training"
+                self.root_inference_unbatched, static_argnums=3
             ),
             trans_inference_unbatched=jax.jit(
                 self.trans_inference_unbatched, static_argnames="is_training"
@@ -90,112 +88,57 @@ class NNModel:
         )
 
 
-def init_root_inference(random_key, spec, root_inference, is_training):
-    dummy_batch_dim = 1
-    root_inference_params, root_inference_state = root_inference.init(
-        random_key,
-        RootFeatures(
-            stacked_frames=jnp.ones((dummy_batch_dim,) + spec.stacked_frames_shape),
-            player=jnp.array(0),
-        ),
-        is_training,
-    )
-
-    return root_inference_params, root_inference_state
-
-
-def init_trans_inference(random_key, spec: NNSpec, trans_inference, is_training):
-    dummy_batch_dim = 1
-    height, width, _ = spec.stacked_frames_shape
-    trans_inference_params, trans_inference_state = trans_inference.init(
-        random_key,
-        TransitionFeatures(
-            hidden_state=jnp.ones((dummy_batch_dim, height, width, spec.dim_repr)),
-            action=jnp.ones((dummy_batch_dim,)),
-        ),
-        is_training,
-    )
-    return trans_inference_params, trans_inference_state
-
-
-def validate_shapes(x: Union[hk.Params, hk.State], y: Union[hk.Params, hk.State]):
-    x_paths = set([k for k, _ in tree.flatten_with_path(x)])
-    y_paths = set([k for k, _ in tree.flatten_with_path(y)])
-    shared_paths = x_paths & y_paths
-    for path in shared_paths:
-        x_val, y_val = x, y
-        for key in path:
-            x_val = x_val[key]
-            y_val = y_val[key]
-        assert x_val.shape == y_val.shape, (x_val.shape, y_val.shape)
-
-
-def make_init_fn(spec: NNSpec, root_inference, trans_inference):
-    def init(random_key):
-        key_1, key_2 = jax.random.split(random_key)
-        root_inference_params, root_inference_state = init_root_inference(
-            key_1, spec, root_inference, is_training=True
-        )
-        trans_inference_params, trans_inference_state = init_trans_inference(
-            key_2, spec, trans_inference, is_training=True
-        )
-
-        validate_shapes(root_inference_params, trans_inference_params)
-        validate_shapes(root_inference_state, trans_inference_state)
-        merged_params = hk.data_structures.merge(
-            root_inference_params,
-            trans_inference_params,
-        )
-        merged_state = hk.data_structures.merge(
-            root_inference_state,
-            trans_inference_state,
-        )
-        return merged_params, merged_state
-
-    return init
-
-
-def make_root_inference(arch):
-    # TODO: use hk's multi-transform
-    return hk.without_apply_rng(
-        hk.transform_with_state(
-            lambda root_inf_feats, is_training: arch().root_inference(
-                root_inf_feats, is_training
-            )
-        )
-    )
-
-
-def make_trans_inference(arch):
-    return hk.without_apply_rng(
-        hk.transform_with_state(
-            lambda trans_inf_feats, is_training: arch().trans_inference(
-                trans_inf_feats, is_training
-            )
-        )
-    )
-
-
-def make_unbatched_fn(fn):
-    def _unbatched_wrapper(params, state, feats, is_training):
-        nn_out, new_state = fn(params, state, add_batch_dim(feats), is_training)
-        return squeeze_batch_dim(nn_out), new_state
-
-    return _unbatched_wrapper
-
-
 def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec):
     arch = functools.partial(architecture_cls, spec)
-    root_inference = make_root_inference(arch)
-    trans_inference = make_trans_inference(arch)
-    model_init_fn = make_init_fn(spec, root_inference, trans_inference)
-    root_inferenc_fn_unbatched = make_unbatched_fn(root_inference.apply)
-    trans_inference_fn_unbatched = make_unbatched_fn(trans_inference.apply)
+
+    def multi_transform_target():
+        module = arch()
+
+        def module_walk(root_feats, trans_feats):
+            root_out = module.root_inference(root_feats, is_training=True)
+            trans_out = module.trans_inference(trans_feats, is_training=True)
+            return (trans_out, root_out)
+
+        return module_walk, (module.root_inference, module.trans_inference)
+
+    transformed = hk.multi_transform_with_state(multi_transform_target)
+
+    def init_params_and_state(rng):
+        batch_dim = (1,)
+        root_feats = RootFeatures(
+            stacked_frames=jnp.ones(batch_dim + spec.stacked_frames_shape),
+            player=jnp.array([0]),
+        )
+        trans_feats = TransitionFeatures(
+            hidden_state=jnp.ones(
+                batch_dim + spec.stacked_frames_shape[:-1] + (spec.dim_repr,)
+            ),
+            action=jnp.array([0]),
+        )
+
+        return transformed.init(rng, root_feats, trans_feats)
+
+    dummy_random_key = jax.random.PRNGKey(0)
+
+    def root_inference(params, state, feats, is_training):
+        return transformed.apply[0](params, state, dummy_random_key, feats, is_training)
+
+    def trans_inference(params, state, feats, is_training):
+        return transformed.apply[1](params, state, dummy_random_key, feats, is_training)
+
+    def root_inference_unbatched(params, state, feats, is_training):
+        out, state = root_inference(params, state, add_batch_dim(feats), is_training)
+        return squeeze_batch_dim(out), state
+
+    def trans_inference_unbatched(params, state, feats, is_training):
+        out, state = trans_inference(params, state, add_batch_dim(feats), is_training)
+        return squeeze_batch_dim(out), state
+
     return NNModel(
         spec,
-        model_init_fn,
-        root_inference.apply,
-        trans_inference.apply,
-        root_inferenc_fn_unbatched,
-        trans_inference_fn_unbatched,
+        init_params_and_state,
+        root_inference,
+        trans_inference,
+        root_inference_unbatched,
+        trans_inference_unbatched,
     )

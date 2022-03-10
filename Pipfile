@@ -45,6 +45,7 @@ filelock = "==v3.0.12"
 attrs = "*"
 pillow = "*"
 graphviz = "*"
+loguru = "*"
 
 [dev-packages]
 mypy = "*"

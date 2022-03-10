@@ -112,7 +112,7 @@ class ParameterOptimizer:
 
     def make_training_suite(self, config: Config):
         self.model = make_model(config.nn_arch_cls, config.nn_spec)
-        params, state = self.model.init_model(jax.random.PRNGKey(0))
+        params, state = self.model.init_params_and_state(jax.random.PRNGKey(0))
         loss_fn = mz.loss.MuZeroLoss(
             num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay
         )

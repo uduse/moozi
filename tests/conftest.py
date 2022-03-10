@@ -67,7 +67,7 @@ def random_key():
 
 @pytest.fixture
 def params_and_state(model: mz.nn.NNModel, random_key):
-    return model.init_model(random_key)
+    return model.init_params_and_state(random_key)
 
 
 @pytest.fixture

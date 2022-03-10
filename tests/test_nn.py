@@ -14,42 +14,26 @@ from moozi.nn import (
 )
 
 
-def test_model_basic_inferences(model: NNModel, params, state, policy_feed: PolicyFeed):
+def _test_model_inference(model, params, state, policy_feed):
     assert model.spec.stacked_frames_shape == policy_feed.stacked_frames.shape
-
     root_feats = RootFeatures(
         stacked_frames=policy_feed.stacked_frames, player=np.array(policy_feed.to_play)
     )
-    out, _ = model.root_inference_unbatched(
-        params, state, root_feats, is_training=False
-    )
+    is_training = False
+    out, _ = model.root_inference_unbatched(params, state, root_feats, is_training)
     assert out
-    trans_feats = TransitionFeatures(
-        hidden_state=out.hidden_state, action=np.array(0)
-    )
-    out, _ = model.trans_inference_unbatched(
-        params, state, trans_feats, is_training=False
-    )
+    trans_feats = TransitionFeatures(hidden_state=out.hidden_state, action=np.array(0))
+    out, _ = model.trans_inference_unbatched(params, state, trans_feats, is_training)
     assert out.hidden_state.shape[-1] == model.spec.dim_repr
 
 
-def test_model_jit_inferences(model: NNModel, params, state, policy_feed: PolicyFeed):
-    root_feats = RootFeatures(
-        stacked_frames=policy_feed.stacked_frames, player=np.array(policy_feed.to_play)
-    )
-    root_inf_jit = jax.jit(model.root_inference_unbatched)
-    root_inf_jit_partial = functools.partial(
-        root_inf_jit, params, state, is_training=False
-    )
-    out, _ = root_inf_jit_partial(root_feats)
-    assert out
+def test_model_basic_inferences(model: NNModel, params, state, policy_feed: PolicyFeed):
+    _test_model_inference(model, params, state, policy_feed)
 
-    trans_feats = TransitionFeatures(hidden_state=out.hidden_state, action=np.array(0))
-    trans_inf_jit = jax.jit(model.trans_inference_unbatched)
-    trans_inf_jit_partial = functools.partial(
-        trans_inf_jit, params, state, is_training=False
-    )
-    out, _ = trans_inf_jit_partial(trans_feats)
+
+def test_model_jit_inferences(model: NNModel, params, state, policy_feed: PolicyFeed):
+    model = model.with_jit()
+    _test_model_inference(model, params, state, policy_feed)
 
 
 def test_resnet(num_stacked_frames):
@@ -65,7 +49,7 @@ def test_resnet(num_stacked_frames):
     )
     nn = make_model(ResNetArchitecture, spec)
     rng = jax.random.PRNGKey(0)
-    params, state = nn.init_model(rng)
+    params, state = nn.init_params_and_state(rng)
     root_inf_feats = RootFeatures(
         stacked_frames=jnp.ones(stacked_frames_shape), player=jnp.array(0)
     )
@@ -75,9 +59,7 @@ def test_resnet(num_stacked_frames):
     assert nn_out
     assert new_state
 
-    trans_inf_feats = TransitionFeatures(
-        hidden_state=nn_out.hidden_state, action=0
-    )
+    trans_inf_feats = TransitionFeatures(hidden_state=nn_out.hidden_state, action=0)
     nn_out, new_state = nn.trans_inference_unbatched(
         params, state, trans_inf_feats, is_training=False
     )

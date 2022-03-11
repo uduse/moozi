@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import haiku as hk
 from re import I
 import cloudpickle
 from pprint import pprint
@@ -15,6 +16,7 @@ from absl import logging
 import moozi as mz
 from moozi.core import Config, make_env_spec, make_env
 from moozi.learner import TrainingState
+from moozi.logging import LogHistogram, LogDatum, LogScalar
 from moozi.nn import RootFeatures
 from moozi.nn.nn import NNModel, make_model
 from moozi.replay import TrainTarget
@@ -32,18 +34,19 @@ class LoggerActor:
 def _compute_prior_kl(
     model: NNModel, batch: TrainTarget, orig_params, new_params, state
 ):
+    is_training = False
     orig_out, _ = model.root_inference(
         orig_params,
         state,
-        RootFeatures(stacked_frames=batch.stacked_frames, player=0),
-        is_training=False,
+        RootFeatures(stacked_frames=batch.stacked_frames, player=jnp.array(0)),
+        is_training,
     )
     orig_logits = orig_out.policy_logits
     new_out, _ = model.root_inference(
         new_params,
         state,
-        RootFeatures(stacked_frames=batch.stacked_frames, player=0),
-        is_training=False,
+        RootFeatures(stacked_frames=batch.stacked_frames, player=jnp.array(0)),
+        is_training,
     )
     new_logits = new_out.policy_logits
     prior_kl = jnp.mean(rlax.categorical_kl_divergence(orig_logits, new_logits))
@@ -57,7 +60,6 @@ def make_sgd_step_fn(
     target_update_period: int = 1,
     include_prior_kl: bool = True,
 ):
-    # @partial(jax.jit, backend="cpu")
     @jax.jit
     @chex.assert_max_traces(n=1)
     def sgd_step_fn(training_state: TrainingState, batch: mz.replay.TrainTarget):
@@ -83,19 +85,19 @@ def make_sgd_step_fn(
             rng_key=new_key,
         )
 
-        # TODO:  use jaxboard v2
-        step_data = mz.logging.JAXBoardStepData(scalars={}, histograms={})
-        step_data.update(extra["step_data"])
-        step_data.histograms["reward"] = batch.last_reward
-        step_data.add_hk_params(new_params)
+        step_data = extra["step_data"]
+
+        for module, weight_name, weights in hk.data_structures.traverse(new_params):
+            name = module + "/" + weight_name
+            step_data[name] = weights
 
         if include_prior_kl:
             prior_kl = _compute_prior_kl(
                 model, batch, training_state.params, new_params, training_state.state
             )
-            step_data.scalars["prior_kl"] = prior_kl
+            step_data["prior_kl"] = prior_kl
 
-        return new_training_state, dict(step_data=step_data, state=extra["state"])
+        return new_training_state, dict(state=extra["state"], step_data=step_data)
 
     return sgd_step_fn
 
@@ -107,6 +109,7 @@ class ParameterOptimizer:
     sgd_step_fn: Callable = field(init=False)
 
     loggers: List[mz.logging.Logger] = field(default_factory=list)
+    _last_step_data: List[LogDatum] = field(default_factory=list)
 
     _num_updates: int = 0
 
@@ -135,7 +138,7 @@ class ParameterOptimizer:
             raise ValueError("Batch is empty")
         self.training_state, extra = self.sgd_step_fn(self.training_state, batch)
         self._num_updates += 1
-        self._log_step_data(extra["step_data"])
+        self._last_step_data = extra["step_data"]
 
     def get_params_and_state(self):
         return (self.training_state.params, self.training_state.state)
@@ -154,47 +157,53 @@ class ParameterOptimizer:
 
     def make_loggers(self, loggers_factory: Callable[[], List[mz.logging.Logger]]):
         self.loggers = loggers_factory()
-        logging.info("setting loggers")
+        logging.info("setting loggers" + str(self.loggers))
 
-    def _log_step_data(self, step_data):
-        # TODO: reduce step data logging frequency
-        for logger in self.loggers:
-            # TODO: remove legacy jaxborad logger
-            if isinstance(logger, mz.logging.JAXBoardLogger):
-                logger.write(step_data)
-            elif isinstance(logger, mz.logging.JAXBoardLoggerV2):
-                logger.write(step_data)
-            elif logger == "print":
-                pprint(step_data.scalars)
-            else:
-                raise NotImplementedError(f"Logger type {type(logger)} not supported")
+    # def _log_step_data(self, step_data):
+    #     # TODO: reduce step data logging frequency
+    #     for logger in self.loggers:
+    #         if isinstance(logger, mz.logging.JAXBoardLoggerV2):
+    #             logger.write(step_data)
+    #         elif logger == "print":
+    #             pprint(step_data.scalars)
+    #         else:
+    #             raise NotImplementedError(f"Logger type {type(logger)} not supported")
 
     def get_stats(self):
-        return dict(
-            num_updates=self._num_updates,
-        )
+        return dict(num_updates=self._num_updates)
 
-    def get_properties(self):
+    def get_properties(self) -> dict:
         import os
         import jax
 
         ray_gpu_ids = ray.get_gpu_ids()
         cuda_visible_devices = os.environ["CUDA_VISIBLE_DEVICES"]
         jax_devices = jax.devices()
+
+        model_size_in_bytes = hk.data_structures.tree_size(
+            (self.training_state.params, self.training_state.state)
+        )
+        model_size_str = f"{model_size_in_bytes / 1e6:.2f} MB"
+
         return dict(
             ray_gpu_ids=ray_gpu_ids,
             cuda_visible_devices=cuda_visible_devices,
-            jax_devices=jax_devices,
+            jax_devices=str(jax_devices),
+            model_size=model_size_str,
         )
 
     def log(self):
-        info_dict = {**self.get_properties(), **self.get_stats()}
         for logger in self.loggers:
             if isinstance(logger, mz.logging.JAXBoardLoggerV2):
-                logger.write(mz.logging.LoggerDatumText("info_dict", str(info_dict)))
+                logger.write(
+                    LogDatum.from_any(self.get_stats())
+                    + LogDatum.from_any(self._last_step_data)
+                )
+            elif isinstance(logger, mz.logging.TerminalLogger):
+                logger.write(self.get_stats())
 
     def close(self):
         for logger in self._loggers:
-            if isinstance(logger, mz.logging.JAXBoardLogger):
+            if isinstance(logger, mz.logging.JAXBoardLoggerV2):
                 logging.info(logger._name, "closed")
                 logger.close()

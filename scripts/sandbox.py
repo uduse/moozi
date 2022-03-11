@@ -1,12 +1,19 @@
 # %%
 import os
 
+import haiku as hk
+import jax
+import optax
 import tree
+from moozi.learner import TrainingState
+from moozi.loss import MuZeroLoss
+from moozi.nn.nn import RootFeatures, make_model
+from moozi.nn.resnet import ResNetArchitecture, ResNetSpec
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 from functools import partial
-from typing import List
+from typing import List, NamedTuple
 
 import moozi as mz
 import numpy as np
@@ -25,8 +32,9 @@ from moozi.laws import (
 from moozi.logging import (
     JAXBoardLoggerActor,
     JAXBoardLoggerV2,
-    JAXBoardStepData,
-    LoggerDatumScalar,
+    LogScalar,
+    TerminalLogger,
+    TerminalLoggerActor,
 )
 from moozi.parameter_optimizer import ParameterOptimizer
 from moozi.policy.mcts_async import ActionSamplerLaw, planner_law
@@ -36,43 +44,43 @@ from moozi.utils import WallTimer
 
 # from utils import *
 
+# %%
 print(ray.init(include_dashboard=True))
-
 
 # %%
 config = Config()
 config.env = f"catch(columns=6,rows=6)"
-config.batch_size = 256
+config.batch_size = 128
 config.discount = 0.99
-config.num_unroll_steps = 3
+config.num_unroll_steps = 2
 config.num_td_steps = 100
 config.num_stacked_frames = 1
-config.lr = 1e-3
+config.lr = 3e-3
 config.replay_buffer_size = 100000
-config.num_epochs = 150
+config.num_epochs = 50
 config.num_ticks_per_epoch = 12
-config.num_updates_per_samples_added = 10
+config.num_updates_per_samples_added = 30
 config.num_rollout_workers = 5
-config.num_rollout_universes_per_worker = 20
-config.weight_decay = 5e-3
+config.num_rollout_universes_per_worker = 30
+config.weight_decay = 5e-2
 config.nn_arch_cls = mz.nn.ResNetArchitecture
 
 env_spec = mz.make_env_spec(config.env)
 frame_shape = env_spec.observations.observation.shape
 stacked_frames_shape = frame_shape[:-1] + (frame_shape[-1] * config.num_stacked_frames,)
 dim_action = env_spec.actions.num_values
-dim_repr = 16
+dim_repr = 8
 config.nn_spec = mz.nn.ResNetSpec(
     stacked_frames_shape=stacked_frames_shape,
     dim_repr=dim_repr,
     dim_action=dim_action,
-    repr_tower_blocks=6,
-    repr_tower_dim=16,
-    pred_tower_blocks=6,
-    pred_tower_dim=16,
-    dyna_tower_blocks=6,
-    dyna_tower_dim=16,
-    dyna_state_blocks=6,
+    repr_tower_blocks=12,
+    repr_tower_dim=12,
+    pred_tower_blocks=12,
+    pred_tower_dim=12,
+    dyna_tower_blocks=12,
+    dyna_tower_dim=12,
+    dyna_state_blocks=12,
 )
 config.print()
 
@@ -91,8 +99,7 @@ def make_parameter_optimizer():
     param_opt.make_training_suite.remote(config)
     param_opt.make_loggers.remote(
         lambda: [
-            # TODO: use new logger instead
-            mz.logging.JAXBoardLogger(name="param_opt", time_delta=0),
+            mz.logging.JAXBoardLoggerV2(name="param_opt", time_delta=10),
         ]
     ),
     return param_opt
@@ -111,7 +118,7 @@ def make_laws_train(config):
 
 def make_laws_eval(config):
     return [
-        link(lambda: dict(num_simulations=30)),
+        link(lambda: dict(num_simulations=15)),
         EnvironmentLaw(make_env(config.env), num_players=1),
         FrameStacker(num_frames=config.num_stacked_frames, player=0),
         make_policy_feed,
@@ -145,7 +152,7 @@ def make_worker_eval(config: Config, param_opt):
 
 @ray.remote
 def convert_reward_to_logger_datum(rewards):
-    return LoggerDatumScalar("mean_reward", np.mean(rewards))
+    return LogScalar("mean_reward", np.mean(rewards))
 
 
 # %%
@@ -153,20 +160,16 @@ param_opt = make_parameter_optimizer()
 replay_buffer = ray.remote(ReplayBuffer).remote(config)
 workers_train = make_workers_train(config, param_opt)
 worker_eval = make_worker_eval(config, param_opt)
-reporter = JAXBoardLoggerActor.remote()
-# %%
-def avr_g(worker: RolloutWorkerWithWeights):
-    logging.info(
-        f"R: {np.mean([u.tape.avg_episodic_reward for u in worker.universes])}"
-    )
-
+jaxboard_logger = JAXBoardLoggerActor.remote("jaxboard_logger")
+terminal_logger = TerminalLoggerActor.remote("terminal_logger")
+terminal_logger.write.remote(param_opt.get_properties.remote())
 
 # %%
 with WallTimer():
     for epoch in range(config.num_epochs):
         logging.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
         samples = [w.run.remote(config.num_ticks_per_epoch) for w in workers_train]
-        eval_result = worker_eval.run.remote(30)
+        eval_result = worker_eval.run.remote(6 * 10)
         eval_result_logger_datum = convert_reward_to_logger_datum.remote(eval_result)
         samples_added = [replay_buffer.add_samples.remote(s) for s in samples]
         while samples_added:
@@ -178,8 +181,9 @@ with WallTimer():
             for w in workers_train + [worker_eval]:
                 w.set_params_and_state.remote(param_opt.get_params_and_state.remote())
 
-            param_opt.log.remote()
-        reporter.write.remote(replay_buffer.get_logger_data.remote())
-        done = reporter.write.remote(eval_result_logger_datum)
+        param_opt.log.remote()
+        jaxboard_logger.write.remote(replay_buffer.get_logger_data.remote())
+        done = jaxboard_logger.write.remote(eval_result_logger_datum)
+        done = terminal_logger.write.remote(eval_result_logger_datum)
 
     ray.get(done)

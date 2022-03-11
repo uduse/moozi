@@ -8,98 +8,76 @@ import jax.numpy as jnp
 import numpy as np
 import ray
 from absl import logging
-from acme.utils.loggers.terminal import TerminalLogger
 
 import moozi as mz
 
 
-class JAXBoardStepData(NamedTuple):
-    scalars: Dict[str, Any]
-    histograms: Dict[str, Any]
-
-    def update(self, other: "JAXBoardStepData"):
-        self.scalars.update(other.scalars)
-        self.histograms.update(other.histograms)
-
-    def add_hk_params(self, params):
-        for module_name, weight_name, weights in hk.data_structures.traverse(params):
-            name = module_name + "/" + weight_name
-            assert name not in self.histograms
-            self.histograms[name] = weights
-
-
-class Logger:
-    pass
-
-
-# NOTE: deprecated
-class JAXBoardLogger(Logger):
-    def __init__(self, name, log_dir=None, time_delta: float = 0.0):
-        self._name = name
-        self._log_dir = log_dir or "./tensorboard_log/"
-        self._log_dir = str(Path(self._log_dir).resolve())
-        self._time_delta = time_delta
-        self._time = time.time()
-        self._steps = 0
-        self._writer = mz.jaxboard.SummaryWriter(name, log_dir=self._log_dir)
-        logging.info(f"{self._name} is logging to {(self._log_dir)}")
-
-    def write(self, data: JAXBoardStepData):
-        now = time.time()
-        if (now - self._time) > self._time_delta:
-            self._write_now(data)
-            self._time = now
-        self._steps += 1
-
-    def _write_now(self, data: JAXBoardStepData):
-        for key in data.scalars:
-            prefixed_key = self._name + ":" + key
-            self._writer.scalar(
-                tag=prefixed_key,
-                value=data.scalars[key],
-                step=self._steps,
-            )
-        for key in data.histograms:
-            prefixed_key = self._name + ":" + key
-            num_bins = 50
-            self._writer.histogram(
-                tag=prefixed_key,
-                values=data.histograms[key],
-                bins=num_bins,
-                step=self._steps,
-            )
-
-    def close(self):
-        r"""
-        Always call this method the logging is finished.
-        Otherwise unexpected hangings may occur.
-        """
-        return self._writer.close()
-
-
 @dataclass
-class LoggerDatum:
+class LogDatum:
     tag: str
 
+    @staticmethod
+    def from_dict(d: dict) -> List["LogDatum"]:
+        assert isinstance(d, dict)
+        mappers = (
+            (int, LogScalar),
+            (float, LogScalar),
+            (str, LogText),
+            (np.array, LogHistogram),
+        )
+
+        def process(key, val):
+            if isinstance(val, jnp.ndarray):
+                if val.size == 1:
+                    return LogScalar(key, float(val))
+                else:
+                    return LogHistogram(key, np.array(val))
+
+            for cast_fn, target_cls in mappers:
+                try:
+                    val = cast_fn(val)
+                except (ValueError, TypeError):
+                    pass
+                else:
+                    return target_cls(key, val)
+
+            raise ValueError(f"Unable to process {key}={val}, type={type(val)}")
+
+        return [process(k, v) for k, v in d.items()]
+
+    @staticmethod
+    def from_any(data: Union[List["LogDatum"], "LogDatum", dict]) -> List["LogDatum"]:
+        if isinstance(data, LogDatum):
+            return [data]
+        elif isinstance(data, dict):
+            return LogDatum.from_dict(data)
+        else:
+            return data
+
 
 @dataclass
-class LoggerDatumText(LoggerDatum):
-    text: str
-
-
-@dataclass
-class LoggerDatumImage(LoggerDatum):
-    image: np.ndarray
-
-
-@dataclass
-class LoggerDatumScalar(LoggerDatum):
+class LogScalar(LogDatum):
     scalar: float
 
 
 @dataclass
-class LoggerDatumHistogram(LoggerDatum):
+class LogText(LogDatum):
+    text: str
+
+
+@dataclass
+class LogImage(LogDatum):
+    image: np.ndarray
+
+
+@dataclass
+class LogHistogram(LogDatum):
     values: np.ndarray
+
+
+class Logger:
+    def write(self, data: Union[List[LogDatum], LogDatum, dict]):
+        raise NotImplementedError
 
 
 class JAXBoardLoggerV2(Logger):
@@ -113,28 +91,29 @@ class JAXBoardLoggerV2(Logger):
         self._writer = mz.jaxboard.SummaryWriter(name, log_dir=self._log_dir)
         logging.info(f"{self._name} is logging to {(self._log_dir)}")
 
-    def write(self, data: Union[List[LoggerDatum], LoggerDatum]):
-        if isinstance(data, LoggerDatum):
-            data = [data]
+    def write(self, data: Union[List[LogDatum], LogDatum, dict]):
+        data_ready = LogDatum.from_any(data)
+
         now = time.time()
         if (now - self._time) > self._time_delta:
-            for datum in data:
+            for datum in data_ready:
                 self._write_now_datum(datum)
             self._time = now
+
         self._steps += 1
 
     def set_steps(self, steps):
         self._steps = steps
 
-    def _write_now_datum(self, datum: LoggerDatum):
+    def _write_now_datum(self, datum: LogDatum):
         prefixed_key = self._name + ":" + datum.tag
-        if isinstance(datum, LoggerDatumText):
+        if isinstance(datum, LogText):
             self._writer.text(tag=prefixed_key, textdata=datum.text, step=self._steps)
-        elif isinstance(datum, LoggerDatumImage):
+        elif isinstance(datum, LogImage):
             self._writer.image(tag=prefixed_key, image=datum.image, step=self._steps)
-        elif isinstance(datum, LoggerDatumScalar):
+        elif isinstance(datum, LogScalar):
             self._writer.scalar(tag=prefixed_key, value=datum.scalar, step=self._steps)
-        elif isinstance(datum, LoggerDatumHistogram):
+        elif isinstance(datum, LogHistogram):
             num_bins = 50
             self._writer.histogram(
                 tag=prefixed_key,
@@ -142,6 +121,8 @@ class JAXBoardLoggerV2(Logger):
                 bins=num_bins,
                 step=self._steps,
             )
+        else:
+            raise ValueError(f"Unsupported datum type: {type(datum)}")
 
     def close(self):
         r"""
@@ -152,3 +133,33 @@ class JAXBoardLoggerV2(Logger):
 
 
 JAXBoardLoggerActor = ray.remote(num_cpus=0)(JAXBoardLoggerV2)
+
+
+class TerminalLogger(Logger):
+    def __init__(self, name="logger", time_delta: float = 0.0):
+        self._name = name
+        self._time_delta = time_delta
+        self._time = time.time()
+        self._steps = 0
+
+    def write(self, data: Union[List[LogDatum], LogDatum, dict]):
+        data_ready = LogDatum.from_any(data)
+
+        # TODO: refactor if this time delta is used at least three times
+        now = time.time()
+        if (now - self._time) > self._time_delta:
+            for datum in data_ready:
+                self._write_now_datum(datum)
+            self._time = now
+
+        self._steps += 1
+
+    def _write_now_datum(self, datum: LogDatum):
+        prefixed_key = self._name + ":" + datum.tag
+        if isinstance(datum, LogText):
+            print(f"{prefixed_key} = {datum.text}")
+        elif isinstance(datum, LogScalar):
+            print(f"{prefixed_key} = {datum.scalar}")
+
+
+TerminalLoggerActor = ray.remote(num_cpus=0)(TerminalLogger)

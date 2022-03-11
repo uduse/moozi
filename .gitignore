@@ -166,3 +166,4 @@ cython_debug/
 prof/
 tensorboard_log/
 guild_runs/
+nohup.out

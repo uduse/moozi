@@ -10,7 +10,7 @@ import tree
 from jax import vmap
 
 import moozi as mz
-from moozi.logging import JAXBoardStepData
+from moozi.logging import LogScalar, LogHistogram
 from moozi.nn import RootFeatures, TransitionFeatures
 
 
@@ -66,23 +66,19 @@ class MuZeroLoss(LossFn):
             ],
             prefix_len=1,
         )  # assert same batch dim
-        new_states = []
+
         init_inf_features = RootFeatures(
             stacked_frames=batch.stacked_frames,
             # TODO: actually pass player
             player=jnp.ones((batch.stacked_frames.shape[0], 1)),
         )
-        network_output, new_state = model.root_inference(
-            params, state, init_inf_features, is_training=True
+        is_training = True
+        network_output, state = model.root_inference(
+            params, state, init_inf_features, is_training
         )
-        new_states.append(new_state)
 
         losses = {}
 
-        # TODO: this term should be zero, remote this
-        losses["loss:reward_0"] = vmap(mse)(
-            batch.last_reward.take(0, axis=1), network_output.reward
-        )
         losses["loss:value_0"] = vmap(mse)(
             batch.value.take(0, axis=1), network_output.value
         )
@@ -97,9 +93,8 @@ class MuZeroLoss(LossFn):
                 action=batch.action.take(0, axis=1),
             )
             network_output, state = model.trans_inference(
-                params, state, recurr_inf_features, is_training=True
+                params, state, recurr_inf_features, is_training
             )
-            new_states.append(state)
 
             losses[f"loss:reward_{str(i + 1)}"] = vmap(mse)(
                 batch.last_reward.take(i + 1, axis=1), network_output.reward
@@ -118,9 +113,8 @@ class MuZeroLoss(LossFn):
         loss = jnp.sum(jnp.concatenate(tree.flatten(losses)))
         losses["loss"] = loss
 
-        return loss, dict(
-            state=new_states,
-            step_data=JAXBoardStepData(
-                scalars=tree.map_structure(jnp.mean, losses), histograms={}
-            ),
-        )
+        step_data = {}
+        for key, value in tree.map_structure(jnp.mean, losses).items():
+            step_data[key] = value
+
+        return loss, dict(state=state, step_data=step_data)

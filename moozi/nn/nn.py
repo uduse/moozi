@@ -72,8 +72,10 @@ class NNModel:
     trans_inference_unbatched: Callable[
         [hk.Params, hk.State, TransitionFeatures, bool], Tuple[NNOutput, hk.State]
     ]
+    hk_transformed: hk.MultiTransformedWithState
 
     def with_jit(self):
+        # TODO: add chex assert max trace
         return NNModel(
             spec=copy.deepcopy(self.spec),
             init_params_and_state=self.init_params_and_state,
@@ -83,12 +85,13 @@ class NNModel:
                 self.root_inference_unbatched, static_argnums=3
             ),
             trans_inference_unbatched=jax.jit(
-                self.trans_inference_unbatched, static_argnames="is_training"
+                self.trans_inference_unbatched, static_argnums=3
             ),
+            hk_transformed=self.hk_transformed,
         )
 
 
-def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec):
+def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
     arch = functools.partial(architecture_cls, spec)
 
     def multi_transform_target():
@@ -101,7 +104,7 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec):
 
         return module_walk, (module.root_inference, module.trans_inference)
 
-    transformed = hk.multi_transform_with_state(multi_transform_target)
+    hk_transformed = hk.multi_transform_with_state(multi_transform_target)
 
     def init_params_and_state(rng):
         batch_dim = (1,)
@@ -116,15 +119,19 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec):
             action=jnp.array([0]),
         )
 
-        return transformed.init(rng, root_feats, trans_feats)
+        return hk_transformed.init(rng, root_feats, trans_feats)
 
     dummy_random_key = jax.random.PRNGKey(0)
 
     def root_inference(params, state, feats, is_training):
-        return transformed.apply[0](params, state, dummy_random_key, feats, is_training)
+        return hk_transformed.apply[0](
+            params, state, dummy_random_key, feats, is_training
+        )
 
     def trans_inference(params, state, feats, is_training):
-        return transformed.apply[1](params, state, dummy_random_key, feats, is_training)
+        return hk_transformed.apply[1](
+            params, state, dummy_random_key, feats, is_training
+        )
 
     def root_inference_unbatched(params, state, feats, is_training):
         out, state = root_inference(params, state, add_batch_dim(feats), is_training)
@@ -141,4 +148,5 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec):
         trans_inference,
         root_inference_unbatched,
         trans_inference_unbatched,
+        hk_transformed,
     )

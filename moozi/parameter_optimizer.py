@@ -141,6 +141,7 @@ class ParameterOptimizer:
         self._last_step_data = extra["step_data"]
 
     def get_params_and_state(self):
+        # TODO: use ray.put instead
         return (self.training_state.params, self.training_state.state)
 
     def get_model(self):
@@ -158,16 +159,6 @@ class ParameterOptimizer:
     def make_loggers(self, loggers_factory: Callable[[], List[mz.logging.Logger]]):
         self.loggers = loggers_factory()
         logging.info("setting loggers" + str(self.loggers))
-
-    # def _log_step_data(self, step_data):
-    #     # TODO: reduce step data logging frequency
-    #     for logger in self.loggers:
-    #         if isinstance(logger, mz.logging.JAXBoardLoggerV2):
-    #             logger.write(step_data)
-    #         elif logger == "print":
-    #             pprint(step_data.scalars)
-    #         else:
-    #             raise NotImplementedError(f"Logger type {type(logger)} not supported")
 
     def get_stats(self):
         return dict(num_updates=self._num_updates)

@@ -8,4 +8,6 @@ from .nn import (
     make_model,
 )
 
+from .naive import NaiveArchitecture
+from .mlp import MLPArchitecture, MLPSpec
 from .resnet import ResNetArchitecture, ResNetSpec

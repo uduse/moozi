@@ -2,16 +2,34 @@ import functools
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from moozi.core import PolicyFeed
 from moozi.nn import (
     NNSpec,
     ResNetArchitecture,
+    MLPArchitecture,
     RootFeatures,
     TransitionFeatures,
     make_model,
     NNModel,
     ResNetSpec,
 )
+from moozi.nn.mlp import MLPSpec
+from moozi.nn.naive import NaiveArchitecture
+
+
+@pytest.fixture(
+    scope="module",
+    params=[
+        (NaiveArchitecture, NNSpec),
+        (MLPArchitecture, MLPSpec),
+        (ResNetArchitecture, ResNetSpec),
+    ],
+    ids=["naive", "mlp", "resnet"],
+)
+def model(request):
+    arch_cls, spec_cls = request.param
+    return make_model(arch_cls, spec_cls())
 
 
 def _test_model_inference(model, params, state, policy_feed):

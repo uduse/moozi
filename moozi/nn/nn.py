@@ -45,6 +45,46 @@ class NNArchitecture(hk.Module):
         super().__init__()
         self.spec = spec
 
+    def _repr_net(self, stacked_frames, is_training):
+        raise NotImplementedError
+
+    def _pred_net(self, hidden_state, is_training):
+        raise NotImplementedError
+
+    def _dyna_net(self, hidden_state, action, is_training):
+        raise NotImplementedError
+
+    def root_inference(self, root_feats: RootFeatures, is_training: bool):
+        hidden_state = self._repr_net(root_feats.stacked_frames, is_training)
+        value, policy_logits = self._pred_net(hidden_state, is_training)
+        reward = jnp.zeros_like(value)
+
+        chex.assert_rank([value, reward, policy_logits, hidden_state], [2, 2, 2, 4])
+
+        return NNOutput(
+            value=value,
+            reward=reward,
+            policy_logits=policy_logits,
+            hidden_state=hidden_state,
+        )
+
+    def trans_inference(self, trans_feats: TransitionFeatures, is_training: bool):
+        next_hidden_state, reward = self._dyna_net(
+            trans_feats.hidden_state,
+            trans_feats.action,
+            is_training,
+        )
+        value, policy_logits = self._pred_net(next_hidden_state, is_training)
+        chex.assert_rank(
+            [value, reward, policy_logits, next_hidden_state], [2, 2, 2, 4]
+        )
+        return NNOutput(
+            value=value,
+            reward=reward,
+            policy_logits=policy_logits,
+            hidden_state=next_hidden_state,
+        )
+
 
 # TODO: use static_argnum instead of static_argnames
 # TODO: also use action histories as biased planes

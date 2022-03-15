@@ -13,16 +13,7 @@ from moozi.nn import (
 )
 
 
-@dataclass
-class MLPSpec(NNSpec):
-    pass
-
-
-class MLPArchitecture(NNArchitecture):
-    def __init__(self, spec: MLPSpec):
-        assert isinstance(spec, MLPSpec), "spec must be of type ResNetSpec"
-        super().__init__(spec)
-
+class NaiveArchitecture(NNArchitecture):
     def _repr_net(self, stacked_frames, is_training):
         pass
 

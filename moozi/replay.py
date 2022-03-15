@@ -120,9 +120,6 @@ class ReplayBuffer:
     def get_stats(self):
         return dict(size=self.size())
 
-    def get_logger_data(self) -> List[LogDatum]:
-        return [LogScalar("replay_buffer_size", self.size())]
-
 
 def make_target_from_traj(
     sample: TrajectorySample,

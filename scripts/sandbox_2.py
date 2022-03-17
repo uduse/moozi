@@ -30,12 +30,12 @@ def make_model_2(architecture_cls: Type[NNArchitecture], spec: NNSpec):
     def init_params_and_state(rng):
         batch_dim = (1,)
         root_feats = RootFeatures(
-            stacked_frames=np.ones(batch_dim + spec.stacked_frames_shape),
+            obs=np.ones(batch_dim + spec.obs_rows),
             player=np.array([0]),
         )
         trans_feats = TransitionFeatures(
             hidden_state=np.ones(
-                batch_dim + spec.stacked_frames_shape[:-1] + (spec.dim_repr,)
+                batch_dim + spec.obs_rows[:-1] + (spec.dim_repr,)
             ),
             action=np.array([0]),
         )
@@ -85,7 +85,7 @@ def print_state_info(state):
 # %%
 model = make_model_2(
     ResNetArchitecture,
-    ResNetSpec(stacked_frames_shape=(3, 3, 1), dim_repr=4, dim_action=3),
+    ResNetSpec(obs_rows=(3, 3, 1), dim_repr=4, dim_action=3),
 )
 
 
@@ -98,7 +98,7 @@ for i in range(2):
     out, state = model.root_inference_unbatched(
         params,
         state,
-        RootFeatures(stacked_frames=np.random.random((3, 3, 1)), player=np.array(0)),
+        RootFeatures(obs=np.random.random((3, 3, 1)), player=np.array(0)),
         is_training=True,
     )
     print_state_info(state)

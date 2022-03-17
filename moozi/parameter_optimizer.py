@@ -38,14 +38,14 @@ def _compute_prior_kl(
     orig_out, _ = model.root_inference(
         orig_params,
         state,
-        RootFeatures(stacked_frames=batch.stacked_frames, player=jnp.array(0)),
+        RootFeatures(obs=batch.stacked_frames, player=jnp.array(0)),
         is_training,
     )
     orig_logits = orig_out.policy_logits
     new_out, _ = model.root_inference(
         new_params,
         state,
-        RootFeatures(stacked_frames=batch.stacked_frames, player=jnp.array(0)),
+        RootFeatures(obs=batch.stacked_frames, player=jnp.array(0)),
         is_training,
     )
     new_logits = new_out.policy_logits

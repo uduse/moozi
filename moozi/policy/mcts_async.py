@@ -51,7 +51,7 @@ class MCTSAsync:
 
     async def get_root(self, feed: PolicyFeed) -> Node:
         root_feats = RootFeatures(
-            stacked_frames=feed.stacked_frames, player=np.array(feed.to_play)
+            obs=feed.stacked_frames, player=np.array(feed.to_play)
         )
         root_nn_output = await self.root_inf_fn(root_feats)
         root = Node(0, player=feed.to_play, name="s")

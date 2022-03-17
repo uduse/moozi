@@ -62,28 +62,45 @@ class ResNetArchitecture(NNArchitecture):
     def __init__(self, spec: ResNetSpec):
         assert isinstance(spec, ResNetSpec), "spec must be of type ResNetSpec"
         super().__init__(spec)
+        assert (spec.obs_rows, spec.obs_cols) == (
+            spec.repr_rows,
+            spec.repr_cols,
+        ), "currently only support same resolution, downsampling not implemented yet"
 
-    def _repr_net(self, stacked_frames, is_training):
-        height, width, channels = self.spec.stacked_frames_shape
+    def _repr_net(self, obs, is_training):
         tower_dim = self.spec.repr_tower_dim
-        chex.assert_shape(stacked_frames, (None, height, width, channels))
+        chex.assert_shape(
+            obs,
+            (None, self.spec.obs_rows, self.spec.obs_cols, self.spec.obs_channels),
+        )
 
-        hidden_state = ConvBlock(tower_dim)(stacked_frames, is_training)
-        chex.assert_shape(hidden_state, (None, height, width, tower_dim))
+        hidden_state = ConvBlock(tower_dim)(obs, is_training)
+        chex.assert_shape(
+            hidden_state, (None, self.spec.obs_rows, self.spec.obs_cols, tower_dim)
+        )
+
+        # TODO: downsampling should happen here, currently only support same resolution
 
         hidden_state = ResTower(
             num_blocks=self.spec.repr_tower_blocks,
         )(hidden_state, is_training)
-        chex.assert_shape(hidden_state, (None, height, width, tower_dim))
+        chex.assert_shape(
+            hidden_state, (None, self.spec.repr_rows, self.spec.repr_cols, tower_dim)
+        )
 
-        hidden_state = ConvBlock(self.spec.dim_repr)(hidden_state, is_training)
-        chex.assert_shape(hidden_state, (None, height, width, self.spec.dim_repr))
+        hidden_state = ConvBlock(self.spec.repr_channels)(hidden_state, is_training)
+        chex.assert_shape(
+            hidden_state,
+            (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
+        )
 
         return hidden_state
 
     def _pred_net(self, hidden_state, is_training):
-        height, width, channels = self.spec.stacked_frames_shape
-        chex.assert_shape(hidden_state, (None, height, width, self.spec.dim_repr))
+        chex.assert_shape(
+            hidden_state,
+            (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
+        )
 
         # pred trunk
         trunk_tower_dim = self.spec.pred_tower_dim
@@ -91,10 +108,16 @@ class ResNetArchitecture(NNArchitecture):
         pred_trunk = ResTower(
             num_blocks=self.spec.pred_tower_blocks,
         )(hidden_state, is_training)
-        chex.assert_shape(pred_trunk, (None, height, width, trunk_tower_dim))
+        chex.assert_shape(
+            pred_trunk,
+            (None, self.spec.repr_rows, self.spec.repr_cols, trunk_tower_dim),
+        )
 
         pred_trunk_flat = pred_trunk.reshape((pred_trunk.shape[0], -1))
-        chex.assert_shape(pred_trunk_flat, [None, height * width * trunk_tower_dim])
+        chex.assert_shape(
+            pred_trunk_flat,
+            [None, self.spec.repr_rows * self.spec.repr_cols * trunk_tower_dim],
+        )
 
         # pred value head
         value = hk.Linear(output_size=1, name="pred_v")(pred_trunk_flat)
@@ -112,23 +135,33 @@ class ResNetArchitecture(NNArchitecture):
         return value, policy_logits
 
     def _dyna_net(self, hidden_state, action, is_training):
-        height, width, channels = self.spec.stacked_frames_shape
-        chex.assert_shape(hidden_state, (None, height, width, self.spec.dim_repr))
+        chex.assert_shape(
+            hidden_state,
+            (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
+        )
 
         # make state-action representation
         # TODO: check correctness action one-hot encoding here
         chex.assert_shape(action, [None])
         action_one_hot = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
+        # broadcast to self.spec.repr_rows and self.spec.repr_cols dim
         action_one_hot = jnp.expand_dims(
             action_one_hot, axis=[1, 2]
-        )  # add height and width dim
-        action_one_hot = action_one_hot.tile((1, height, width, 1))
+        )  
+        action_one_hot = action_one_hot.tile(
+            (1, self.spec.repr_rows, self.spec.repr_cols, 1)
+        )
         chex.assert_equal_shape_prefix([hidden_state, action_one_hot], prefix_len=3)
 
         state_action_repr = jnp.concatenate((hidden_state, action_one_hot), axis=-1)
         chex.assert_shape(
             state_action_repr,
-            (None, height, width, self.spec.dim_repr + self.spec.dim_action),
+            (
+                None,
+                self.spec.repr_rows,
+                self.spec.repr_cols,
+                self.spec.repr_channels + self.spec.dim_action,
+            ),
         )
 
         # dyna trunk
@@ -136,16 +169,22 @@ class ResNetArchitecture(NNArchitecture):
         dyna_trunk = ResTower(num_blocks=self.spec.dyna_tower_blocks)(
             dyna_trunk, is_training
         )
-        chex.assert_shape(dyna_trunk, (None, height, width, self.spec.dyna_tower_dim))
+        chex.assert_shape(
+            dyna_trunk,
+            (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.dyna_tower_dim),
+        )
 
         # dyna hidden state head
         next_hidden_state = ResTower(
             num_blocks=self.spec.dyna_state_blocks,
         )(dyna_trunk, is_training)
-        next_hidden_state = ConvBlock(self.spec.dim_repr)(
+        next_hidden_state = ConvBlock(self.spec.repr_channels)(
             next_hidden_state, is_training
         )
-        chex.assert_shape(next_hidden_state, (None, height, width, self.spec.dim_repr))
+        chex.assert_shape(
+            next_hidden_state,
+            (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
+        )
 
         # dyna reward head
         dyna_trunk_flat = dyna_trunk.reshape((dyna_trunk.shape[0], -1))
@@ -153,34 +192,3 @@ class ResNetArchitecture(NNArchitecture):
         chex.assert_shape(reward, (None, 1))
 
         return next_hidden_state, reward
-
-    def root_inference(self, root_feats: RootFeatures, is_training: bool):
-        hidden_state = self._repr_net(root_feats.stacked_frames, is_training)
-        value, policy_logits = self._pred_net(hidden_state, is_training)
-        reward = jnp.zeros_like(value)
-
-        chex.assert_rank([value, reward, policy_logits, hidden_state], [2, 2, 2, 4])
-
-        return NNOutput(
-            value=value,
-            reward=reward,
-            policy_logits=policy_logits,
-            hidden_state=hidden_state,
-        )
-
-    def trans_inference(self, trans_feats: TransitionFeatures, is_training: bool):
-        next_hidden_state, reward = self._dyna_net(
-            trans_feats.hidden_state,
-            trans_feats.action,
-            is_training,
-        )
-        value, policy_logits = self._pred_net(next_hidden_state, is_training)
-        chex.assert_rank(
-            [value, reward, policy_logits, next_hidden_state], [2, 2, 2, 4]
-        )
-        return NNOutput(
-            value=value,
-            reward=reward,
-            policy_logits=policy_logits,
-            hidden_state=next_hidden_state,
-        )

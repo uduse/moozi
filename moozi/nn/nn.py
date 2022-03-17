@@ -11,27 +11,35 @@ from acme.jax.utils import add_batch_dim, squeeze_batch_dim
 import tree
 
 # NOTE: NamedTuple are used for data structures that need to be passed to jax.jit functions
+# TODO: could be updated using dataclass registry https://github.com/google/jax/issues/2371
+# NOTE: `?` here means the batch size is optional
 class NNOutput(NamedTuple):
     value: jnp.ndarray  # (batch_size?, 1)
     reward: jnp.ndarray  # (batch_size?, 1)
     policy_logits: jnp.ndarray  # (batch_size?, num_actions)
-    hidden_state: jnp.ndarray  # (batch_size?, height, width, dim_repr)
+    hidden_state: jnp.ndarray  # (batch_size?, repr_rows, repr_cols, repr_channels)
 
 
 class RootFeatures(NamedTuple):
-    stacked_frames: jnp.ndarray  # (batch_size?, height, width, channels)
+    obs: jnp.ndarray  # (batch_size?, obs_rows, obs_cols, obs_channels)
     player: jnp.ndarray  # (batch_size?, 1)
 
 
 class TransitionFeatures(NamedTuple):
-    hidden_state: jnp.ndarray  # (batch_size?, height, width, dim_repr)
+    hidden_state: jnp.ndarray  # (batch_size?, repr_rows, repr_cols, repr_channels)
     action: jnp.ndarray  # (batch_size?, 1)
 
 
 @dataclass
 class NNSpec:
-    stacked_frames_shape: tuple
-    dim_repr: int
+    obs_rows: int
+    obs_cols: int
+    obs_channels: int
+
+    repr_rows: int
+    repr_cols: int
+    repr_channels: int
+
     dim_action: int
 
 
@@ -55,7 +63,7 @@ class NNArchitecture(hk.Module):
         raise NotImplementedError
 
     def root_inference(self, root_feats: RootFeatures, is_training: bool):
-        hidden_state = self._repr_net(root_feats.stacked_frames, is_training)
+        hidden_state = self._repr_net(root_feats.obs, is_training)
         value, policy_logits = self._pred_net(hidden_state, is_training)
         reward = jnp.zeros_like(value)
 
@@ -86,8 +94,7 @@ class NNArchitecture(hk.Module):
         )
 
 
-# TODO: use static_argnum instead of static_argnames
-# TODO: also use action histories as biased planes
+# TODO: also add action histories as bias planes
 @dataclass
 class NNModel:
     """
@@ -147,20 +154,23 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
     hk_transformed = hk.multi_transform_with_state(multi_transform_target)
 
     def init_params_and_state(rng):
-        batch_dim = (1,)
+        batch = 1
+        obs_shape = (batch, spec.obs_rows, spec.obs_cols, spec.obs_channels)
         root_feats = RootFeatures(
-            stacked_frames=jnp.ones(batch_dim + spec.stacked_frames_shape),
-            player=jnp.array([0]),
+            obs=jnp.ones(obs_shape),
+            player=jnp.ones((batch,)),
         )
+        hidden_state_shape = (batch, spec.repr_rows, spec.repr_cols, spec.repr_channels)
         trans_feats = TransitionFeatures(
-            hidden_state=jnp.ones(
-                batch_dim + spec.stacked_frames_shape[:-1] + (spec.dim_repr,)
-            ),
-            action=jnp.array([0]),
+            hidden_state=jnp.ones(hidden_state_shape),
+            action=jnp.ones((batch,)),
         )
 
         return hk_transformed.init(rng, root_feats, trans_feats)
 
+    # workaround for https://github.com/deepmind/dm-haiku/issues/325#event-6253407164
+    # TODO: follow up update for the issue and make changes accordingly
+    # TODO: or, alternatively, actually use random key so we could use things like dropouts
     dummy_random_key = jax.random.PRNGKey(0)
 
     def root_inference(params, state, feats, is_training):

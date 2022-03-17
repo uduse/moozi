@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import pprint
 from typing import Optional, Type
 
@@ -16,7 +16,7 @@ class Config:
     discount: float = 1.0
 
     nn_arch_cls: Type[NNArchitecture] = ResNetArchitecture
-    nn_spec: NNSpec = ResNetSpec((1, 1), 1, 1)
+    nn_spec: NNSpec = field(init=False)
 
     weight_decay: float = 1e-4
 

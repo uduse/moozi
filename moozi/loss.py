@@ -68,7 +68,7 @@ class MuZeroLoss(LossFn):
         )  # assert same batch dim
 
         init_inf_features = RootFeatures(
-            stacked_frames=batch.stacked_frames,
+            obs=batch.stacked_frames,
             # TODO: actually pass player
             player=jnp.ones((batch.stacked_frames.shape[0], 1)),
         )

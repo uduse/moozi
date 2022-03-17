@@ -48,8 +48,10 @@ from moozi.utils import WallTimer
 print(ray.init(include_dashboard=True))
 
 # %%
+game_num_rows = 6
+game_num_cols = 6
 config = Config()
-config.env = f"catch(columns=6,rows=6)"
+config.env = f"catch(rows={game_num_rows},columns={game_num_cols})"
 config.batch_size = 128
 config.discount = 0.99
 config.num_unroll_steps = 2
@@ -66,13 +68,18 @@ config.weight_decay = 5e-2
 config.nn_arch_cls = mz.nn.ResNetArchitecture
 
 env_spec = mz.make_env_spec(config.env)
-frame_shape = env_spec.observations.observation.shape
-stacked_frames_shape = frame_shape[:-1] + (frame_shape[-1] * config.num_stacked_frames,)
+single_frame_shape = env_spec.observations.observation.shape
+obs_channels = single_frame_shape[-1] * config.num_stacked_frames
+repr_channels = 8
 dim_action = env_spec.actions.num_values
-dim_repr = 8
+
 config.nn_spec = mz.nn.ResNetSpec(
-    stacked_frames_shape=stacked_frames_shape,
-    dim_repr=dim_repr,
+    obs_rows=game_num_rows,
+    obs_cols=game_num_cols,
+    obs_channels=obs_channels,
+    repr_rows=game_num_rows,
+    repr_cols=game_num_cols,
+    repr_channels=repr_channels,
     dim_action=dim_action,
     repr_tower_blocks=12,
     repr_tower_dim=12,

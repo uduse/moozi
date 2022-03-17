@@ -14,6 +14,9 @@ from acme.jax.variable_utils import VariableClient
 
 
 from moozi.core import PolicyFeed, make_catch
+import os
+
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 
 def update_jax_config():
@@ -23,7 +26,8 @@ def update_jax_config():
     print("conftest JAX: platform cpu")
 
 
-update_jax_config()
+# NOTE: uncomment line to make easier to debug JAX
+# update_jax_config()
 
 
 @pytest.fixture
@@ -31,33 +35,38 @@ def env() -> Environment:
     return make_catch()[0]
 
 
-@pytest.fixture
-def env_spec(env):
+@pytest.fixture(scope="session")
+def env_spec():
     return make_catch()[1]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def num_stacked_frames():
     return 2
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def num_unroll_steps() -> int:
     return 2
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def model(env_spec, num_stacked_frames):
+
     dim_action = env_spec.actions.num_values
-    frame_shape = env_spec.observations.observation.shape
-    stacked_frames_shape = frame_shape[:-1] + (num_stacked_frames * frame_shape[-1],)
-    nn_spec = mz.nn.ResNetSpec(
-        stacked_frames_shape=stacked_frames_shape,
-        dim_repr=2,
+    single_frame_shape = env_spec.observations.observation.shape
+    obs_rows, obs_cols = single_frame_shape[0:2]
+    obs_channels = num_stacked_frames * single_frame_shape[-1]
+    nn_spec = mz.nn.NNSpec(
+        obs_rows=obs_rows,
+        obs_cols=obs_cols,
+        obs_channels=obs_channels,
+        repr_rows=obs_rows,
+        repr_cols=obs_cols,
+        repr_channels=2,
         dim_action=dim_action,
-        # use default values for other parameters
     )
-    return mz.nn.make_model(mz.nn.ResNetArchitecture, nn_spec)
+    return mz.nn.make_model(mz.nn.NaiveArchitecture, nn_spec)
 
 
 @pytest.fixture

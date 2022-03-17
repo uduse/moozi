@@ -20,5 +20,4 @@ rlax @ git+git://github.com/deepmind/rlax.git@3566d85af6d41abba82c20828e1e50f05b
 tensorflow-datasets==4.3.0
 tf-estimator-nightly==2.6.0.dev2021061601
 tf-nightly==2.6.0.dev20210621
-tfp-nightly==0.14.0.dev20210621
 trfl==1.1.0

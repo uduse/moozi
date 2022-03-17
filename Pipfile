@@ -46,6 +46,10 @@ attrs = "*"
 pillow = "*"
 graphviz = "*"
 loguru = "*"
+tensorflow-probability = "==0.13.0"
+setuptools = "==59.5.0"
+pytest-asyncio = "*"
+sphinx = "*"
 
 [dev-packages]
 mypy = "*"

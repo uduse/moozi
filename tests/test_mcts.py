@@ -36,14 +36,14 @@ def test_node():
 async def test_async_mcts_with_regular_inf_fns(
     env_spec, model: NNModel, params, state, policy_feed: PolicyFeed
 ):
+    is_training = False
+
     def root_inf_fn(feats):
-        out, _ = model.root_inference_unbatched(params, state, feats, is_training=False)
+        out, _ = model.root_inference_unbatched(params, state, feats, is_training)
         return out
 
     def trans_inf_fn(feats):
-        out, _ = model.trans_inference_unbatched(
-            params, state, feats, is_training=False
-        )
+        out, _ = model.trans_inference_unbatched(params, state, feats, is_training)
         return out
 
     mcts_async = MCTSAsync(
@@ -59,14 +59,14 @@ async def test_async_mcts_with_regular_inf_fns(
 async def test_async_mcts_with_async_inf_fns(
     env_spec, model: NNModel, params, state, policy_feed: PolicyFeed
 ):
+    is_training = False
+
     async def root_inf_fn(feats):
-        out, _ = model.root_inference_unbatched(params, state, feats, is_training=False)
+        out, _ = model.root_inference_unbatched(params, state, feats, is_training)
         return out
 
     async def trans_inf_fn(feats):
-        out, _ = model.trans_inference_unbatched(
-            params, state, feats, is_training=False
-        )
+        out, _ = model.trans_inference_unbatched(params, state, feats, is_training)
         return out
 
     mcts_async = MCTSAsync(
@@ -88,13 +88,13 @@ async def test_async_mcts_with_ray(
     @dataclass
     class SimpleInferenceServer:
         _root_inf = functools.partial(
-            jax.jit(model.root_inference_unbatched, static_argnames="is_training"),
+            jax.jit(model.root_inference_unbatched, static_argnums=3),
             params,
             state,
             is_training=True,
         )
         _trans_inf = functools.partial(
-            jax.jit(model.trans_inference_unbatched, static_argnames="is_training"),
+            jax.jit(model.trans_inference_unbatched, static_argnums=3),
             params,
             state,
             is_training=True,
@@ -127,10 +127,10 @@ async def test_async_mcts_with_ray(
 #     @dataclass
 #     class SimpleInferenceServer:
 #         _root_inf: Callable = functools.partial(
-#             jax.jit(model.root_inference), params, state, is_training=False
+#             jax.jit(model.root_inference), params, state, is_training
 #         )
 #         _trans_inf: Callable = functools.partial(
-#             jax.jit(model.trans_inference), params, state, is_training=False
+#             jax.jit(model.trans_inference), params, state, is_training
 #         )
 
 #         def root_inf(self, feats):

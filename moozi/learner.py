@@ -7,11 +7,11 @@ import chex
 import jax
 import jax.numpy as jnp
 import optax
-import rlax
 
 import moozi as mz
 
 
+# TODO: move to moozi.core
 class TrainingState(typing.NamedTuple):
     params: hk.Params
     target_params: hk.Params

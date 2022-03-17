@@ -50,6 +50,8 @@ print(ray.init(include_dashboard=True))
 # %%
 game_num_rows = 6
 game_num_cols = 6
+num_epochs = 50
+
 config = Config()
 config.env = f"catch(rows={game_num_rows},columns={game_num_cols})"
 config.batch_size = 128
@@ -59,7 +61,7 @@ config.num_td_steps = 100
 config.num_stacked_frames = 1
 config.lr = 3e-3
 config.replay_buffer_size = 100000
-config.num_epochs = 50
+config.num_epochs = num_epochs
 config.num_ticks_per_epoch = 12
 config.num_updates_per_samples_added = 30
 config.num_rollout_workers = 5

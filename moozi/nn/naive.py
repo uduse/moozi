@@ -52,4 +52,5 @@ class NaiveArchitecture(NNArchitecture):
         hidden_state = hidden_state.reshape(
             (-1, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels)
         )
-        return hidden_state
+        reward = hk.Linear(output_size=1)(state_action_repr)
+        return hidden_state, reward

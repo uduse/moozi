@@ -23,11 +23,13 @@ class MLPArchitecture(NNArchitecture):
         assert isinstance(spec, MLPSpec), "spec must be of type ResNetSpec"
         super().__init__(spec)
 
-    def _repr_net(self, stacked_frames, is_training):
-        pass
+    def _repr_net(self, stacked_frames: jnp.ndarray, is_training: bool):
+        raise NotImplementedError
 
-    def _pred_net(self, hidden_state, is_training):
-        pass
+    def _pred_net(self, hidden_state: jnp.ndarray, is_training: bool):
+        raise NotImplementedError
 
-    def _dyna_net(self, hidden_state, action, is_training):
-        pass
+    def _dyna_net(
+        self, hidden_state: jnp.ndarray, action: jnp.ndarray, is_training: bool
+    ):
+        raise NotImplementedError

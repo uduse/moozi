@@ -60,21 +60,22 @@ class ResTower(hk.Module):
 
 class ResNetArchitecture(NNArchitecture):
     def __init__(self, spec: ResNetSpec):
-        assert isinstance(spec, ResNetSpec), "spec must be of type ResNetSpec"
         super().__init__(spec)
+        assert isinstance(self.spec, ResNetSpec), "spec must be of type ResNetSpec"
         assert (spec.obs_rows, spec.obs_cols) == (
             spec.repr_rows,
             spec.repr_cols,
         ), "currently only support same resolution, downsampling not implemented yet"
+        self.spec: ResNetSpec
 
-    def _repr_net(self, obs, is_training):
+    def _repr_net(self, stacked_frames: jnp.ndarray, is_training: bool):
         tower_dim = self.spec.repr_tower_dim
         chex.assert_shape(
-            obs,
+            stacked_frames,
             (None, self.spec.obs_rows, self.spec.obs_cols, self.spec.obs_channels),
         )
 
-        hidden_state = ConvBlock(tower_dim)(obs, is_training)
+        hidden_state = ConvBlock(tower_dim)(stacked_frames, is_training)
         chex.assert_shape(
             hidden_state, (None, self.spec.obs_rows, self.spec.obs_cols, tower_dim)
         )
@@ -145,9 +146,7 @@ class ResNetArchitecture(NNArchitecture):
         chex.assert_shape(action, [None])
         action_one_hot = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
         # broadcast to self.spec.repr_rows and self.spec.repr_cols dim
-        action_one_hot = jnp.expand_dims(
-            action_one_hot, axis=[1, 2]
-        )  
+        action_one_hot = jnp.expand_dims(action_one_hot, axis=[1, 2])
         action_one_hot = action_one_hot.tile(
             (1, self.spec.repr_rows, self.spec.repr_cols, 1)
         )

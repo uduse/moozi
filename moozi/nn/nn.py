@@ -1,4 +1,3 @@
-import copy
 import functools
 from dataclasses import dataclass
 from typing import Callable, NamedTuple, Tuple, Union, Type
@@ -12,26 +11,48 @@ import tree
 
 # NOTE: NamedTuple are used for data structures that need to be passed to jax.jit functions
 # TODO: could be updated using dataclass registry https://github.com/google/jax/issues/2371
-# NOTE: `?` here means the batch size is optional
 class NNOutput(NamedTuple):
-    value: jnp.ndarray  # (batch_size?, 1)
-    reward: jnp.ndarray  # (batch_size?, 1)
-    policy_logits: jnp.ndarray  # (batch_size?, num_actions)
-    hidden_state: jnp.ndarray  # (batch_size?, repr_rows, repr_cols, repr_channels)
+    """Neural network output structure.
+
+    This is the return type of both :meth:`~moozi.nn.nn.NNArchitecture.root_inference` and
+    :meth:`~moozi.nn.nn.NNArchitecture.trans_inference`.
+
+    """
+
+    value: jnp.ndarray  #: (batch_size?, 1)
+    reward: jnp.ndarray  #: (batch_size?, 1)
+    policy_logits: jnp.ndarray  #: (batch_size?, num_actions)
+    hidden_state: jnp.ndarray  #: (batch_size?, repr_rows, repr_cols, repr_channels)
 
 
 class RootFeatures(NamedTuple):
-    obs: jnp.ndarray  # (batch_size?, obs_rows, obs_cols, obs_channels)
-    player: jnp.ndarray  # (batch_size?, 1)
+    """Features used in :any:`root_inference`."""
+
+    obs: jnp.ndarray  #: (batch_size?, obs_rows, obs_cols, obs_channels)
+    player: jnp.ndarray  #: (batch_size?, 1)
 
 
 class TransitionFeatures(NamedTuple):
-    hidden_state: jnp.ndarray  # (batch_size?, repr_rows, repr_cols, repr_channels)
-    action: jnp.ndarray  # (batch_size?, 1)
+    """Features used in :any:`trans_inference`."""
+
+    hidden_state: jnp.ndarray  #: (batch_size?, repr_rows, repr_cols, repr_channels)
+    action: jnp.ndarray  #: (batch_size?, 1)
 
 
 @dataclass
 class NNSpec:
+    """Specification of a neural network architecture.
+
+    :any:`NNArchitecture` defines the general structure of a neural network.
+    However, this is insufficient to define the exact structure of the neural network since different environments have
+    differently shaped observations. Additionally, we would also like to tweak the neural network such as changing the
+    number of repeating layers. As a result, we need :any:`NNSpec` to provide such additional information. Together, we
+    could build a concrete neural network.
+
+    This base class includes essential information about the shapes of inputs and outputs of the three MuZero functions.
+    Other architecture-specific information could be defined in the derived classes.
+    """
+
     obs_rows: int
     obs_cols: int
     obs_channels: int
@@ -45,24 +66,29 @@ class NNSpec:
 
 class NNArchitecture(hk.Module):
     def __init__(self, spec: NNSpec):
-        """Partiallly complete neural network model that defines the basic structure of the model.
+        """Partiallly complete neural network model that defines the basic structure of a neural network.
 
-        :param spec: more specification that completes the model
-        :type spec: NNSpec
+        Also specifies the flow of :any:`root_infercence` and :any:`trans_inference`.
+        Base classes should not override these methods.
+
         """
         super().__init__()
         self.spec = spec
 
-    def _repr_net(self, stacked_frames, is_training):
+    def _repr_net(self, stacked_frames: jnp.ndarray, is_training: bool):
+        # TODO: add player info
         raise NotImplementedError
 
-    def _pred_net(self, hidden_state, is_training):
+    def _pred_net(self, hidden_state: jnp.ndarray, is_training: bool):
         raise NotImplementedError
 
-    def _dyna_net(self, hidden_state, action, is_training):
+    def _dyna_net(
+        self, hidden_state: jnp.ndarray, action: jnp.ndarray, is_training: bool
+    ):
         raise NotImplementedError
 
     def root_inference(self, root_feats: RootFeatures, is_training: bool):
+        """Uses the representation function and the prediction function."""
         hidden_state = self._repr_net(root_feats.obs, is_training)
         value, policy_logits = self._pred_net(hidden_state, is_training)
         reward = jnp.zeros_like(value)
@@ -77,6 +103,7 @@ class NNArchitecture(hk.Module):
         )
 
     def trans_inference(self, trans_feats: TransitionFeatures, is_training: bool):
+        """Uses the dynamics function and the prediction function."""
         next_hidden_state, reward = self._dyna_net(
             trans_feats.hidden_state,
             trans_feats.action,
@@ -98,33 +125,43 @@ class NNArchitecture(hk.Module):
 @dataclass
 class NNModel:
     """
-    Complete neural network model that's ready for initiailization and inference.
+    A complete neural network model defined by a collection of pure functions.
 
-    Note that inference functions could be jitted, but need to pass with
-    `jax.jit(..., static_argnames="is_training")` to make `is_training` static,
-    or alternatively `jax.jit(..., static_argnums=3")`.
+    This class should not be constructed directly. Instead, use :any:`make_model`.
     """
 
-    spec: NNSpec
-    init_params_and_state: Callable
+    #: initialize Haiku parameters and state
+    init_params_and_state: Callable[[jax.random.KeyArray], Tuple[hk.Params, hk.State]]
+
+    #: representation function + prediction function
     root_inference: Callable[
         [hk.Params, hk.State, RootFeatures, bool], Tuple[NNOutput, hk.State]
     ]
+
+    #: dynamics function + prediction function
     trans_inference: Callable[
         [hk.Params, hk.State, TransitionFeatures, bool], Tuple[NNOutput, hk.State]
     ]
+
+    #: unbatched version of root_inference
     root_inference_unbatched: Callable[
         [hk.Params, hk.State, RootFeatures, bool], Tuple[NNOutput, hk.State]
     ]
+
+    #: unbatched version of trans_inference
     trans_inference_unbatched: Callable[
         [hk.Params, hk.State, TransitionFeatures, bool], Tuple[NNOutput, hk.State]
     ]
+
+    # TODO: remove hk_transformed here in the future, currently here for debugging purposes
     hk_transformed: hk.MultiTransformedWithState
 
-    def with_jit(self):
+    def with_jit(self) -> "NNModel":
+        """Return a new model with inference functions passed through `jax.jit`."""
+
         # TODO: add chex assert max trace
         return NNModel(
-            spec=copy.deepcopy(self.spec),
+            # spec=copy.deepcopy(self.spec),
             init_params_and_state=self.init_params_and_state,
             root_inference=jax.jit(self.root_inference, static_argnums=3),
             trans_inference=jax.jit(self.trans_inference, static_argnums=3),
@@ -139,6 +176,8 @@ class NNModel:
 
 
 def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
+    """Make a concrete neural network model based on the architecture class and the specification."""
+
     arch = functools.partial(architecture_cls, spec)
 
     def multi_transform_target():
@@ -192,7 +231,6 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
         return squeeze_batch_dim(out), state
 
     return NNModel(
-        spec,
         init_params_and_state,
         root_inference,
         trans_inference,

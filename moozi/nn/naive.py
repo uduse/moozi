@@ -5,20 +5,16 @@ from dataclasses import dataclass
 import haiku as hk
 
 from moozi.nn import (
-    NNOutput,
-    NNSpec,
-    RootFeatures,
-    TransitionFeatures,
-    NNArchitecture,
+    NNArchitecture
 )
 
 
 class NaiveArchitecture(NNArchitecture):
-    def _repr_net(self, obs, is_training):
-        obs_flat = hk.Flatten()(obs)
+    def _repr_net(self, stacked_frames, is_training):
+        frames_flat = hk.Flatten()(stacked_frames)
         hidden_state = hk.Linear(
             self.spec.repr_rows * self.spec.repr_cols * self.spec.repr_channels
-        )(obs_flat)
+        )(frames_flat)
         hidden_state = hidden_state.reshape(
             (-1, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels)
         )
@@ -37,9 +33,7 @@ class NaiveArchitecture(NNArchitecture):
         action_one_hot = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
 
         # broadcast to self.spec.repr_rows and self.spec.repr_cols dim
-        action_one_hot = jnp.expand_dims(
-            action_one_hot, axis=[1, 2]
-        )
+        action_one_hot = jnp.expand_dims(action_one_hot, axis=[1, 2])
         action_one_hot = action_one_hot.tile(
             (1, self.spec.repr_rows, self.spec.repr_cols, 1)
         )

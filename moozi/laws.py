@@ -1,17 +1,14 @@
-import jax.config
-jax.config.update('jax_enable_x64', True)
-
 import collections
-
 from dataclasses import dataclass, field
 from typing import Any, Deque, List, Optional, Union
 
 import dm_env
-from jax._src.numpy.lax_numpy import isin
 import numpy as np
 from absl import logging
 from acme.utils.tree_utils import stack_sequence_fields
-from moozi.core import link, PolicyFeed
+from jax._src.numpy.lax_numpy import isin
+
+from moozi.core import PolicyFeed, link
 from moozi.core.types import BASE_PLAYER
 from moozi.replay import StepSample
 
@@ -60,6 +57,10 @@ class FrameStacker:
             return obs
         elif isinstance(obs, list):
             return obs[self.player]
+        else:
+            raise ValueError(
+                f"obs must be np.ndarray or list of np.ndarray, got {type(obs)}"
+            )
 
 
 # @link
@@ -111,18 +112,18 @@ def output_last_step_reward(is_last, reward, output_buffer):
 
 @link
 @dataclass
-class EnvironmentLaw:
-    env_state: dm_env.Environment
+class OpenSpielEnvLaw:
+    env: dm_env.Environment
     num_players: int = 1
 
     def __call__(self, obs, is_last, action: int):
         if obs is None or is_last:
-            timestep = self.env_state.reset()
+            timestep = self.env.reset()
         else:
-            timestep = self.env_state.step([action])
+            timestep = self.env.step([action])
 
         try:
-            to_play = self.env_state.current_player
+            to_play = self.env.current_player
         except AttributeError:
             to_play = 0
 
@@ -168,6 +169,41 @@ class EnvironmentLaw:
         elif isinstance(timestep.reward, np.ndarray):
             assert len(timestep.reward) == num_players
             return timestep.reward[BASE_PLAYER]
+
+
+@dataclass
+class AtariEnvLaw:
+    env: dm_env.Environment
+
+    def __call__(self, is_first, is_last, action: int):
+        if is_first:
+            if hasattr(self.env, "video_recorder"):
+                self.env.video_recorder.enabled = True
+        elif is_last:
+            timestep = self.env.step(action)
+        else:
+            timestep = self.env.reset()
+            if hasattr(self.env, "video_recorder"):
+                self.env.video_recorder.close()
+
+        if timestep.reward is None:
+            reward = 0.0
+        else:
+            reward = timestep.reward
+
+        legal_actions_mask = np.ones(self.env.action_space.n, dtype=np.float32)
+
+        if hasattr(self.env, "video_recorder"):
+            self.env.video_recorder.capture_frame()
+
+        return dict(
+            obs=timestep.observation,
+            is_first=timestep.first(),
+            is_last=timestep.last(),
+            to_play=0,
+            reward=reward,
+            legal_actions_mask=legal_actions_mask,
+        )
 
 
 @link

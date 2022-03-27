@@ -149,15 +149,6 @@ class Node(object):
             self.children[a].prior = self.children[a].prior * (1 - frac) + n * frac
 
     def backpropagate(self, value: float, discount: float):
-        """[summary]
-
-        [extended_summary]
-
-        :param value: value based on the BASE_PLAYER's perspective
-        :type value: float
-        :param discount: [description]
-        :type discount: float
-        """
         node = self
         while True:
             node.value_sum += value
@@ -196,9 +187,9 @@ class Node(object):
 
     @staticmethod
     def ucb_score(parent: "Node", child: "Node", discount: float = 1.0) -> float:
+        # TODO: obviously these constants here should be a parameter
         pb_c_base = 19652.0
         pb_c_init = 1.25
-        # TODO: obviously this `discount` should be a parameter
 
         pb_c = np.log((parent.visit_count + pb_c_base + 1) / pb_c_base) + pb_c_init
         pb_c *= np.sqrt(parent.visit_count) / (child.visit_count + 1)

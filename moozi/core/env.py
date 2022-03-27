@@ -1,7 +1,18 @@
 import functools
+from loguru import logger
+import uuid
+import gym
+from gym.wrappers.monitoring.video_recorder import VideoRecorder
 import tree
 import dm_env
-from acme.wrappers import OpenSpielWrapper, SinglePrecisionWrapper, EnvironmentWrapper
+from acme.wrappers import (
+    OpenSpielWrapper,
+    SinglePrecisionWrapper,
+    EnvironmentWrapper,
+    AtariWrapper,
+    GymAtariAdapter,
+    wrap_all,
+)
 from acme.specs import make_environment_spec
 import open_spiel
 from absl import logging
@@ -64,10 +75,19 @@ def make_catch(num_rows=5, num_cols=5):
 
 
 def make_tic_tac_toe():
+    prev_verbosity = logging.get_verbosity()
+    logging.set_verbosity(logging.WARNING)
+
+    def transform_obs(obs):
+        return obs.reshape((3, 3, 3)).swapaxes(0, 2)
+
     raw_env = open_spiel.python.rl_environment.Environment(f"tic_tac_toe")
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
+    env = TransformObservationWrapper(env, transform_obs)
     env_spec = make_environment_spec(env)
+
+    logging.set_verbosity(prev_verbosity)
     return env, env_spec
 
 
@@ -83,13 +103,49 @@ def make_openspiel_env_and_spec(str):
     return env, env_spec
 
 
+def make_atari_env(
+    level: str = "PongNoFrameskip-v4",
+) -> dm_env.Environment:
+    """Loads the Atari environment."""
+    env = gym.make(level, full_action_space=True)
+    fname = f"tmp/{str(uuid.uuid4())}.mp4"
+    video_recorder = VideoRecorder(env, fname, enabled=False)
+    logger.info(f"Recording to {fname}")
+    env.video_recorder = video_recorder
+
+    # Always use episodes of 108k steps as this is standard, matching the paper.
+    max_episode_len = 108000
+    wrapper_list = [
+        GymAtariAdapter,
+        functools.partial(
+            AtariWrapper,
+            max_episode_len=max_episode_len,
+            num_stacked_frames=1,
+        ),
+    ]
+    wrapper_list.append(SinglePrecisionWrapper)
+
+    return wrap_all(env, wrapper_list)
+
+
 def make_env_and_spec(str):
+    try:
+        import gym
+        ids = [x.id for x in gym.envs.registry.all()]
+        if str in ids:
+            env = make_atari_env(str)
+            return env, make_environment_spec(env)
+    except:
+        pass
+
     try:
         env, env_spec = make_openspiel_env_and_spec(str)
         if env.name == "catch":
             game_params = env.environment._environment._game.get_parameters()
             num_rows, num_cols = game_params["rows"], game_params["columns"]
             return make_catch(num_rows=num_rows, num_cols=num_cols)
+        elif env.name == "tic_tac_toe":
+            return make_tic_tac_toe()
         else:
             return env, env_spec
     except:

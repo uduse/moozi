@@ -62,26 +62,58 @@ class ResNetArchitecture(NNArchitecture):
     def __init__(self, spec: ResNetSpec):
         super().__init__(spec)
         assert isinstance(self.spec, ResNetSpec), "spec must be of type ResNetSpec"
-        assert (spec.obs_rows, spec.obs_cols) == (
-            spec.repr_rows,
-            spec.repr_cols,
-        ), "currently only support same resolution, downsampling not implemented yet"
         self.spec: ResNetSpec
 
     def _repr_net(self, stacked_frames: jnp.ndarray, is_training: bool):
+        """
+
+        Downsampling described in the paper:
+
+            Specifically, starting with an input observation of resolution 96 x 96 and 128 planes
+            (32 history frames of 3 colour channels each, concatenated with the corresponding 32
+            actions broadcast to planes), we downsample as follows:
+
+            - 1 convolution with stride 2 and 128 output planes, output resolution 48 x 48
+            - 2 residual blocks with 128 planes
+            - 1 convolution with stride 2 and 256 output planes, output resolution 24 x 24
+            - 3 residual blocks with 256 planes
+            - average pooling with stride 2, output resolution 12 x 12
+            - 3 residual blocks with 256 planes
+            - average pooling with stride 2, output resolution 6 x 6.
+
+            The kernel size is 3 x 3 for all operations.
+
+        """
         tower_dim = self.spec.repr_tower_dim
         chex.assert_shape(
             stacked_frames,
             (None, self.spec.obs_rows, self.spec.obs_cols, self.spec.obs_channels),
         )
 
-        hidden_state = ConvBlock(tower_dim)(stacked_frames, is_training)
-        chex.assert_shape(
-            hidden_state, (None, self.spec.obs_rows, self.spec.obs_cols, tower_dim)
-        )
+        x = stacked_frames
+        
+        # Downsample
+        obs_resolution = (self.spec.obs_rows, self.spec.obs_cols)
+        repr_resolution = (self.spec.repr_rows, self.spec.repr_cols)
+        if obs_resolution != repr_resolution:
+            x = hk.Conv2D(128, (3, 3), stride=2, padding="SAME")(x)
+            print(x.shape)
+            x = ResTower(2)(x, is_training)
+            print(x.shape)
+            x = hk.Conv2D(256, (3, 3), stride=2, padding="SAME")(x)
+            print(x.shape)
+            x = ResTower(3)(x, is_training)
+            print(x.shape)
+            x = hk.AvgPool(window_shape=(3, 3), strides=2, padding="SAME")(x)
+            print(x.shape)
+            x = ResTower(3)(x, is_training)
+            print(x.shape)
+            x = hk.AvgPool(window_shape=(3, 3), strides=2, padding="SAME")(x)
+            print(x.shape)
 
-        # TODO: downsampling should happen here, currently only support same resolution
+        chex.assert_shape(x, (None, self.spec.repr_rows, self.spec.repr_cols, None))
 
+        hidden_state = ConvBlock(tower_dim)(x, is_training)
         hidden_state = ResTower(
             num_blocks=self.spec.repr_tower_blocks,
         )(hidden_state, is_training)

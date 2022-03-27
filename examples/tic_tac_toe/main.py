@@ -1,22 +1,24 @@
 # %%
+import numpy as np
 import uuid
 from functools import partial
 from pathlib import Path
 
-from acme.jax.utils import weighted_softmax
-
 import moozi as mz
 import ray
 from absl import logging
-from moozi.core import link
-from moozi.core.link import Universe
-from moozi.logging import (
-    JAXBoardLoggerActor,
-    JAXBoardLoggerV2,
-    JAXBoardStepData,
+from acme.jax.utils import weighted_softmax
+from moozi.core import Config, Universe, link
+from moozi.core.env import make_env
+from moozi.laws import (
+    OpenSpielEnvLaw,
+    FrameStacker,
+    TrajectoryOutputWriter,
+    make_policy_feed,
 )
+from moozi.logging import JAXBoardLoggerActor, JAXBoardLoggerV2
 from moozi.parameter_optimizer import ParameterOptimizer
-from moozi.policy.mcts_async import ActionSamplerLaw, make_async_planner_law
+from moozi.policy.mcts_async import ActionSamplerLaw, planner_law
 from moozi.policy.mcts_core import (
     Node,
     SearchStrategy,
@@ -25,7 +27,6 @@ from moozi.policy.mcts_core import (
     anytree_to_png,
     anytree_to_text,
     convert_to_anytree,
-    get_next_player,
 )
 from moozi.replay import ReplayBuffer
 from moozi.rollout_worker import RolloutWorkerWithWeights
@@ -37,24 +38,53 @@ from utils import *
 ray.init(ignore_reinit_error=True, num_cpus=10, num_gpus=2)
 
 # %%
-num_epochs = 300
-config = mz.Config().update(
-    env=f"tic_tac_toe",
-    batch_size=256,
-    discount=1.0,
-    num_unroll_steps=3,
-    num_td_steps=100,
-    num_stacked_frames=1,
-    weight_decay=3e-4,
-    lr=3e-3,
-    replay_buffer_size=1_000_000,
-    dim_repr=64,
-    num_epochs=num_epochs,
-    num_ticks_per_epoch=30,
-    num_updates_per_samples_added=10,
-    num_rollout_workers=10,
-    num_rollout_universes_per_worker=50,
+num_epochs = 50
+
+config = Config()
+config.env = f"tic_tac_toe"
+config.batch_size = 128
+config.discount = 0.99
+config.num_unroll_steps = 2
+config.num_td_steps = 100
+config.num_stacked_frames = 1
+config.lr = 3e-3
+config.replay_buffer_size = 100000
+config.num_epochs = num_epochs
+config.num_ticks_per_epoch = 12
+config.num_updates_per_samples_added = 30
+config.num_rollout_workers = 5
+config.num_rollout_universes_per_worker = 30
+config.weight_decay = 5e-2
+config.nn_arch_cls = mz.nn.ResNetArchitecture
+
+# %%
+env_spec = mz.make_env_spec(config.env)
+single_frame_shape = env_spec.observations.observation.shape
+obs_channels = single_frame_shape[-1] * config.num_stacked_frames
+repr_channels = 4
+dim_action = env_spec.actions.num_values
+
+# %%
+obs_rows, obs_cols, obs_channels = env_spec.observations.observation.shape
+
+# %%
+config.nn_spec = mz.nn.ResNetSpec(
+    obs_rows=obs_rows,
+    obs_cols=obs_cols,
+    obs_channels=obs_channels,
+    repr_rows=obs_rows,
+    repr_cols=obs_cols,
+    repr_channels=repr_channels,
+    dim_action=dim_action,
+    repr_tower_blocks=6,
+    repr_tower_dim=4,
+    pred_tower_blocks=6,
+    pred_tower_dim=4,
+    dyna_tower_blocks=6,
+    dyna_tower_dim=4,
+    dyna_state_blocks=6,
 )
+config.print()
 
 num_interactions = (
     config.num_epochs
@@ -63,40 +93,72 @@ num_interactions = (
     * config.num_rollout_universes_per_worker
 )
 print(f"num_interactions: {num_interactions}")
-config.print()
 
-
-def make_train_worker_universes(
-    self: RolloutWorkerWithWeights, config: Config
-) -> List[UniverseAsync]:
-    dim_actions = make_env_spec(config.env).actions.num_values
-
-    def _make_universe(index):
-        tape = Tape(index)
-        planner_law = make_async_planner_law(
-            root_inf_fn=lambda features: self.root_inf_unbatched(
-                self.params, features
-            ),
-            trans_inf_fn=lambda features: self.trans_inf_unbatched(
-                self.params, features
-            ),
-            dim_actions=dim_actions,
-            num_simulations=10,
-        )
-        laws = [
-            EnvironmentLaw(make_env(config.env), num_players=2),
-            FrameStacker(num_frames=config.num_stacked_frames),
-            make_policy_feed,
-            planner_law,
-            ActionSamplerLaw(),
-            TrajectoryOutputWriter(),
+#  %%
+def make_parameter_optimizer(config):
+    param_opt = ray.remote(num_cpus=1, num_gpus=1)(ParameterOptimizer).remote()
+    param_opt.make_training_suite.remote(config)
+    param_opt.make_loggers.remote(
+        lambda: [
+            mz.logging.JAXBoardLoggerV2(name="param_opt", time_delta=15),
         ]
-        return UniverseAsync(tape, laws)
+    ),
+    return param_opt
 
-    universes = [
-        _make_universe(i) for i in range(config.num_rollout_universes_per_worker)
+
+# %%
+def make_laws_train(config: Config):
+    return [
+        OpenSpielEnvLaw(make_env(config.env), num_players=2),
+        FrameStacker(num_frames=config.num_stacked_frames, player=0),
+        make_policy_feed,
+        planner_law,
+        ActionSamplerLaw(),
+        TrajectoryOutputWriter(),
     ]
-    return universes
+
+
+def make_workers_train(config: Config, param_opt: ParameterOptimizer):
+    workers = []
+    for _ in range(config.num_rollout_workers):
+        worker = ray.remote(RolloutWorkerWithWeights).remote()
+        worker.set_model.remote(param_opt.get_model.remote())
+        worker.set_params_and_state.remote(param_opt.get_params_and_state.remote())
+        worker.make_batching_layers.remote(config)
+        worker.make_universes_from_laws.remote(
+            partial(make_laws_train, config), config.num_rollout_universes_per_worker
+        )
+        workers.append(worker)
+    return workers
+
+
+def obs_to_ascii(obs):
+    tokens = []
+    for row in obs.reshape(3, 9).T:
+        tokens.append(int(np.argwhere(row == 1)))
+    tokens = np.array(tokens).reshape(3, 3)
+    tokens = [row.tolist() for row in tokens]
+
+    s = ""
+    for row in tokens:
+        for ele in row:
+            if ele == 0:
+                s += "."
+            elif ele == 1:
+                s += "O"
+            else:
+                s += "X"
+        s += "\n"
+    return s
+
+
+def action_probs_to_ascii(action_probs):
+    s = ""
+    for row in action_probs.reshape(3, 3):
+        for ele in row:
+            s += f"{ele:.2f} "
+        s += "\n"
+    return s
 
 
 def evaluation_to_str(obs, action_probs, action, to_play, mcts_root):
@@ -127,94 +189,37 @@ def log_evaluation_law(obs, action_probs, action, to_play, mcts_root):
     logging.info("\n" + s)
 
 
-def make_eval_worker_universes(
-    self: RolloutWorkerWithWeights, config: Config
-) -> List[UniverseAsync]:
-    dim_actions = make_env_spec(config.env).actions.num_values
-
-    def _make_universe():
-        tape = Tape(0)
-        planner_law = make_async_planner_law(
-            root_inf_fn=lambda features: self.root_inf_1(
-                self.params, features
-            ),
-            trans_inf_fn=lambda features: self.trans_inf_unbatched(
-                self.params, features
-            ),
-            dim_actions=dim_actions,
-            num_simulations=30,
-        )
-        laws = [
-            EnvironmentLaw(make_env(config.env), num_players=2),
-            FrameStacker(num_frames=config.num_stacked_frames),
-            make_policy_feed,
-            planner_law,
-            ActionSamplerLaw(temperature=0.5),
-            log_evaluation_law,
-        ]
-        return UniverseAsync(tape, laws)
-
-    return [_make_universe()]
-
-
-def make_parameter_optimizer():
-    param_opt = ray.remote(num_gpus=1)(ParameterOptimizer).remote()
-    param_opt.build.remote(partial(make_param_opt_properties, config=config)),
-    param_opt.build_loggers.remote(
-        lambda: [
-            # "print",
-            # TerminalLogger(label="Parameter Optimizer", print_fn=print),
-            mz.logging.JAXBoardLogger(name="param_opt", time_delta=15),
-        ]
-    ),
-    param_opt.log_stats.remote()
-    return param_opt
-
-
-def make_replay_buffer():
-    replay_buffer = ray.remote(ReplayBuffer).remote(config)
-    return replay_buffer
-
-
-def build_worker_train(config, param_opt):
-    worker = ray.remote(RolloutWorkerWithWeights).remote()
-    worker.set_network.remote(param_opt.get_network.remote())
-    worker.set_params.remote(param_opt.get_params.remote())
-    worker.build_batching_layers.remote(
-        partial(make_rollout_worker_batching_layers, config=config)
-    )
-    worker.build_universes.remote(partial(make_train_worker_universes, config=config))
-    return worker
-
-
-def make_train_rollout_workers(param_opt):
+def make_laws_eval(config: Config):
     return [
-        build_worker_train(config, param_opt) for _ in range(config.num_rollout_workers)
+        OpenSpielEnvLaw(make_env(config.env), num_players=2),
+        FrameStacker(num_frames=config.num_stacked_frames),
+        make_policy_feed,
+        planner_law,
+        ActionSamplerLaw(temperature=0.3),
+        log_evaluation_law,
     ]
 
 
-def make_eval_rollout_workers(param_opt):
+def make_worker_eval(config: Config, param_opt: ParameterOptimizer):
     eval_worker = ray.remote(RolloutWorkerWithWeights).remote()
-    eval_worker.set_network.remote(param_opt.get_network.remote())
-    eval_worker.set_params.remote(param_opt.get_params.remote())
-    eval_worker.build_universes.remote(
-        partial(make_eval_worker_universes, config=config)
-    )
+    eval_worker.set_model.remote(param_opt.get_model.remote())
+    eval_worker.set_params_and_state.remote(param_opt.get_params_and_state.remote())
+    eval_worker.make_universes_from_laws.remote(partial(make_laws_eval, config), 1)
     return eval_worker
 
 
 # %%
-def train():
-    replay_buffer = make_replay_buffer()
-    param_opt = make_parameter_optimizer()
-    train_workers = make_train_rollout_workers(param_opt)
-    reporter = ray.remote(JAXBoardLoggerV2).remote(name="reporter")
+def train(config: Config):
+    param_opt = make_parameter_optimizer(config)
+    replay_buffer = ray.remote(ReplayBuffer).remote(config)
+    workers_train = make_workers_train(config, param_opt)
+    jaxboard_logger = JAXBoardLoggerActor.remote("jaxboard_logger")
+    Path(config.save_dir).mkdir(parents=True, exist_ok=True)
 
     with WallTimer():
-        for epoch in tqdm(range(config.num_epochs)):
+        for epoch in range(config.num_epochs):
             logging.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
-
-            samples = [w.run.remote(config.num_ticks_per_epoch) for w in train_workers]
+            samples = [w.run.remote(config.num_ticks_per_epoch) for w in workers_train]
             samples_added = [replay_buffer.add_samples.remote(s) for s in samples]
             while samples_added:
                 _, samples_added = ray.wait(samples_added)
@@ -222,22 +227,25 @@ def train():
                     batch = replay_buffer.get_batch.remote(config.batch_size)
                     param_opt.update.remote(batch)
 
-                for w in train_workers:
-                    w.set_params.remote(param_opt.get_params.remote())
+                for w in workers_train:
+                    w.set_params_and_state.remote(
+                        param_opt.get_params_and_state.remote()
+                    )
+            param_opt.save.remote(f"{config.save_dir}/param_opt_{epoch}.pkl")
 
-                param_opt.log_stats.remote()
-                path = Path(f"params_{epoch}.pkl")
-                reporter.write.remote(replay_buffer.get_logger_data.remote())
-                param_opt.save.remote(path)
+            done = param_opt.log.remote()
+            jaxboard_logger.write.remote(replay_buffer.get_stats.remote())
+
+    ray.get(done)
 
 
 # %%
-def eval(param_pkl_path, param_opt=None):
+def eval_param_pkl(param_pkl_path):
     logging.info(f"\n\nEvaluating {param_pkl_path}")
     if not param_opt:
-        param_opt = make_parameter_optimizer()
+        param_opt = make_parameter_optimizer(config)
     param_opt.restore.remote(Path(param_pkl_path))
-    eval_worker = make_eval_rollout_workers(param_opt)
+    eval_worker = make_worker_eval(config, param_opt)
     for _ in range(50):
         ray.get(eval_worker.run.remote(1))
     logging.info("\n\n")
@@ -245,37 +253,32 @@ def eval(param_pkl_path, param_opt=None):
 
 # %%
 mode = None
-eval_path = None
 
 if mode == "train":
-    train()
+    train(config)
 elif mode == "eval":
-    assert eval_path is not None
-    eval_path = Path(eval_path)
-    assert eval_path.exists()
-    param_opt = make_parameter_optimizer()
-    if eval_path.is_dir():
-        counter = 0
-        while True:
-            file_path = eval_path / Path(f"params_{counter}.pkl")
-            if file_path.exists():
-                eval(file_path, param_opt)
-                counter += 1
-            else:
-                break
-    else:
-        eval(eval_path, param_opt)
-elif mode == "train_eval":
-    train()
-    param_opt = make_parameter_optimizer()
     counter = 0
     while True:
-        file_path = Path(f"params_{counter}.pkl")
+        file_path = Path(config.save_dir) / Path(f"param_opt_{counter}.pkl")
         if file_path.exists():
-            eval(file_path, param_opt)
+            eval_param_pkl(file_path)
             counter += 1
         else:
             break
+elif mode == 'eval_pool':
+    pass
+
+# elif mode == "train_eval":
+#     train()
+#     param_opt = make_parameter_optimizer()
+#     counter = 0
+#     while True:
+#         file_path = Path(f"params_{counter}.pkl")
+#         if file_path.exists():
+#             eval_param_pkl(file_path, param_opt)
+#             counter += 1
+#         else:
+#             break
 
 # %%
 ### Evaluation

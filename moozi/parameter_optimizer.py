@@ -72,6 +72,7 @@ def make_sgd_step_fn(
         new_params = optax.apply_updates(training_state.params, updates)
         new_steps = training_state.steps + 1
 
+        # TODO: put the target_update_period in the config and use it
         target_params = rlax.periodic_update(
             new_params, training_state.target_params, new_steps, target_update_period
         )
@@ -113,6 +114,8 @@ class ParameterOptimizer:
 
     _num_updates: int = 0
 
+    # TODO: rename all setup methods like this one to `setup()`
+    #       this includes other actors that need initialization
     def make_training_suite(self, config: Config):
         self.model = make_model(config.nn_arch_cls, config.nn_spec)
         params, state = self.model.init_params_and_state(jax.random.PRNGKey(0))
@@ -149,12 +152,12 @@ class ParameterOptimizer:
 
     def save(self, path):
         with open(path, "wb") as f:
-            cloudpickle.dump(self.training_state, f)
+            cloudpickle.dump((self.training_state, self.model, self.sgd_step_fn), f)
 
     def restore(self, path):
         # NOTE: not tested
         with open(path, "rb") as f:
-            self.training_state = cloudpickle.load(f)
+            self.training_state, self.model, self.sgd_step_fn = cloudpickle.load(f)
 
     def make_loggers(self, loggers_factory: Callable[[], List[mz.logging.Logger]]):
         self.loggers = loggers_factory()
@@ -174,13 +177,13 @@ class ParameterOptimizer:
         model_size_in_bytes = hk.data_structures.tree_size(
             (self.training_state.params, self.training_state.state)
         )
-        model_size_str = f"{model_size_in_bytes / 1e6:.2f} MB"
+        model_size_human = f"{model_size_in_bytes / 1e6:.2f} MB"
 
         return dict(
             ray_gpu_ids=ray_gpu_ids,
             cuda_visible_devices=cuda_visible_devices,
             jax_devices=str(jax_devices),
-            model_size=model_size_str,
+            model_size=model_size_human,
         )
 
     def log(self):

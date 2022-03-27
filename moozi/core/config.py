@@ -1,6 +1,7 @@
 from dataclasses import asdict, dataclass, field
+from os import PathLike
 import pprint
-from typing import Optional, Type
+from typing import Optional, Type, Union
 
 from moozi.nn import NNArchitecture, NNSpec, ResNetArchitecture, ResNetSpec
 
@@ -30,6 +31,8 @@ class Config:
     num_epochs: int = 2
     num_ticks_per_epoch: int = 10
     num_updates_per_samples_added: int = 2
+    
+    save_dir: Union[str, PathLike] = './data'
 
     def print(self):
         pprint.pprint(asdict(self))

@@ -117,6 +117,37 @@ async def planner_law(
         )
 
 
+@link
+@dataclass
+class Planner:
+    num_simulations: int
+
+    async def __call__(
+        self,
+        is_last,
+        legal_actions_mask,
+        policy_feed,
+        root_inf_fn,
+        trans_inf_fn,
+    ):
+        if not is_last:
+            mcts = MCTSAsync(
+                root_inf_fn=root_inf_fn,
+                trans_inf_fn=trans_inf_fn,
+                dim_action=legal_actions_mask.size,
+                num_simulations=self.num_simulations,
+            )
+            mcts_root = await mcts.run(policy_feed)
+            action_probs = mcts_root.get_children_visit_counts_as_probs(
+                dim_action=mcts.dim_action
+            )
+
+            return dict(
+                action_probs=action_probs,
+                mcts_root=copy.deepcopy(mcts_root),
+            )
+
+
 def sample_action(action_probs, temperature=1.0):
     log_probs = np.log(np.clip(action_probs, 1e-10, None)) / temperature
     action_probs = np.exp(log_probs) / np.sum(np.exp(log_probs))

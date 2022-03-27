@@ -1,16 +1,7 @@
-import jax
 import jax.numpy as jnp
-import chex
 from dataclasses import dataclass
-import haiku as hk
 
-from moozi.nn import (
-    NNOutput,
-    NNSpec,
-    RootFeatures,
-    TransitionFeatures,
-    NNArchitecture,
-)
+from moozi.nn import NNSpec, NNArchitecture
 
 
 @dataclass

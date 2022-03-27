@@ -21,9 +21,9 @@ class Tape:
     obs: np.ndarray = None
     is_first: bool = True
     is_last: bool = False
-    to_play: int = -1
+    to_play: int = 0
     reward: float = 0.0
-    action: int = -1
+    action: int = 0
     discount: float = 1.0
     legal_actions_mask: np.ndarray = np.array(1)
 

@@ -18,6 +18,7 @@ class LogDatum:
 
     @staticmethod
     def from_dict(d: dict) -> List["LogDatum"]:
+        # TODO: this is a little bit stupid, we should register dataclasses as pytree
         assert isinstance(d, dict)
         mappers = (
             (int, LogScalar),

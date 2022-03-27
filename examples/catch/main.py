@@ -22,7 +22,7 @@ from absl import logging
 from moozi.core import Config, UniverseAsync, link
 from moozi.core.env import make_env
 from moozi.laws import (
-    EnvironmentLaw,
+    OpenSpielEnvLaw,
     FrameStacker,
     TrajectoryOutputWriter,
     make_policy_feed,
@@ -42,7 +42,6 @@ from moozi.replay import ReplayBuffer
 from moozi.rollout_worker import RolloutWorkerWithWeights
 from moozi.utils import WallTimer
 
-# from utils import *
 
 # %%
 print(ray.init(include_dashboard=True))
@@ -103,7 +102,7 @@ print(f"num_interactions: {num_interactions}")
 
 
 #  %%
-def make_parameter_optimizer():
+def make_parameter_optimizer(config):
     param_opt = ray.remote(num_cpus=1, num_gpus=1)(ParameterOptimizer).remote()
     param_opt.make_training_suite.remote(config)
     param_opt.make_loggers.remote(
@@ -116,7 +115,7 @@ def make_parameter_optimizer():
 
 def make_laws_train(config):
     return [
-        EnvironmentLaw(make_env(config.env), num_players=1),
+        OpenSpielEnvLaw(make_env(config.env), num_players=1),
         FrameStacker(num_frames=config.num_stacked_frames, player=0),
         make_policy_feed,
         planner_law,
@@ -128,7 +127,7 @@ def make_laws_train(config):
 def make_laws_eval(config):
     return [
         link(lambda: dict(num_simulations=15)),
-        EnvironmentLaw(make_env(config.env), num_players=1),
+        OpenSpielEnvLaw(make_env(config.env), num_players=1),
         FrameStacker(num_frames=config.num_stacked_frames, player=0),
         make_policy_feed,
         planner_law,
@@ -165,7 +164,7 @@ def convert_reward_to_logger_datum(rewards):
 
 
 # %%
-param_opt = make_parameter_optimizer()
+param_opt = make_parameter_optimizer(config)
 replay_buffer = ray.remote(ReplayBuffer).remote(config)
 workers_train = make_workers_train(config, param_opt)
 worker_eval = make_worker_eval(config, param_opt)

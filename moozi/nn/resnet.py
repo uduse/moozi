@@ -91,25 +91,18 @@ class ResNetArchitecture(NNArchitecture):
         )
 
         x = stacked_frames
-        
+
         # Downsample
         obs_resolution = (self.spec.obs_rows, self.spec.obs_cols)
         repr_resolution = (self.spec.repr_rows, self.spec.repr_cols)
         if obs_resolution != repr_resolution:
             x = hk.Conv2D(128, (3, 3), stride=2, padding="SAME")(x)
-            print(x.shape)
             x = ResTower(2)(x, is_training)
-            print(x.shape)
             x = hk.Conv2D(256, (3, 3), stride=2, padding="SAME")(x)
-            print(x.shape)
             x = ResTower(3)(x, is_training)
-            print(x.shape)
-            x = hk.AvgPool(window_shape=(3, 3), strides=2, padding="SAME")(x)
-            print(x.shape)
+            x = hk.AvgPool(window_shape=(3, 3, 1), strides=(2, 2, 1), padding="SAME")(x)
             x = ResTower(3)(x, is_training)
-            print(x.shape)
-            x = hk.AvgPool(window_shape=(3, 3), strides=2, padding="SAME")(x)
-            print(x.shape)
+            x = hk.AvgPool(window_shape=(3, 3, 1), strides=(2, 2, 1), padding="SAME")(x)
 
         chex.assert_shape(x, (None, self.spec.repr_rows, self.spec.repr_cols, None))
 
@@ -126,6 +119,8 @@ class ResNetArchitecture(NNArchitecture):
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
+
+        hidden_state = jax.nn.sigmoid(hidden_state)
 
         return hidden_state
 
@@ -163,6 +158,9 @@ class ResNetArchitecture(NNArchitecture):
             pred_trunk_flat
         )
         policy_logits = jax.nn.relu(policy_logits)
+        # two other flavors of policy head final activation
+        # policy_logits = jnp.clip(policy_logits, 0, 20)
+        # policy_logits = jax.nn.sigmoid(policy_logits) * 20
         chex.assert_shape(policy_logits, (None, self.spec.dim_action))
 
         return value, policy_logits
@@ -222,4 +220,5 @@ class ResNetArchitecture(NNArchitecture):
         reward = hk.Linear(output_size=1, name="dyna_reward")(dyna_trunk_flat)
         chex.assert_shape(reward, (None, 1))
 
+        next_hidden_state = jax.nn.sigmoid(next_hidden_state)
         return next_hidden_state, reward

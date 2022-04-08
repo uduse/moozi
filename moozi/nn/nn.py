@@ -1,13 +1,15 @@
 import functools
 from dataclasses import dataclass
-from typing import Callable, NamedTuple, Tuple, Union, Type
-import chex
+from typing import Callable, NamedTuple, Tuple, Type, Union
 
+import chex
 import haiku as hk
 import jax
 import jax.numpy as jnp
-from acme.jax.utils import add_batch_dim, squeeze_batch_dim
+import numpy as np
 import tree
+from acme.jax.utils import add_batch_dim, squeeze_batch_dim
+
 
 # NOTE: NamedTuple are used for data structures that need to be passed to jax.jit functions
 # TODO: could be updated using dataclass registry https://github.com/google/jax/issues/2371
@@ -19,24 +21,37 @@ class NNOutput(NamedTuple):
 
     """
 
-    value: jnp.ndarray  #: (batch_size?, 1)
-    reward: jnp.ndarray  #: (batch_size?, 1)
-    policy_logits: jnp.ndarray  #: (batch_size?, num_actions)
-    hidden_state: jnp.ndarray  #: (batch_size?, repr_rows, repr_cols, repr_channels)
+    #: (batch_size?, 1)
+    value: Union[np.ndarray, jnp.ndarray]
+
+    #: (batch_size?, 1)
+    reward: Union[np.ndarray, jnp.ndarray]
+
+    #: (batch_size?, num_actions)
+    policy_logits: Union[np.ndarray, jnp.ndarray]
+
+    #: (batch_size?, repr_rows, repr_cols, repr_channels)
+    hidden_state: Union[np.ndarray, jnp.ndarray]
 
 
 class RootFeatures(NamedTuple):
     """Features used in :any:`root_inference`."""
 
-    obs: jnp.ndarray  #: (batch_size?, obs_rows, obs_cols, obs_channels)
-    player: jnp.ndarray  #: (batch_size?, 1)
+    #: (batch_size?, obs_rows, obs_cols, obs_channels)
+    obs: Union[np.ndarray, jnp.ndarray]
+
+    #: (batch_size?, 1)
+    player: Union[np.ndarray, jnp.ndarray]
 
 
 class TransitionFeatures(NamedTuple):
     """Features used in :any:`trans_inference`."""
 
-    hidden_state: jnp.ndarray  #: (batch_size?, repr_rows, repr_cols, repr_channels)
-    action: jnp.ndarray  #: (batch_size?, 1)
+    #: (batch_size?, repr_rows, repr_cols, repr_channels)
+    hidden_state: Union[np.ndarray, jnp.ndarray]
+
+    #: (batch_size?, 1)
+    action: Union[np.ndarray, jnp.ndarray]
 
 
 @dataclass

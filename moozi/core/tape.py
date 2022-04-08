@@ -30,7 +30,6 @@ class Tape:
     # planner input
     root_inf_fn: Callable = None
     trans_inf_fn: Callable = None
-    num_simulations: int = 10
 
     # planner output
     root_value: float = 0
@@ -41,4 +40,5 @@ class Tape:
     stacked_frames: np.ndarray = np.array(0)
     policy_feed: Optional[PolicyFeed] = None
 
+    input_buffer: tuple = field(default_factory=tuple)
     output_buffer: tuple = field(default_factory=tuple)

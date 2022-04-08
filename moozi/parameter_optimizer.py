@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
+import ray
 import haiku as hk
-from re import I
 import cloudpickle
 from pprint import pprint
 from typing import Callable, List
@@ -8,6 +8,7 @@ from typing import Callable, List
 import chex
 import jax
 import jax.numpy as jnp
+from loguru import logger
 import optax
 import ray
 import rlax
@@ -114,6 +115,27 @@ class ParameterOptimizer:
 
     _num_updates: int = 0
 
+    @staticmethod
+    def from_config(config: Config, remote: bool = False):
+        if remote:
+            param_opt = ray.remote(num_cpus=1, num_gpus=1)(ParameterOptimizer).remote()
+            param_opt.make_training_suite.remote(config)
+            param_opt.make_loggers.remote(
+                lambda: [
+                    mz.logging.JAXBoardLoggerV2(name="param_opt", time_delta=15),
+                ]
+            )
+            return param_opt
+        else:
+            param_opt = ParameterOptimizer()
+            param_opt.make_training_suite(config)
+            param_opt.make_loggers(
+                lambda: [
+                    mz.logging.JAXBoardLoggerV2(name="param_opt", time_delta=15),
+                ]
+            )
+            return param_opt
+
     # TODO: rename all setup methods like this one to `setup()`
     #       this includes other actors that need initialization
     def make_training_suite(self, config: Config):
@@ -136,12 +158,23 @@ class ParameterOptimizer:
         )
         self.sgd_step_fn = make_sgd_step_fn(self.model, loss_fn, optimizer)
 
-    def update(self, batch: mz.replay.TrainTarget):
-        if len(batch) == 0:
-            raise ValueError("Batch is empty")
-        self.training_state, extra = self.sgd_step_fn(self.training_state, batch)
-        self._num_updates += 1
-        self._last_step_data = extra["step_data"]
+    def update(
+        self, big_batch: mz.replay.TrainTarget, batch_size: int, num_updates: int = 1
+    ):
+        if len(big_batch) == 0:
+            logger.warning("Batch is empty")
+            return
+
+        for _ in range(num_updates):
+            for i in range(0, len(big_batch), batch_size):
+                batch = big_batch[i : i + batch_size]
+                if len(batch) != batch_size:
+                    break
+                self.training_state, extra = self.sgd_step_fn(
+                    self.training_state, batch
+                )
+                self._num_updates += 1
+                self._last_step_data = extra["step_data"]
 
     def get_params_and_state(self):
         # TODO: use ray.put instead
@@ -152,7 +185,7 @@ class ParameterOptimizer:
 
     def save(self, path):
         with open(path, "wb") as f:
-            cloudpickle.dump((self.training_state, self.model, self.sgd_step_fn), f)
+            cloudpickle.dump((self.training_state, self.model, self.n), f)
 
     def restore(self, path):
         # NOTE: not tested

@@ -1,3 +1,4 @@
+from ast import Tuple
 from dataclasses import asdict, dataclass, field
 from os import PathLike
 import pprint
@@ -16,23 +17,41 @@ class Config:
     num_td_steps: int = 1
     discount: float = 1.0
 
+    dirichlet_alpha: float = 0.2
+    frac: float = 0.2
+
+    known_bound_min: Optional[float] = None
+    known_bound_max: Optional[float] = None
+
     nn_arch_cls: Type[NNArchitecture] = ResNetArchitecture
     nn_spec: NNSpec = field(init=False)
 
+    # training
+    big_batch_size: int = 2048
+    batch_size: int = 128
+    lr: float = 2e-3
     weight_decay: float = 1e-4
 
-    batch_size: int = 256
-    lr: float = 2e-3
+    # replay buffer
+    replay_max_size: int = 1_000_000
+    replay_min_size: int = 1_000
+    
+    # mcts
+    num_train_simulations: int = 10
+    num_test_simulations: int = 30
 
-    replay_buffer_size: int = 1000
-
-    num_rollout_workers: int = 2
-    num_rollout_universes_per_worker: int = 2
+    # system configuration
     num_epochs: int = 2
     num_ticks_per_epoch: int = 10
     num_updates_per_samples_added: int = 2
+
+    num_train_workers: int = 2
+    num_universes_per_train_worker: int = 2
+
+    num_reanalyze_workers: int = 4
+    num_universes_per_reanalyze_worker: int = 2
     
-    save_dir: Union[str, PathLike] = './data'
+    save_dir: Union[str, PathLike] = "./save/"
 
     def print(self):
         pprint.pprint(asdict(self))

@@ -3,3 +3,6 @@ from .config import Config
 from .tape import Tape
 from .link import link, UniverseAsync, Universe
 from .env import make_env, make_env_spec, make_catch, make_tic_tac_toe
+from .min_max_stats import MinMaxStats
+from .step_sample import StepSample, TrajectorySample
+from .train_target import TrainTarget

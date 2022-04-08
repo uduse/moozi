@@ -108,10 +108,6 @@ def make_atari_env(
 ) -> dm_env.Environment:
     """Loads the Atari environment."""
     env = gym.make(level, full_action_space=True)
-    fname = f"tmp/{str(uuid.uuid4())}.mp4"
-    video_recorder = VideoRecorder(env, fname, enabled=False)
-    logger.info(f"Recording to {fname}")
-    env.video_recorder = video_recorder
 
     # Always use episodes of 108k steps as this is standard, matching the paper.
     max_episode_len = 108000
@@ -121,6 +117,7 @@ def make_atari_env(
             AtariWrapper,
             max_episode_len=max_episode_len,
             num_stacked_frames=1,
+            to_float=True,
         ),
     ]
     wrapper_list.append(SinglePrecisionWrapper)

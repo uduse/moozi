@@ -1,16 +1,18 @@
 import collections
 from dataclasses import dataclass, field
 from typing import Any, Deque, List, Optional, Union
+import uuid
 
 import dm_env
 import numpy as np
 from absl import logging
 from acme.utils.tree_utils import stack_sequence_fields
+from gym.wrappers.monitoring.video_recorder import VideoRecorder
 from jax._src.numpy.lax_numpy import isin
+from loguru import logger
 
-from moozi.core import PolicyFeed, link
-from moozi.core.types import BASE_PLAYER
-from moozi.replay import StepSample
+from moozi.core import PolicyFeed, link, BASE_PLAYER, TrajectorySample
+from moozi.core.step_sample import StepSample
 
 
 @link
@@ -63,27 +65,6 @@ class FrameStacker:
             )
 
 
-# @link
-# def stack_frames(obs: np.ndarray, is_last: bool):
-#     assert isinstance(obs, np.ndarray)
-
-#     frame_stacker: FrameStackerV2 = stack_frames.scratch
-
-#     if frame_stacker.padding is None:
-#         frame_stacker.padding = np.zeros_like(obs)
-
-#     if is_last:
-#         frame_stacker.deque.clear()
-
-#     frame_stacker.deque.append(obs)
-
-#     return dict(
-#         stacked_frames=get_stacked_frames(
-#             frame_stacker.deque, frame_stacker.num_frames, frame_stacker.padding
-#         )
-#     )
-
-
 @link
 def update_episode_stats(
     is_last, reward, sum_episodic_reward, num_episodes, universe_id
@@ -116,8 +97,10 @@ class OpenSpielEnvLaw:
     env: dm_env.Environment
     num_players: int = 1
 
+    _legal_actions_mask_padding: Optional[np.ndarray] = None
+
     def __call__(self, obs, is_last, action: int):
-        if obs is None or is_last:
+        if (obs is None) or is_last:
             timestep = self.env.reset()
         else:
             timestep = self.env.step([action])
@@ -130,8 +113,19 @@ class OpenSpielEnvLaw:
         if 0 <= to_play < self.num_players:
             legal_actions = self._get_legal_actions(timestep)
             legal_actions_curr_player = legal_actions[to_play]
+            if legal_actions_curr_player is None:
+                assert self._legal_actions_mask_padding is not None
+                legal_actions_curr_player = self._legal_actions_mask_padding.copy()
         else:
-            legal_actions_curr_player = None
+            assert self._legal_actions_mask_padding is not None
+            legal_actions_curr_player = self._legal_actions_mask_padding.copy()
+
+        should_init_padding = (
+            self._legal_actions_mask_padding is None
+            and legal_actions_curr_player is not None
+        )
+        if should_init_padding:
+            self._legal_actions_mask_padding = np.ones_like(legal_actions_curr_player)
 
         return dict(
             obs=self._get_observation(timestep),
@@ -171,20 +165,28 @@ class OpenSpielEnvLaw:
             return timestep.reward[BASE_PLAYER]
 
 
+@link
 @dataclass
 class AtariEnvLaw:
     env: dm_env.Environment
+    record_video: bool = False
+
+    _video_recorder: Optional[VideoRecorder] = None
 
     def __call__(self, is_first, is_last, action: int):
-        if is_first:
-            if hasattr(self.env, "video_recorder"):
-                self.env.video_recorder.enabled = True
-        elif is_last:
-            timestep = self.env.step(action)
-        else:
+        if self.record_video:
+            if is_first:
+                fname = f"/tmp/{str(uuid.uuid4())}.mp4"
+                self._video_recorder = VideoRecorder(self.env, fname, enabled=False)
+            elif is_last:
+                assert self._video_recorder is not None
+                self._video_recorder.close()
+                logger.info(f"Recorded to {self.env.video_recorder.path}")
+
+        if is_last:
             timestep = self.env.reset()
-            if hasattr(self.env, "video_recorder"):
-                self.env.video_recorder.close()
+        else:
+            timestep = self.env.step(action)
 
         if timestep.reward is None:
             reward = 0.0
@@ -193,8 +195,9 @@ class AtariEnvLaw:
 
         legal_actions_mask = np.ones(self.env.action_space.n, dtype=np.float32)
 
-        if hasattr(self.env, "video_recorder"):
-            self.env.video_recorder.capture_frame()
+        if self.record_video:
+            assert self._video_recorder is not None
+            self._video_recorder.capture_frame()
 
         return dict(
             obs=timestep.observation,
@@ -204,6 +207,35 @@ class AtariEnvLaw:
             reward=reward,
             legal_actions_mask=legal_actions_mask,
         )
+
+
+@link
+@dataclass
+class ReanalyzeEnvLaw:
+    _curr_traj: Optional[TrajectorySample] = None
+    _curr_step: int = 0
+
+    def __call__(self, input_buffer):
+        if not input_buffer:
+            return
+        else:
+            input_buffer_update = input_buffer
+            if (not self._curr_traj) or (self._curr_step >= len(self._curr_traj)):
+                head = input_buffer[0]
+                assert isinstance(head, TrajectorySample)
+                self._curr_step = 0
+                self._curr_traj = head
+                input_buffer_update = tuple(input_buffer[1:])
+
+            return dict(
+                obs=self._curr_traj.frame[self._curr_step],
+                is_first=self._curr_traj.is_first[self._curr_step],
+                is_last=self._curr_traj.is_last[self._curr_step],
+                to_play=self._curr_traj.to_play[self._curr_step],
+                reward=self._curr_traj.last_reward[self._curr_step],
+                legal_actions_mask=self._curr_traj.legal_actions_mask[self._curr_step],
+                input_buffer=input_buffer_update,
+            )
 
 
 @link
@@ -235,6 +267,7 @@ class TrajectoryOutputWriter:
         is_first,
         is_last,
         action_probs,
+        legal_actions_mask,
         output_buffer,
     ):
         if isinstance(obs, list):
@@ -247,6 +280,7 @@ class TrajectoryOutputWriter:
             is_first=is_first,
             is_last=is_last,
             to_play=to_play,
+            legal_actions_mask=legal_actions_mask,
             root_value=root_value,
             action_probs=action_probs,
             action=action,

@@ -40,13 +40,13 @@ def make_rollout_worker_batching_layers(self: RolloutWorkerWithWeights, config: 
         return unstack_sequence_fields(results, batch_size)
 
     bl_init_inf = BatchingLayer(
-        max_batch_size=config.num_rollout_universes_per_worker,
+        max_batch_size=config.num_universes_per_train_worker,
         process_fn=batched_init_inf,
         name="[batched_init_inf]",
         batch_process_period=1e-1,
     )
     bl_recurr_inf = BatchingLayer(
-        max_batch_size=config.num_rollout_universes_per_worker,
+        max_batch_size=config.num_universes_per_train_worker,
         process_fn=batched_recurr_inf,
         name="[batched_recurr_inf]",
         batch_process_period=1e-1,

@@ -13,24 +13,23 @@ from acme.utils.tree_utils import unstack_sequence_fields
 from moozi.batching_layer import BatchingClient, BatchingLayer
 from moozi.core import PolicyFeed
 from moozi.nn import NNOutput, NNModel
-from moozi.policy.mcts_async import MCTSAsync
-from moozi.policy.mcts_core import Node, get_next_player, SearchStrategy
+from moozi.policy.mcts import MCTSAsync
 from moozi.utils import as_coroutine
 
 
-def test_node():
-    node = Node(prior=0.5, player=0)
-    nn_output = NNOutput(
-        value=0.5, reward=1, policy_logits=np.array([0.1, 0.1, 0.8]), hidden_state=None
-    )
-    node.expand_node(
-        hidden_state=nn_output.hidden_state,
-        reward=nn_output.reward,
-        policy_logits=nn_output.policy_logits,
-        legal_actions_mask=np.array([1, 1, 1]),
-        next_player=get_next_player(SearchStrategy.TWO_PLAYER, node.player),
-    )
-    assert node
+# def test_node():
+#     node = Node(prior=0.5, player=0)
+#     nn_output = NNOutput(
+#         value=0.5, reward=1, policy_logits=np.array([0.1, 0.1, 0.8]), hidden_state=None
+#     )
+#     node.expand_node(
+#         hidden_state=nn_output.hidden_state,
+#         reward=nn_output.reward,
+#         policy_logits=nn_output.policy_logits,
+#         legal_actions_mask=np.array([1, 1, 1]),
+#         next_player=get_next_player(SearchStrategy.TWO_PLAYER, node.player),
+#     )
+#     assert node
 
 
 async def test_async_mcts_with_regular_inf_fns(

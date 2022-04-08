@@ -1,118 +1,111 @@
+import asyncio
 import collections
 import random
 from dataclasses import dataclass, field
 from enum import EnumMeta
 from typing import Deque, List, NamedTuple
-import chex
 
+import chex
 import numpy as np
+import ray
 import tensorflow as tf
 from acme.utils import tree_utils
+from loguru import logger
 from nptyping import NDArray
 
 import moozi as mz
+from moozi.core import Config, TrajectorySample, TrainTarget
 from moozi.logging import LogDatum, LogScalar
-
-
-# current support:
-# - single player games
-# - two-player turn-based zero-sum games
-class StepSample(NamedTuple):
-    frame: NDArray[np.float32]
-
-    # last reward from the environment
-    last_reward: NDArray[np.float32]
-    is_first: NDArray[np.bool8]
-    is_last: NDArray[np.bool8]
-    to_play: NDArray[np.int32]
-
-    # root value after the search
-    root_value: NDArray[np.float32]
-    action_probs: NDArray[np.float32]
-    action: NDArray[np.int32]
-
-    def cast(self) -> "StepSample":
-        return StepSample(
-            frame=np.asarray(self.frame, dtype=np.float32),
-            last_reward=np.asarray(self.last_reward, dtype=np.float32),
-            is_first=np.asarray(self.is_first, dtype=np.bool8),
-            is_last=np.asarray(self.is_last, dtype=np.bool8),
-            to_play=np.asarray(self.to_play, dtype=np.int32),
-            root_value=np.asarray(self.root_value, dtype=np.float32),
-            action_probs=np.asarray(self.action_probs, dtype=np.float32),
-            action=np.asarray(self.action, dtype=np.int32),
-        )
-
-
-# Trajectory is a StepSample with stacked values
-TrajectorySample = StepSample
-# class TrajectorySample(StepSample):
-#     pass
-
-
-class TrainTarget(NamedTuple):
-    # right now we only support perfect information games
-    # so stacked_frames is a history of symmetric observations
-    stacked_frames: NDArray[np.float32]
-
-    # action taken in in each step, -1 means no action taken (terminal state)
-    action: NDArray[np.int32]
-
-    # value is computed based on the player of each timestep instead of the
-    # player at the first timestep as the root player
-    # this means if all rewards are positive, the values are always positive too
-    value: NDArray[np.float32]
-
-    # a faithful slice of the trajectory rewards, not flipped for multi-player games
-    last_reward: NDArray[np.float32]
-
-    # action probabilities from the search result
-    action_probs: NDArray[np.float32]
-
-    def cast(self) -> "TrainTarget":
-        return TrainTarget(
-            stacked_frames=np.asarray(self.stacked_frames, dtype=np.float32),
-            action=np.asarray(self.action, dtype=np.int32),
-            value=np.asarray(self.value, dtype=np.float32),
-            last_reward=np.asarray(self.last_reward, dtype=np.float32),
-            action_probs=np.asarray(self.action_probs, dtype=np.float32),
-        )
 
 
 @dataclass(repr=False)
 class ReplayBuffer:
-    # TODO: remove config here
     # TODO: pre-fetch with async
-    config: mz.Config
+    max_size: int = 1_000_000
+    min_size: int = 1_000
+    num_unroll_steps: int = 5
+    num_td_steps: int = 5
+    num_stacked_frames: int = 4
 
     store: Deque[TrajectorySample] = field(init=False)
 
-    def __post_init__(self):
-        self.store = collections.deque(maxlen=self.config.replay_buffer_size)
+    prefetch_size: int = 1_000
+    _prefetch_buffer: List[TrajectorySample] = field(default_factory=list)
 
-    def add_samples(self, samples: List[TrajectorySample]):
+    @staticmethod
+    def from_config(config: Config, remote: bool = False):
+        kwargs = dict(
+            max_size=config.replay_max_size,
+            min_size=config.replay_min_size,
+            num_unroll_steps=config.num_unroll_steps,
+            num_td_steps=config.num_td_steps,
+            num_stacked_frames=config.num_stacked_frames,
+        )
+        if remote:
+            return ray.remote(ReplayBuffer).remote(**kwargs)
+        else:
+            return ReplayBuffer(**kwargs)
+
+    def __post_init__(self):
+        self.store = collections.deque(maxlen=self.max_size)
+        asyncio.create_task(self.launch_prefetcher())
+
+    async def add_samples(self, samples: List[TrajectorySample]):
         self.store.extend(samples)
-        # logging.info(f"Replay buffer size: {self.size()}")
+        logger.debug(f"Replay buffer size: {self.size()}")
         return self.size()
 
-    def get_batch(self, batch_size=1):
+    async def get_batch(self, batch_size=1):
         if not self.store:
-            raise ValueError("Empty replay buffer")
+            logger.warning("Empty replay buffer")
+            return []
+        else:
+            if self.is_started():
+                while True:
+                    if len(self._prefetch_buffer) >= batch_size:
+                        return await self.take_batch_from_prefetch_buffer(batch_size)
+                    else:
+                        # wait for prefetcher
+                        logger.warning("Waiting for prefetcher")
+                        await asyncio.sleep(5)
+            else:
+                return []
 
-        trajs = random.choices(self.store, k=batch_size)
-        batch = []
-        for traj in trajs:
-            random_start_idx = random.randrange(len(traj.last_reward))
-            target = make_target_from_traj(
-                traj,
-                start_idx=random_start_idx,
-                discount=1.0,
-                num_unroll_steps=self.config.num_unroll_steps,
-                num_td_steps=self.config.num_td_steps,
-                num_stacked_frames=self.config.num_stacked_frames,
-            )
-            batch.append(target)
-        return tree_utils.stack_sequence_fields(batch)
+    async def take_batch_from_prefetch_buffer(self, batch_size: int):
+        if len(self._prefetch_buffer) >= batch_size:
+            batch = self._prefetch_buffer.copy()
+            self._prefetch_buffer = self._prefetch_buffer[batch_size:]
+            return tree_utils.stack_sequence_fields(batch)
+        else:
+            await asyncio.sleep(5)
+
+    def sample_target_from_store(self) -> TrajectorySample:
+        traj = random.choice(self.store)
+        random_start_idx = random.randrange(len(traj.last_reward))
+        target = make_target_from_traj(
+            traj,
+            start_idx=random_start_idx,
+            discount=1.0,
+            num_unroll_steps=self.num_unroll_steps,
+            num_td_steps=self.num_td_steps,
+            num_stacked_frames=self.num_stacked_frames,
+        )
+        return target
+
+    async def launch_prefetcher(self):
+        while len(self._prefetch_buffer) <= self.prefetch_size:
+            if self.is_started():
+                target = self.sample_target_from_store()
+                self._prefetch_buffer.append(target)
+            else:
+                logger.warning("Waiting for replay buffer to be started")
+                await asyncio.sleep(5)
+
+    def is_started(self):
+        return self.size() >= self.min_size
+
+    def __len__(self):
+        return self.size()
 
     def size(self):
         return len(self.store)

@@ -14,10 +14,9 @@ from absl import logging
 from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 
 import moozi as mz
-from moozi.batching_layer import BatchingClient, BatchingLayer
-from moozi.core import Config, Tape, UniverseAsync, link
+from moozi.batching_layer import BatchingLayer
+from moozi.core import Tape, UniverseAsync, link, TrajectorySample
 from moozi.nn.nn import RootFeatures, TransitionFeatures
-from moozi.replay import StepSample, TrajectorySample, make_target_from_traj
 
 
 @dataclass(repr=False)
@@ -29,7 +28,7 @@ class RolloutWorkerWithWeights:
 
     batching_layers: List[BatchingLayer] = field(default_factory=list)
 
-    def make_batching_layers(self, config: Config):
+    def make_batching_layers(self, batch_size: int):
         def batched_root_inf(feats: List[RootFeatures]):
             batch_size = len(feats)
             nn_outputs, _ = self.model.root_inference(
@@ -47,13 +46,13 @@ class RolloutWorkerWithWeights:
             return unstack_sequence_fields(nn_outputs, batch_size)
 
         bl_root_inf = BatchingLayer(
-            max_batch_size=config.num_rollout_universes_per_worker,
+            max_batch_size=batch_size,
             process_fn=batched_root_inf,
             name="[batched_root_inf]",
             batch_process_period=1e-1,
         )
         bl_trans_inf = BatchingLayer(
-            max_batch_size=config.num_rollout_universes_per_worker,
+            max_batch_size=batch_size,
             process_fn=batched_trans_inf,
             name="[batche_trans_inf]",
             batch_process_period=1e-1,
@@ -94,6 +93,10 @@ class RolloutWorkerWithWeights:
     def set_verbosity(self, verbosity):
         logging.set_verbosity(verbosity)
 
+    def set_inputs(self, inputs):
+        for u, i in zip(self.universes, inputs):
+            u.tape.input_buffer = i
+
     def run(self, num_ticks):
         async def main_loop():
             async with trio.open_nursery() as main_nursery:
@@ -133,3 +136,27 @@ class RolloutWorkerWithWeights:
 
     def exec(self, fn):
         return fn(self)
+
+
+def make_rollout_workers(
+    name,
+    num_workers,
+    num_universes_per_worker,
+    model,
+    params_and_state,
+    laws_factory,
+    use_batching="auto",
+):
+    workers = []
+    for i in range(num_workers):
+        worker = (
+            ray.remote(RolloutWorkerWithWeights).options(name=f"{name}_{i}").remote()
+        )
+        worker.set_model.remote(model)
+        worker.set_params_and_state.remote(params_and_state)
+        if use_batching == "auto":
+            if num_universes_per_worker > 1:
+                worker.make_batching_layers.remote(num_universes_per_worker)
+        worker.make_universes_from_laws.remote(laws_factory, num_universes_per_worker)
+        workers.append(worker)
+    return workers

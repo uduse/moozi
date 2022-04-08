@@ -18,7 +18,7 @@ from moozi.laws import (
 )
 from moozi.logging import JAXBoardLoggerActor, JAXBoardLoggerV2
 from moozi.parameter_optimizer import ParameterOptimizer
-from moozi.policy.mcts_async import ActionSamplerLaw, planner_law
+from moozi.policy.mcts import ActionSampler, planner_law
 from moozi.policy.mcts_core import (
     Node,
     SearchStrategy,
@@ -48,12 +48,12 @@ config.num_unroll_steps = 2
 config.num_td_steps = 100
 config.num_stacked_frames = 1
 config.lr = 3e-3
-config.replay_buffer_size = 100000
+config.replay_max_size = 100000
 config.num_epochs = num_epochs
 config.num_ticks_per_epoch = 12
 config.num_updates_per_samples_added = 30
-config.num_rollout_workers = 5
-config.num_rollout_universes_per_worker = 30
+config.num_train_workers = 5
+config.num_universes_per_train_worker = 30
 config.weight_decay = 5e-2
 config.nn_arch_cls = mz.nn.ResNetArchitecture
 
@@ -89,8 +89,8 @@ config.print()
 num_interactions = (
     config.num_epochs
     * config.num_ticks_per_epoch
-    * config.num_rollout_workers
-    * config.num_rollout_universes_per_worker
+    * config.num_train_workers
+    * config.num_universes_per_train_worker
 )
 print(f"num_interactions: {num_interactions}")
 
@@ -113,20 +113,20 @@ def make_laws_train(config: Config):
         FrameStacker(num_frames=config.num_stacked_frames, player=0),
         make_policy_feed,
         planner_law,
-        ActionSamplerLaw(),
+        ActionSampler(),
         TrajectoryOutputWriter(),
     ]
 
 
 def make_workers_train(config: Config, param_opt: ParameterOptimizer):
     workers = []
-    for _ in range(config.num_rollout_workers):
+    for _ in range(config.num_train_workers):
         worker = ray.remote(RolloutWorkerWithWeights).remote()
         worker.set_model.remote(param_opt.get_model.remote())
         worker.set_params_and_state.remote(param_opt.get_params_and_state.remote())
         worker.make_batching_layers.remote(config)
         worker.make_universes_from_laws.remote(
-            partial(make_laws_train, config), config.num_rollout_universes_per_worker
+            partial(make_laws_train, config), config.num_universes_per_train_worker
         )
         workers.append(worker)
     return workers
@@ -195,7 +195,7 @@ def make_laws_eval(config: Config):
         FrameStacker(num_frames=config.num_stacked_frames),
         make_policy_feed,
         planner_law,
-        ActionSamplerLaw(temperature=0.3),
+        ActionSampler(temperature=0.3),
         log_evaluation_law,
     ]
 

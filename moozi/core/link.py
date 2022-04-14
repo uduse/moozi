@@ -1,6 +1,16 @@
 import functools
 import inspect
-from typing import Any, Awaitable, Callable, Dict, List, Mapping, MutableMapping, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Union,
+)
 from dataclasses import dataclass
 
 from moozi.core import Tape
@@ -122,20 +132,30 @@ def link(*args, **kwargs):
         return func
 
 
-@dataclass
-class Universe:
-    tape: Tape
-    laws: List[Callable]
+# TODO: deprecate this class
+# @dataclass
+# class Universe:
+#     tape: Tape
+#     laws: List[Callable]
 
-    def tick(self, times=1):
-        for _ in range(times):
-            for law in self.laws:
-                law(self.tape)
+#     def tick(self, times: Optional[int] = 1):
+#         if times is None:
+#             while 1:
+#                 for law in self.laws:
+#                     law(self.tape)
+#                 if self.tape.interrupt_exit:
+#                     break
+#         else:
+#             for _ in range(times):
+#                 for law in self.laws:
+#                     law(self.tape)
+#                 if self.tape.interrupt_exit:
+#                     break
 
-    def close(self):
-        for law in self.laws:
-            if hasattr(law, "close"):
-                law.close()
+#     def close(self):
+#         for law in self.laws:
+#             if hasattr(law, "close"):
+#                 law.close()
 
 
 @dataclass
@@ -143,12 +163,45 @@ class UniverseAsync:
     tape: Tape
     laws: List[Callable[[object], Awaitable]]
 
-    async def tick(self, times=1):
-        for _ in range(times):
-            for law in self.laws:
-                await law(self.tape)
+    async def tick(self, times: Optional[int] = 1):
+        self.tape.interrupt_exit = False
+
+        if times is None:
+            while 1:
+                for law in self.laws:
+                    await law(self.tape)
+                    if self.tape.interrupt_exit:
+                        return
+        else:
+            for _ in range(times):
+                for law in self.laws:
+                    await law(self.tape)
+                    if self.tape.interrupt_exit:
+                        return
 
     def close(self):
         for law in self.laws:
             if hasattr(law, "close"):
                 law.close()
+
+
+# def sequential(laws):
+#     def _sequential(tape):
+#         for law in laws:
+#             law(tape)
+
+#     return _sequential
+
+
+# async def sequential_async(laws):
+#     async def _sequential(tape):
+#         for law in laws:
+#             await law(tape)
+
+#     return _sequential
+
+
+# def close(laws):
+#     for law in laws:
+#         if hasattr(law, "close"):
+#             law.close()

@@ -8,11 +8,9 @@ import numpy as np
 from absl import logging
 from acme.utils.tree_utils import stack_sequence_fields
 from gym.wrappers.monitoring.video_recorder import VideoRecorder
-from jax._src.numpy.lax_numpy import isin
 from loguru import logger
 
-from moozi.core import PolicyFeed, link, BASE_PLAYER, TrajectorySample
-from moozi.core.step_sample import StepSample
+from moozi.core import PolicyFeed, link, BASE_PLAYER, StepSample
 
 
 @link
@@ -212,30 +210,33 @@ class AtariEnvLaw:
 @link
 @dataclass
 class ReanalyzeEnvLaw:
-    _curr_traj: Optional[TrajectorySample] = None
+    _curr_traj: Optional[StepSample] = None
     _curr_step: int = 0
 
     def __call__(self, input_buffer):
-        if not input_buffer:
-            return
-        else:
-            input_buffer_update = input_buffer
-            if (not self._curr_traj) or (self._curr_step >= len(self._curr_traj)):
-                head = input_buffer[0]
-                assert isinstance(head, TrajectorySample)
-                self._curr_step = 0
-                self._curr_traj = head
-                input_buffer_update = tuple(input_buffer[1:])
+        input_buffer_update = input_buffer
+        if (self._curr_traj is None) or (self._curr_step >= len(self._curr_traj)):
+            head = input_buffer[0]
+            assert isinstance(head, StepSample)
+            self._curr_step = 0
+            self._curr_traj = head
+            input_buffer_update = tuple(input_buffer[1:])
 
-            return dict(
-                obs=self._curr_traj.frame[self._curr_step],
-                is_first=self._curr_traj.is_first[self._curr_step],
-                is_last=self._curr_traj.is_last[self._curr_step],
-                to_play=self._curr_traj.to_play[self._curr_step],
-                reward=self._curr_traj.last_reward[self._curr_step],
-                legal_actions_mask=self._curr_traj.legal_actions_mask[self._curr_step],
-                input_buffer=input_buffer_update,
-            )
+        return dict(
+            obs=self._curr_traj.frame[self._curr_step],
+            is_first=self._curr_traj.is_first[self._curr_step],
+            is_last=self._curr_traj.is_last[self._curr_step],
+            to_play=self._curr_traj.to_play[self._curr_step],
+            reward=self._curr_traj.last_reward[self._curr_step],
+            legal_actions_mask=self._curr_traj.legal_actions_mask[self._curr_step],
+            input_buffer=input_buffer_update,
+        )
+
+
+@link
+def exit_if_no_input(input_buffer):
+    if not input_buffer:
+        return {"interrupt_exit": True}
 
 
 @link

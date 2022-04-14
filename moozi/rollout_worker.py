@@ -1,7 +1,9 @@
 import os
+from loguru import logger
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Any, Callable, List, Optional
+from re import I
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import haiku as hk
 import jax
@@ -21,12 +23,20 @@ from moozi.nn.nn import RootFeatures, TransitionFeatures
 
 @dataclass(repr=False)
 class RolloutWorkerWithWeights:
+    name: str = "rollout_worker"
+
     universes: List[UniverseAsync] = field(init=False)
     model: mz.nn.NNModel = field(init=False)
     params: hk.Params = field(init=False)
     state: hk.State = field(init=False)
 
     batching_layers: List[BatchingLayer] = field(default_factory=list)
+
+    def __post_init__(self):
+        logger.remove()
+        logger.add(f"logs/rollout_worker.{self.name}.debug.log", level="DEBUG")
+        logger.add(f"logs/rollout_worker.{self.name}.info.log", level="INFO")
+        logger.info(f"RolloutWorker created, {vars(self)}")
 
     def make_batching_layers(self, batch_size: int):
         def batched_root_inf(feats: List[RootFeatures]):
@@ -93,11 +103,14 @@ class RolloutWorkerWithWeights:
     def set_verbosity(self, verbosity):
         logging.set_verbosity(verbosity)
 
-    def set_inputs(self, inputs):
-        for u, i in zip(self.universes, inputs):
-            u.tape.input_buffer = i
+    def set_inputs(self, inputs: List[Any]):
+        assert len(inputs) % len(self.universes) == 0
+        # logger.info(f"Setting inputs: {inputs}")
+        for i, u in zip(range(0, len(inputs), len(self.universes)), self.universes):
+            inputs_slice = inputs[i : i + len(self.universes)]
+            u.tape.input_buffer = inputs_slice
 
-    def run(self, num_ticks):
+    def run(self, num_ticks: Optional[int] = 1):
         async def main_loop():
             async with trio.open_nursery() as main_nursery:
                 self._set_inferences()
@@ -128,8 +141,13 @@ class RolloutWorkerWithWeights:
             u.tape.output_buffer = tuple()
         return outputs
 
-    def set_params_and_state(self, params_and_state):
-        self.params, self.state = params_and_state
+    def set_params_and_state(
+        self, params_and_state: Union[ray.ObjectRef, Tuple[hk.Params, hk.State]]
+    ):
+        if isinstance(params_and_state, ray.ObjectRef):
+            self.params, self.state = ray.get(params_and_state)
+        else:
+            self.params, self.state = params_and_state
 
     def set_model(self, model: mz.nn.NNModel):
         self.model = model.with_jit()
@@ -149,8 +167,11 @@ def make_rollout_workers(
 ):
     workers = []
     for i in range(num_workers):
+        worker_name = f"{name}_{i}"
         worker = (
-            ray.remote(RolloutWorkerWithWeights).options(name=f"{name}_{i}").remote()
+            ray.remote(RolloutWorkerWithWeights)
+            .options(name=worker_name)
+            .remote(name=worker_name)
         )
         worker.set_model.remote(model)
         worker.set_params_and_state.remote(params_and_state)

@@ -1,15 +1,15 @@
-# - model: catch
-#   operations:
-#     train:
-#       main: scripts.catch.train
-#       output-scalars: off
-#       flags-import: all
-#       sourcecode:
-#         - "*.py"
-#         - "*.yml"
-#         - exclude:
-#             dir: local_deps
-
+- model: catch
+  default: true
+  operations:
+    train:
+      main: examples.catch.main
+      output-scalars: off
+      flags-import: all
+      sourcecode:
+        - "*.py"
+        - "*.yml"
+        - exclude:
+            dir: local_deps
 # - model: main
 #   default: true
 #   operations:

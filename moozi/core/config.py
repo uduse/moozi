@@ -34,10 +34,11 @@ class Config:
 
     # replay buffer
     replay_max_size: int = 1_000_000
-    replay_min_size: int = 1_000
-    
+    replay_min_size: int = 1
+    replay_prefetch_max_size: int = 10_000
+
     # mcts
-    num_train_simulations: int = 10
+    num_env_simulations: int = 10
     num_test_simulations: int = 30
 
     # system configuration
@@ -45,12 +46,13 @@ class Config:
     num_ticks_per_epoch: int = 10
     num_updates_per_samples_added: int = 2
 
-    num_train_workers: int = 2
-    num_universes_per_train_worker: int = 2
+    num_env_workers: int = 2
+    num_universes_per_env_worker: int = 2
 
     num_reanalyze_workers: int = 4
     num_universes_per_reanalyze_worker: int = 2
-    
+    num_trajs_per_reanalyze_universe: int = 5
+
     save_dir: Union[str, PathLike] = "./save/"
 
     def print(self):

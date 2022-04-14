@@ -15,21 +15,20 @@ from nptyping import NDArray
 
 import moozi as mz
 from moozi.core import Config, TrajectorySample, TrainTarget
-from moozi.logging import LogDatum, LogScalar
 
 
 @dataclass(repr=False)
 class ReplayBuffer:
-    # TODO: pre-fetch with async
     max_size: int = 1_000_000
     min_size: int = 1_000
+    prefetch_max_size: int = 1_000
+
     num_unroll_steps: int = 5
     num_td_steps: int = 5
     num_stacked_frames: int = 4
 
     store: Deque[TrajectorySample] = field(init=False)
 
-    prefetch_size: int = 1_000
     _prefetch_buffer: List[TrajectorySample] = field(default_factory=list)
 
     @staticmethod
@@ -40,6 +39,7 @@ class ReplayBuffer:
             num_unroll_steps=config.num_unroll_steps,
             num_td_steps=config.num_td_steps,
             num_stacked_frames=config.num_stacked_frames,
+            prefetch_max_size=config.replay_prefetch_max_size,
         )
         if remote:
             return ray.remote(ReplayBuffer).remote(**kwargs)
@@ -49,37 +49,42 @@ class ReplayBuffer:
     def __post_init__(self):
         self.store = collections.deque(maxlen=self.max_size)
         asyncio.create_task(self.launch_prefetcher())
+        logger.remove()
+        logger.add("logs/replay.log", level="DEBUG")
+        logger.info(f"Replay buffer created, {vars(self)}")
 
     async def add_samples(self, samples: List[TrajectorySample]):
         self.store.extend(samples)
         logger.debug(f"Replay buffer size: {self.size()}")
         return self.size()
 
-    async def get_batch(self, batch_size=1):
-        if not self.store:
-            logger.warning("Empty replay buffer")
-            return []
-        else:
-            if self.is_started():
-                while True:
-                    if len(self._prefetch_buffer) >= batch_size:
-                        return await self.take_batch_from_prefetch_buffer(batch_size)
-                    else:
-                        # wait for prefetcher
-                        logger.warning("Waiting for prefetcher")
-                        await asyncio.sleep(5)
+    async def get_train_batch(self, batch_size: int = 1) -> TrainTarget:
+        if batch_size > self.prefetch_max_size:
+            raise ValueError("batch_size must be <= prefetch_max_size")
+
+        await self.wait_until_started()
+
+        while True:
+            if len(self._prefetch_buffer) >= batch_size:
+                return await self.take_batch_from_prefetch_buffer(batch_size)
             else:
-                return []
+                logger.warning(
+                    f"Waiting for prefetcher, prefetch buffer size: {len(self._prefetch_buffer)}"
+                )
+                await asyncio.sleep(5)
+
+    async def get_traj_batch(self, batch_size: int = 1) -> List[TrajectorySample]:
+        await self.wait_until_started()
+        batch = random.choices(self.store, k=batch_size)
+        logger.debug(f"Trajectory batch size: {len(batch)}")
+        return batch
 
     async def take_batch_from_prefetch_buffer(self, batch_size: int):
-        if len(self._prefetch_buffer) >= batch_size:
-            batch = self._prefetch_buffer.copy()
-            self._prefetch_buffer = self._prefetch_buffer[batch_size:]
-            return tree_utils.stack_sequence_fields(batch)
-        else:
-            await asyncio.sleep(5)
+        batch = self._prefetch_buffer[:batch_size].copy()
+        self._prefetch_buffer = self._prefetch_buffer[batch_size:]
+        return tree_utils.stack_sequence_fields(batch)
 
-    def sample_target_from_store(self) -> TrajectorySample:
+    def _sample_train_target_from_store(self) -> TrajectorySample:
         traj = random.choice(self.store)
         random_start_idx = random.randrange(len(traj.last_reward))
         target = make_target_from_traj(
@@ -93,16 +98,25 @@ class ReplayBuffer:
         return target
 
     async def launch_prefetcher(self):
-        while len(self._prefetch_buffer) <= self.prefetch_size:
-            if self.is_started():
-                target = self.sample_target_from_store()
-                self._prefetch_buffer.append(target)
+        await self.wait_until_started()
+
+        logger.info("Prefetcher started")
+
+        while 1:
+            if len(self._prefetch_buffer) <= self.prefetch_max_size:
+                for _ in range(100):
+                    target = self._sample_train_target_from_store()
+                    self._prefetch_buffer.append(target)
+                await asyncio.sleep(0)
             else:
-                logger.warning("Waiting for replay buffer to be started")
-                await asyncio.sleep(5)
+                await asyncio.sleep(1)
 
     def is_started(self):
         return self.size() >= self.min_size
+
+    async def wait_until_started(self, delay: float = 5.0):
+        while not self.is_started():
+            await asyncio.sleep(delay)
 
     def __len__(self):
         return self.size()

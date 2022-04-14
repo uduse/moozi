@@ -1,23 +1,22 @@
 from dataclasses import dataclass, field
-import ray
-import haiku as hk
-import cloudpickle
 from pprint import pprint
-from typing import Callable, List
+from typing import Callable, List, Tuple, Union
 
 import chex
+import cloudpickle
+import haiku as hk
 import jax
 import jax.numpy as jnp
-from loguru import logger
 import optax
 import ray
 import rlax
 from absl import logging
+from acme.utils.tree_utils import unstack_sequence_fields
+from loguru import logger
 
 import moozi as mz
-from moozi.core import Config, make_env_spec, make_env
-from moozi.learner import TrainingState
-from moozi.logging import LogHistogram, LogDatum, LogScalar
+from moozi.core import Config, make_env, make_env_spec, TrainingState
+from moozi.logging import LogDatum, LogHistogram, LogScalar
 from moozi.nn import RootFeatures
 from moozi.nn.nn import NNModel, make_model
 from moozi.replay import TrainTarget
@@ -109,16 +108,25 @@ class ParameterOptimizer:
     model: mz.nn.NNModel = field(init=False)
     training_state: TrainingState = field(init=False)
     sgd_step_fn: Callable = field(init=False)
+    is_remote: bool = False
 
     loggers: List[mz.logging.Logger] = field(default_factory=list)
-    _last_step_data: List[LogDatum] = field(default_factory=list)
 
+    _last_step_data: List[LogDatum] = field(default_factory=list)
     _num_updates: int = 0
+
+    def __post_init__(self):
+        logger.remove()
+        logger.add("logs/param_opt.debug.log", level="DEBUG")
+        logger.add("logs/param_opt.info.log", level="INFO")
+        logger.info(f"Parameter optimizer created, {vars(self)}")
 
     @staticmethod
     def from_config(config: Config, remote: bool = False):
         if remote:
-            param_opt = ray.remote(num_cpus=1, num_gpus=1)(ParameterOptimizer).remote()
+            param_opt = ray.remote(num_cpus=1, num_gpus=1)(ParameterOptimizer).remote(
+                is_remote=True
+            )
             param_opt.make_training_suite.remote(config)
             param_opt.make_loggers.remote(
                 lambda: [
@@ -136,8 +144,6 @@ class ParameterOptimizer:
             )
             return param_opt
 
-    # TODO: rename all setup methods like this one to `setup()`
-    #       this includes other actors that need initialization
     def make_training_suite(self, config: Config):
         self.model = make_model(config.nn_arch_cls, config.nn_spec)
         params, state = self.model.init_params_and_state(jax.random.PRNGKey(0))
@@ -162,13 +168,17 @@ class ParameterOptimizer:
         self, big_batch: mz.replay.TrainTarget, batch_size: int, num_updates: int = 1
     ):
         if len(big_batch) == 0:
-            logger.warning("Batch is empty")
+            logger.warning("Batch is empty, update() skipped.")
             return
+
+        unstack_sequence_fields
 
         for _ in range(num_updates):
             for i in range(0, len(big_batch), batch_size):
                 batch = big_batch[i : i + batch_size]
+                logging.debug(f"updating with {len(batch)} samples in batch")
                 if len(batch) != batch_size:
+                    logging.debug(f"{len(batch)} samples in batch, {batch_size} expected")
                     break
                 self.training_state, extra = self.sgd_step_fn(
                     self.training_state, batch
@@ -176,9 +186,12 @@ class ParameterOptimizer:
                 self._num_updates += 1
                 self._last_step_data = extra["step_data"]
 
-    def get_params_and_state(self):
-        # TODO: use ray.put instead
-        return (self.training_state.params, self.training_state.state)
+    def get_params_and_state(self) -> Union[ray.ObjectRef, Tuple[hk.Params, hk.State]]:
+        ret = self.training_state.params, self.training_state.state
+        if self.is_remote:
+            return ray.put(ret)
+        else:
+            return ret
 
     def get_model(self):
         return self.model

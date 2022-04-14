@@ -42,3 +42,5 @@ class Tape:
 
     input_buffer: tuple = field(default_factory=tuple)
     output_buffer: tuple = field(default_factory=tuple)
+
+    interrupt_exit: bool = False

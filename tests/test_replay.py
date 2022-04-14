@@ -1,10 +1,12 @@
 import tree
-import moozi as mz
 import numpy as np
 import pytest
 from numpy.testing import assert_allclose
 
-SINGLE_PLAYER_SAMPLE = mz.replay.TrajectorySample(
+from moozi import TrajectorySample
+
+
+SINGLE_PLAYER_SAMPLE = TrajectorySample(
     frame=np.arange(6).reshape(6, 1, 1, 1),
     last_reward=[0, 200, 300, 400, 500, 600],
     is_first=[True, False, False, False, False, False],
@@ -147,7 +149,7 @@ REPLAY_TEST_CASES.append(
 )
 
 
-TWO_PLAYER_SAMPLE = mz.replay.TrajectorySample(
+TWO_PLAYER_SAMPLE = TrajectorySample(
     frame=np.arange(4).reshape(4, 1, 1, 1),
     last_reward=[0, 200, -300, 400],
     is_first=[True, False, False, False],

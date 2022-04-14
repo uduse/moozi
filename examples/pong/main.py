@@ -46,6 +46,10 @@ from moozi.utils import WallTimer
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
+import warnings
+
+warnings.simplefilter("ignore")
+
 # %%
 num_epochs = 50
 
@@ -61,8 +65,8 @@ config.replay_max_size = 100000
 config.num_epochs = num_epochs
 config.num_ticks_per_epoch = 1000
 config.num_updates_per_samples_added = 30
-config.num_train_workers = 5
-config.num_universes_per_train_worker = 5
+config.num_env_workers = 5
+config.num_universes_per_env_worker = 5
 config.weight_decay = 5e-2
 config.nn_arch_cls = mz.nn.ResNetArchitecture
 config.known_bound_min = -1
@@ -100,8 +104,8 @@ config.print()
 num_interactions = (
     config.num_epochs
     * config.num_ticks_per_epoch
-    * config.num_train_workers
-    * config.num_universes_per_train_worker
+    * config.num_env_workers
+    * config.num_universes_per_env_worker
 )
 print(f"num_interactions: {num_interactions}")
 
@@ -142,13 +146,13 @@ def make_laws_eval(config):
 
 def make_workers_train(config: Config, param_opt):
     workers = []
-    for _ in range(config.num_train_workers):
+    for _ in range(config.num_env_workers):
         worker = ray.remote(RolloutWorkerWithWeights).remote()
         worker.set_model.remote(param_opt.get_model.remote())
         worker.set_params_and_state.remote(param_opt.get_params_and_state.remote())
         worker.make_batching_layers.remote(config)
         worker.make_universes_from_laws.remote(
-            partial(make_laws_train, config), config.num_universes_per_train_worker
+            partial(make_laws_train, config), config.num_universes_per_env_worker
         )
         workers.append(worker)
     return workers

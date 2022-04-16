@@ -46,7 +46,7 @@ from moozi.utils import WallTimer
 
 
 # %%
-ray.init(address='auto', _redis_password='5241590000000000')
+# ray.init(address='auto', _redis_password='5241590000000000')
 
 # %%
 game_num_rows = 6

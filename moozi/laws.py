@@ -1,16 +1,16 @@
 import collections
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Deque, List, Optional, Union
-import uuid
 
 import dm_env
 import numpy as np
 from absl import logging
-from acme.utils.tree_utils import stack_sequence_fields
+from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from gym.wrappers.monitoring.video_recorder import VideoRecorder
 from loguru import logger
 
-from moozi.core import PolicyFeed, link, BASE_PLAYER, StepSample
+from moozi.core import BASE_PLAYER, PolicyFeed, StepSample, link
 
 
 @link
@@ -210,17 +210,19 @@ class AtariEnvLaw:
 @link
 @dataclass
 class ReanalyzeEnvLaw:
-    _curr_traj: Optional[StepSample] = None
+    _curr_traj: Optional[List[StepSample]] = None
     _curr_step: int = 0
 
     def __call__(self, input_buffer):
         input_buffer_update = input_buffer
         if (self._curr_traj is None) or (self._curr_step >= len(self._curr_traj)):
-            head = input_buffer[0]
-            assert isinstance(head, StepSample)
+            next_traj = input_buffer[0]
+            assert isinstance(next_traj, StepSample)
             self._curr_step = 0
-            self._curr_traj = head
+            self._curr_traj = unstack_sequence_fields(next_traj, batch_size=next_traj[0].shape[0])
             input_buffer_update = tuple(input_buffer[1:])
+        else:
+            self._curr_step += 1
 
         return dict(
             obs=self._curr_traj.frame[self._curr_step],

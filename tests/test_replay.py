@@ -104,7 +104,7 @@ REPLAY_TEST_CASES.append(
             n_step_return=[0, 0],
             last_reward=[0, 0],
             action_probs=[np.ones(3) / 3, np.ones(3) / 3],
-            root_value=[0, 0, 0],
+            root_value=[0, 0],
         ).cast(),
     )
 )
@@ -129,7 +129,7 @@ REPLAY_TEST_CASES.append(
                 np.ones(3) / 3,
                 np.ones(3) / 3,
             ],
-            root_value=[50, 60, 0, 0],
+            root_value=[50, 0, 0, 0],
         ).cast(),
     )
 )
@@ -154,7 +154,7 @@ REPLAY_TEST_CASES.append(
                 np.ones(3) / 3,
                 np.ones(3) / 3,
             ],
-            root_value=[50, 60, 0, 0],
+            root_value=[0, 0, 0, 0],
         ).cast(),
     )
 )
@@ -191,7 +191,7 @@ REPLAY_TEST_CASES.append(
             ],
             last_reward=[0, 200],
             action_probs=TWO_PLAYER_SAMPLE.action_probs[0:2],
-            root_value=[50, 60, 0, 0],
+            root_value=[10, 20],
         ).cast(),
     )
 )
@@ -211,7 +211,7 @@ REPLAY_TEST_CASES.append(
             n_step_return=[-300 + 30 * 0.5, 400, 0],
             last_reward=[0, -300, 400],
             action_probs=TWO_PLAYER_SAMPLE.action_probs[1:4],
-            root_value=[20, 30, 40],
+            root_value=[20, 30, 0],
         ).cast(),
     )
 )
@@ -236,7 +236,7 @@ REPLAY_TEST_CASES.append(
                 np.ones(3) / 3,
                 np.ones(3) / 3,
             ],
-            root_value=[30, 40, 50, 0],
+            root_value=[30, 0, 0, 0],
         ).cast(),
     )
 )

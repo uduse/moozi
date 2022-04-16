@@ -7,6 +7,7 @@ from moozi.nn.nn import NNModel
 from .types import PolicyFeed
 
 
+# TODO: fix type hints here
 @dataclass
 class Tape:
     universe_id: int = -1

@@ -215,14 +215,15 @@ class ReanalyzeEnvLaw:
 
     def __call__(self, input_buffer):
         input_buffer_update = input_buffer
-        if (self._curr_traj is None) or (self._curr_step >= len(self._curr_traj)):
-            next_traj = input_buffer[0]
-            assert isinstance(next_traj, StepSample)
+        self._curr_step += 1
+
+        if (self._curr_traj is None) or (
+            self._curr_step >= self._curr_traj[0].shape[0]
+        ):
             self._curr_step = 0
-            self._curr_traj = unstack_sequence_fields(next_traj, batch_size=next_traj[0].shape[0])
+            self._curr_traj = input_buffer[0]
+            assert isinstance(self._curr_traj, StepSample)
             input_buffer_update = tuple(input_buffer[1:])
-        else:
-            self._curr_step += 1
 
         return dict(
             obs=self._curr_traj.frame[self._curr_step],

@@ -44,7 +44,7 @@ class Config:
     # system configuration
     num_epochs: int = 2
     num_ticks_per_epoch: int = 10
-    num_updates_per_samples_added: int = 2
+    num_samples_per_update: int = 2
 
     num_env_workers: int = 2
     num_universes_per_env_worker: int = 2

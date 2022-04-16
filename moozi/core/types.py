@@ -60,7 +60,7 @@ class TrainTarget(NamedTuple):
     # value is computed based on the player of each timestep instead of the
     # player at the first timestep as the root player
     # this means if all rewards are positive, the values are always positive too
-    value: NDArray[np.float32]
+    n_step_return: NDArray[np.float32]
 
     # a faithful slice of the trajectory rewards, not flipped for multi-player games
     last_reward: NDArray[np.float32]
@@ -68,13 +68,17 @@ class TrainTarget(NamedTuple):
     # action probabilities from the search result
     action_probs: NDArray[np.float32]
 
+    # root value after the search
+    root_value: NDArray[np.float32]
+
     def cast(self) -> "TrainTarget":
         return TrainTarget(
             stacked_frames=np.asarray(self.stacked_frames, dtype=np.float32),
             action=np.asarray(self.action, dtype=np.int32),
-            value=np.asarray(self.value, dtype=np.float32),
+            n_step_return=np.asarray(self.n_step_return, dtype=np.float32),
             last_reward=np.asarray(self.last_reward, dtype=np.float32),
             action_probs=np.asarray(self.action_probs, dtype=np.float32),
+            root_value=np.asarray(self.root_value, dtype=np.float32),
         )
 
 

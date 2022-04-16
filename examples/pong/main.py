@@ -46,9 +46,6 @@ from moozi.utils import WallTimer
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
-import warnings
-
-warnings.simplefilter("ignore")
 
 # %%
 num_epochs = 50
@@ -64,7 +61,7 @@ config.lr = 3e-3
 config.replay_max_size = 100000
 config.num_epochs = num_epochs
 config.num_ticks_per_epoch = 1000
-config.num_updates_per_samples_added = 30
+config.num_samples_per_update = 30
 config.num_env_workers = 5
 config.num_universes_per_env_worker = 5
 config.weight_decay = 5e-2
@@ -190,7 +187,7 @@ with WallTimer():
         samples_added = [replay_buffer.add_samples.remote(s) for s in samples]
         while samples_added:
             _, samples_added = ray.wait(samples_added)
-            for _ in range(config.num_updates_per_samples_added):
+            for _ in range(config.num_samples_per_update):
                 batch = replay_buffer.get_batch.remote(config.batch_size)
                 param_opt.update.remote(batch)
 

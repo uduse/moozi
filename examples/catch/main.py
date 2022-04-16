@@ -1,25 +1,15 @@
 # %%
 import os
-from unicodedata import name
-
-import haiku as hk
-import jax
-import optax
-import tree
-from moozi.loss import MuZeroLoss
-from moozi.nn.nn import RootFeatures, make_model
-from moozi.nn.resnet import ResNetArchitecture, ResNetSpec
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
-from functools import partial
-from typing import List, NamedTuple
+from typing import List
 
 import moozi as mz
 import numpy as np
 import ray
 from absl import logging
-from moozi.core import Config, UniverseAsync, link
+from moozi.core import Config, link
 from moozi.core.env import make_env
 from moozi.laws import (
     OpenSpielEnvLaw,
@@ -27,6 +17,7 @@ from moozi.laws import (
     ReanalyzeEnvLaw,
     TrajectoryOutputWriter,
     exit_if_no_input,
+    increment_tick,
     make_policy_feed,
     output_last_step_reward,
     update_episode_stats,
@@ -35,7 +26,6 @@ from moozi.logging import (
     JAXBoardLoggerActor,
     JAXBoardLoggerV2,
     LogScalar,
-    TerminalLogger,
     TerminalLoggerActor,
 )
 from moozi.parameter_optimizer import ParameterOptimizer
@@ -51,13 +41,12 @@ from moozi.utils import WallTimer
 # %%
 game_num_rows = 6
 game_num_cols = 6
-num_epochs = 10
+num_epochs = 500
 
 config = Config()
 config.env = f"catch(rows={game_num_rows},columns={game_num_cols})"
-
-config.big_batch_size = 256
-config.batch_size = 32
+config.known_bound_min = -1
+config.known_bound_max = 1
 
 config.discount = 0.99
 config.num_unroll_steps = 2
@@ -67,22 +56,22 @@ config.lr = 3e-3
 
 config.replay_max_size = 100000
 config.replay_min_size = 1
-config.replay_prefetch_max_size = 2048
+config.replay_prefetch_max_size = 8192
 
 config.num_epochs = num_epochs
-config.num_ticks_per_epoch = game_num_rows
-config.num_updates_per_samples_added = 30
+
+config.big_batch_size = 4096
+config.batch_size = 128
 
 config.num_env_workers = 2
-config.num_universes_per_env_worker = 20
+config.num_ticks_per_epoch = game_num_rows * 1
+config.num_universes_per_env_worker = 10
 
-config.num_reanalyze_workers = 4
-config.num_universes_per_reanalyze_worker = 20
+config.num_reanalyze_workers = 2
+config.num_universes_per_reanalyze_worker = 10
 config.num_trajs_per_reanalyze_universe = 1
 
 config.weight_decay = 5e-2
-config.known_bound_min = -1
-config.known_bound_max = 1
 config.nn_arch_cls = mz.nn.ResNetArchitecture
 
 env_spec = mz.make_env_spec(config.env)
@@ -90,7 +79,6 @@ single_frame_shape = env_spec.observations.observation.shape
 obs_channels = single_frame_shape[-1] * config.num_stacked_frames
 repr_channels = 4
 dim_action = env_spec.actions.num_values
-
 config.nn_spec = mz.nn.ResNetSpec(
     obs_rows=game_num_rows,
     obs_cols=game_num_cols,
@@ -107,8 +95,10 @@ config.nn_spec = mz.nn.ResNetSpec(
     dyna_tower_dim=4,
     dyna_state_blocks=4,
 )
+
 config.print()
 
+# %% 
 num_interactions = (
     config.num_epochs
     * config.num_ticks_per_epoch
@@ -146,7 +136,9 @@ workers_env = make_rollout_workers(
         ),
         ActionSamplerLaw(),
         TrajectoryOutputWriter(),
+        increment_tick,
     ],
+    num_gpus=1 / 6,
 )
 
 workers_test = make_rollout_workers(
@@ -167,6 +159,7 @@ workers_test = make_rollout_workers(
         ),
         ActionSamplerLaw(temperature=0.1),
         output_last_step_reward,
+        increment_tick,
     ],
 )
 
@@ -189,7 +182,9 @@ workers_reanalyze = make_rollout_workers(
         ),
         ActionSamplerLaw(),
         TrajectoryOutputWriter(),
+        increment_tick,
     ],
+    num_gpus=1 / 6,
 )
 
 
@@ -197,34 +192,37 @@ jaxboard_logger = JAXBoardLoggerActor.remote("jaxboard_logger")
 terminal_logger = TerminalLoggerActor.remote("terminal_logger")
 terminal_logger.write.remote(param_opt.get_properties.remote())
 
-# %%
+# # %%
+sample_futures: List[ray.ObjectRef] = []
+
 with WallTimer():
     for epoch in range(config.num_epochs):
         logging.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
-        samples = [w.run.remote(config.num_ticks_per_epoch) for w in workers_env] + [
-            w.run.remote(None) for w in workers_reanalyze
-        ]
 
-        samples_added = [replay_buffer.add_samples.remote(s) for s in samples]
-        while samples_added:
-            _, samples_added = ray.wait(samples_added)
-            big_batch = replay_buffer.get_train_batch.remote(config.big_batch_size)
-            param_opt.update.remote(
-                big_batch, config.batch_size, config.num_updates_per_samples_added
+        for w in workers_env + workers_test + workers_reanalyze:
+            w.set_params_and_state.remote(param_opt.get_params_and_state.remote())
+
+        while sample_futures:
+            next_sample, sample_futures = ray.wait(sample_futures)
+            replay_buffer.add_samples.remote(next_sample[0])
+            train_batch = replay_buffer.get_train_batch.remote(config.big_batch_size)
+            param_opt.update.remote(train_batch, config.batch_size)
+            param_opt.log.remote()
+        jaxboard_logger.write.remote(replay_buffer.get_stats.remote())
+
+        env_samples = [w.run.remote(config.num_ticks_per_epoch) for w in workers_env]
+        reanalyze_samples = [w.run.remote(None) for w in workers_reanalyze]
+        sample_futures = env_samples + reanalyze_samples
+        test_result = workers_test[0].run.remote(6 * 10)
+        test_result_datum = convert_reward_to_logger_datum.remote(test_result)
+
+        for w in workers_reanalyze:
+            reanalyze_input = replay_buffer.get_traj_batch.remote(
+                config.num_trajs_per_reanalyze_universe
+                * config.num_universes_per_reanalyze_worker
             )
-            for w in workers_env + workers_test + workers_reanalyze:
-                w.set_params_and_state.remote(param_opt.get_params_and_state.remote())
+            w.set_inputs.remote(reanalyze_input)
 
-            for w in workers_reanalyze:
-                reanalyze_input = replay_buffer.get_traj_batch.remote(
-                    config.num_trajs_per_reanalyze_universe
-                    * config.num_universes_per_reanalyze_worker
-                )
-                w.set_inputs.remote(reanalyze_input)
-
-        param_opt.log.remote()
-        done = jaxboard_logger.write.remote(replay_buffer.get_stats.remote())
-        # done = jaxboard_logger.write.remote(eval_result_logger_datum)
-        # done = terminal_logger.write.remote(eval_result_logger_datum)
+        done = jaxboard_logger.write.remote(test_result_datum)
 
     ray.get(done)

@@ -105,12 +105,19 @@ class RolloutWorkerWithWeights:
 
     def set_inputs(self, inputs: List[Any]):
         assert len(inputs) % len(self.universes) == 0
-        # logger.info(f"Setting inputs: {inputs}")
-        for i, u in zip(range(0, len(inputs), len(self.universes)), self.universes):
-            inputs_slice = inputs[i : i + len(self.universes)]
-            u.tape.input_buffer = inputs_slice
+        logger.debug(f"Setting {len(inputs)} inputs to {len(self.universes)} universes")
+        inputs_per_universe = int(len(inputs) / len(self.universes))
+        for i, u in zip(range(0, len(inputs), inputs_per_universe), self.universes):
+            inputs_slice = inputs[i : i + inputs_per_universe]
+            if i == 0:
+                logger.debug(f"Input slice len: {len(inputs_slice)}")
+            u.tape.input_buffer = tuple(inputs_slice)
 
     def run(self, num_ticks: Optional[int] = 1):
+        # ignore trio warning
+        import warnings
+        warnings.simplefilter("ignore")
+
         async def main_loop():
             async with trio.open_nursery() as main_nursery:
                 self._set_inferences()
@@ -129,6 +136,7 @@ class RolloutWorkerWithWeights:
                     b.is_paused = True
 
         trio_asyncio.run(main_loop)
+        logger.debug(f"universe ticks: {self.universes[0].tape.num_ticks}")
 
         return self._flush_output_buffers()
 
@@ -164,13 +172,14 @@ def make_rollout_workers(
     params_and_state,
     laws_factory,
     use_batching="auto",
+    num_gpus=0,
 ):
     workers = []
     for i in range(num_workers):
         worker_name = f"{name}_{i}"
         worker = (
             ray.remote(RolloutWorkerWithWeights)
-            .options(name=worker_name)
+            .options(name=worker_name, num_gpus=num_gpus)
             .remote(name=worker_name)
         )
         worker.set_model.remote(model)

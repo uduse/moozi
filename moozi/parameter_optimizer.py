@@ -1,5 +1,5 @@
+import random
 from dataclasses import dataclass, field
-from pprint import pprint
 from typing import Callable, List, Tuple, Union
 
 import chex
@@ -11,15 +11,14 @@ import optax
 import ray
 import rlax
 from absl import logging
-from acme.utils.tree_utils import unstack_sequence_fields
+from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from loguru import logger
 
 import moozi as mz
-from moozi.core import Config, make_env, make_env_spec, TrainingState
-from moozi.logging import LogDatum, LogHistogram, LogScalar
+from moozi.core import Config, TrainingState, TrainTarget
+from moozi.logging import LogDatum
 from moozi.nn import RootFeatures
 from moozi.nn.nn import NNModel, make_model
-from moozi.replay import TrainTarget
 
 
 @ray.remote
@@ -97,8 +96,10 @@ def make_sgd_step_fn(
                 model, batch, training_state.params, new_params, training_state.state
             )
             step_data["prior_kl"] = prior_kl
-
-        return new_training_state, dict(state=extra["state"], step_data=step_data)
+        # step_data["value_diff"] = jnp.mean(
+        #     jnp.abs(batch.n_step_return - batch.root_value)
+        # )
+        return new_training_state, dict(step_data=step_data)
 
     return sgd_step_fn
 
@@ -124,7 +125,7 @@ class ParameterOptimizer:
     @staticmethod
     def from_config(config: Config, remote: bool = False):
         if remote:
-            param_opt = ray.remote(num_cpus=1, num_gpus=1)(ParameterOptimizer).remote(
+            param_opt = ray.remote(num_gpus=1)(ParameterOptimizer).remote(
                 is_remote=True
             )
             param_opt.make_training_suite.remote(config)
@@ -164,27 +165,27 @@ class ParameterOptimizer:
         )
         self.sgd_step_fn = make_sgd_step_fn(self.model, loss_fn, optimizer)
 
-    def update(
-        self, big_batch: mz.replay.TrainTarget, batch_size: int, num_updates: int = 1
-    ):
+    def update(self, big_batch: TrainTarget, batch_size: int):
         if len(big_batch) == 0:
             logger.warning("Batch is empty, update() skipped.")
             return
 
-        unstack_sequence_fields
+        train_targets: List[TrainTarget] = unstack_sequence_fields(
+            big_batch, big_batch[0].shape[0]
+        )
 
-        for _ in range(num_updates):
-            for i in range(0, len(big_batch), batch_size):
-                batch = big_batch[i : i + batch_size]
-                logging.debug(f"updating with {len(batch)} samples in batch")
-                if len(batch) != batch_size:
-                    logging.debug(f"{len(batch)} samples in batch, {batch_size} expected")
-                    break
-                self.training_state, extra = self.sgd_step_fn(
-                    self.training_state, batch
-                )
-                self._num_updates += 1
-                self._last_step_data = extra["step_data"]
+        logger.debug(
+            f"updating with {len(train_targets)} samples, batch size {batch_size}"
+        )
+
+        for i in range(0, len(train_targets), batch_size):
+            batch_slice = train_targets[i : i + batch_size]
+            batch = stack_sequence_fields(batch_slice)
+            self.training_state, extra = self.sgd_step_fn(self.training_state, batch)
+            self._num_updates += 1
+            self._last_step_data = extra["step_data"]
+
+        logger.debug(self.get_stats())
 
     def get_params_and_state(self) -> Union[ray.ObjectRef, Tuple[hk.Params, hk.State]]:
         ret = self.training_state.params, self.training_state.state
@@ -214,6 +215,7 @@ class ParameterOptimizer:
 
     def get_properties(self) -> dict:
         import os
+
         import jax
 
         ray_gpu_ids = ray.get_gpu_ids()

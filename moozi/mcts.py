@@ -269,6 +269,7 @@ class Planner:
     known_bound_min: Optional[float]
     known_bound_max: Optional[float]
     include_tree: bool = False
+    # TODO: add noise alpha
 
     # def __post__init__(self):
     #     logger.remove(0)
@@ -296,16 +297,15 @@ class Planner:
                 mcts_root,
             )
 
-            # if np.isnan(action_probs).any():
-            #     breakpoint()
-            # logger.debug(f"{action_probs=}")
+            update = dict(
+                action_probs=action_probs,
+                root_value=mcts_root.value,
+            )
+
             if self.include_tree:
-                return dict(
-                    action_probs=action_probs,
-                    mcts_root=copy.deepcopy(mcts_root),
-                )
-            else:
-                return dict(action_probs=action_probs)
+                update["mcts_root"] = copy.deepcopy(mcts_root)
+
+            return update
 
 
 def sample_action(action_probs, temperature=1.0):

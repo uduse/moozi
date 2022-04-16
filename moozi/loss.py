@@ -50,7 +50,7 @@ class MuZeroLoss(LossFn):
             [
                 batch.stacked_frames,
                 batch.action,
-                batch.value,
+                batch.n_step_return,
                 batch.last_reward,
                 batch.action_probs,
             ],
@@ -60,7 +60,7 @@ class MuZeroLoss(LossFn):
             [
                 batch.stacked_frames,
                 batch.action,
-                batch.value,
+                batch.n_step_return,
                 batch.last_reward,
                 batch.action_probs,
             ],
@@ -80,7 +80,7 @@ class MuZeroLoss(LossFn):
         losses = {}
 
         losses["loss:value_0"] = vmap(mse)(
-            batch.value.take(0, axis=1), network_output.value
+            batch.n_step_return.take(0, axis=1), network_output.value
         )
         losses["loss:action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
             batch.action_probs.take(0, axis=1), network_output.policy_logits
@@ -100,7 +100,7 @@ class MuZeroLoss(LossFn):
                 batch.last_reward.take(i + 1, axis=1), network_output.reward
             )
             losses[f"loss:value_{str(i + 1)}"] = vmap(mse)(
-                batch.value.take(i + 1, axis=1), network_output.value
+                batch.n_step_return.take(i + 1, axis=1), network_output.value
             )
             losses[f"loss:action_probs_{str(i + 1)}"] = vmap(
                 rlax.categorical_cross_entropy

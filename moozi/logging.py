@@ -7,7 +7,7 @@ import haiku as hk
 import jax.numpy as jnp
 import numpy as np
 import ray
-from absl import logging
+from loguru import logger
 
 import moozi as mz
 
@@ -90,7 +90,7 @@ class JAXBoardLoggerV2(Logger):
         self._time = time.time()
         self._steps = 0
         self._writer = mz.jaxboard.SummaryWriter(name, log_dir=self._log_dir)
-        logging.info(f"{self._name} is logging to {(self._log_dir)}")
+        logger.info(f"{self._name} is logging to {(self._log_dir)}")
 
     def write(self, data: Union[List[LogDatum], LogDatum, dict]):
         data_ready = LogDatum.from_any(data)
@@ -136,6 +136,7 @@ class JAXBoardLoggerV2(Logger):
 JAXBoardLoggerActor = ray.remote(num_cpus=0)(JAXBoardLoggerV2)
 
 
+# TODO: deprecated the use of terminal logger, just log to files
 class TerminalLogger(Logger):
     def __init__(self, name="logger", time_delta: float = 0.0):
         self._name = name

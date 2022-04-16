@@ -26,16 +26,20 @@ class ReplayBuffer:
     num_unroll_steps: int = 5
     num_td_steps: int = 5
     num_stacked_frames: int = 4
+    discount: float = 1.0
 
     store: Deque[TrajectorySample] = field(init=False)
 
-    _prefetch_buffer: List[TrajectorySample] = field(default_factory=list)
+    _prefetch_buffer: List[TrainTarget] = field(default_factory=list)
+    
+    _last_value_diff: float = float('inf')
 
     @staticmethod
     def from_config(config: Config, remote: bool = False):
         kwargs = dict(
             max_size=config.replay_max_size,
             min_size=config.replay_min_size,
+            discount=config.discount,
             num_unroll_steps=config.num_unroll_steps,
             num_td_steps=config.num_td_steps,
             num_stacked_frames=config.num_stacked_frames,
@@ -55,8 +59,24 @@ class ReplayBuffer:
 
     async def add_samples(self, samples: List[TrajectorySample]):
         self.store.extend(samples)
+        self._compute_samples_valued_diff(samples)
         logger.debug(f"Replay buffer size: {self.size()}")
         return self.size()
+
+    def _compute_samples_valued_diff(self, samples: List[TrajectorySample]):
+        total = []
+        for sample in samples:
+            for i in range(len(sample.last_reward) - 1):
+                target = make_target_from_traj(
+                    sample,
+                    start_idx=i,
+                    discount=self.discount,
+                    num_unroll_steps=self.num_unroll_steps,
+                    num_td_steps=self.num_td_steps,
+                    num_stacked_frames=self.num_stacked_frames,
+                )
+                total.append(np.abs(target.n_step_return - target.root_value))
+        self._last_value_diff = float(np.mean(total))
 
     async def get_train_batch(self, batch_size: int = 1) -> TrainTarget:
         if batch_size > self.prefetch_max_size:
@@ -66,7 +86,8 @@ class ReplayBuffer:
 
         while True:
             if len(self._prefetch_buffer) >= batch_size:
-                return await self.take_batch_from_prefetch_buffer(batch_size)
+                batch = await self.take_batch_from_prefetch_buffer(batch_size)
+                return batch
             else:
                 logger.warning(
                     f"Waiting for prefetcher, prefetch buffer size: {len(self._prefetch_buffer)}"
@@ -79,18 +100,18 @@ class ReplayBuffer:
         logger.debug(f"Trajectory batch size: {len(batch)}")
         return batch
 
-    async def take_batch_from_prefetch_buffer(self, batch_size: int):
+    async def take_batch_from_prefetch_buffer(self, batch_size: int) -> TrainTarget:
         batch = self._prefetch_buffer[:batch_size].copy()
         self._prefetch_buffer = self._prefetch_buffer[batch_size:]
         return tree_utils.stack_sequence_fields(batch)
 
-    def _sample_train_target_from_store(self) -> TrajectorySample:
+    def _sample_train_target_from_store(self) -> TrainTarget:
         traj = random.choice(self.store)
         random_start_idx = random.randrange(len(traj.last_reward))
         target = make_target_from_traj(
             traj,
             start_idx=random_start_idx,
-            discount=1.0,
+            discount=self.discount,
             num_unroll_steps=self.num_unroll_steps,
             num_td_steps=self.num_td_steps,
             num_stacked_frames=self.num_stacked_frames,
@@ -125,7 +146,7 @@ class ReplayBuffer:
         return len(self.store)
 
     def get_stats(self):
-        return dict(size=self.size())
+        return dict(replay_size=self.size(), value_diff=self._last_value_diff)
 
 
 def make_target_from_traj(
@@ -135,33 +156,34 @@ def make_target_from_traj(
     num_unroll_steps,
     num_td_steps,
     num_stacked_frames,
-):
+) -> TrainTarget:
     # assert not batched
     assert len(sample.last_reward.shape) == 1
 
     last_step_idx = sample.is_last.argmax()
 
     stacked_frames = _get_stacked_frames(sample, start_idx, num_stacked_frames)
+    action = _get_action(sample, start_idx, num_unroll_steps)
 
-    # unroll
     unrolled_data = []
-    # root_player = sample.to_play[start_idx]
     for curr_idx in range(start_idx, start_idx + num_unroll_steps + 1):
-        value = _get_value(sample, curr_idx, last_step_idx, num_td_steps, discount)
+        n_step_return = _get_n_step_return(
+            sample, curr_idx, last_step_idx, num_td_steps, discount
+        )
         last_reward = _get_last_reward(sample, start_idx, curr_idx, last_step_idx)
         action_probs = _get_action_probs(sample, curr_idx, last_step_idx)
-        unrolled_data.append((value, last_reward, action_probs))
+        root_value = _get_root_value(sample, curr_idx, last_step_idx)
+        unrolled_data.append((n_step_return, last_reward, action_probs, root_value))
 
     unrolled_data_stacked = tree_utils.stack_sequence_fields(unrolled_data)
-
-    action = _get_action(sample, start_idx, num_unroll_steps)
 
     return TrainTarget(
         stacked_frames=stacked_frames,
         action=action,
-        value=unrolled_data_stacked[0],
+        n_step_return=unrolled_data_stacked[0],
         last_reward=unrolled_data_stacked[1],
         action_probs=unrolled_data_stacked[2],
+        root_value=unrolled_data_stacked[3],
     )
 
 
@@ -188,15 +210,14 @@ def _get_stacked_frames(sample: TrajectorySample, start_idx, num_stacked_frames)
     return stacked_frames
 
 
-def _get_value(
+def _get_n_step_return(
     sample: TrajectorySample,
     curr_idx,
     last_step_idx,
     num_td_steps,
     discount,
-    # root_player,
 ):
-    # value is computed based on current player instead of root player
+    """The observed N-step return with bootstrapping."""
     if curr_idx >= last_step_idx:
         return 0
 
@@ -251,12 +272,6 @@ def _get_last_reward(sample: TrajectorySample, start_idx, curr_idx, last_step_id
     if curr_idx == start_idx:
         return 0
     elif curr_idx <= last_step_idx:
-        # TODO: is this correct?
-        player_of_reward = sample.to_play[curr_idx - 1]
-        # if player_of_reward == mz.BASE_PLAYER:
-        #     return sample.last_reward[curr_idx]
-        # else:
-        #     return -sample.last_reward[curr_idx]
         return sample.last_reward[curr_idx]
     else:
         return 0
@@ -267,3 +282,10 @@ def _get_action_probs(sample: TrajectorySample, curr_idx, last_step_idx):
         return sample.action_probs[curr_idx]
     else:
         return np.ones_like(sample.action_probs[0]) / len(sample.action_probs[0])
+
+
+def _get_root_value(sample: TrajectorySample, curr_idx, last_step_idx):
+    if curr_idx <= last_step_idx:
+        return sample.root_value[curr_idx]
+    else:
+        return 0.0

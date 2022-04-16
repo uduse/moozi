@@ -24,7 +24,7 @@ def train_target(env: Environment, num_unroll_steps, num_stacked_frames):
     target = mz.replay.TrainTarget(
         stacked_frames=stacked_frames,
         action=action,
-        value=value,
+        n_step_return=value,
         last_reward=last_reward,
         action_probs=action_probs,
     ).cast()

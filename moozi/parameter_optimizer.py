@@ -1,5 +1,6 @@
 import random
 from dataclasses import dataclass, field
+import sys
 from typing import Callable, List, Tuple, Union
 
 import chex
@@ -115,6 +116,7 @@ class ParameterOptimizer:
 
     def __post_init__(self):
         logger.remove()
+        logger.add(sys.stderr, level="WARNING")
         logger.add("logs/param_opt.debug.log", level="DEBUG")
         logger.add("logs/param_opt.info.log", level="INFO")
         logger.info(f"Parameter optimizer created, {vars(self)}")
@@ -181,6 +183,8 @@ class ParameterOptimizer:
 
         for i in range(0, len(train_targets), batch_size):
             batch_slice = train_targets[i : i + batch_size]
+            if len(batch_slice) != batch_size:
+                break
             batch = stack_sequence_fields(batch_slice)
             self.training_state, extra = self.sgd_step_fn(self.training_state, batch)
             self._num_updates += 1

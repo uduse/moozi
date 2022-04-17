@@ -149,15 +149,16 @@ class ResNetArchitecture(NNArchitecture):
 
         # pred value head
         # TODO: sigmoid only for reward range [-1, 1]
-        value = hk.Linear(output_size=1, name="pred_v")(pred_trunk_flat)
+        value = hk.nets.MLP(output_sizes=[128, 128, 1])(pred_trunk_flat)
         value = jax.nn.sigmoid(value)
         chex.assert_shape(value, (None, 1))
 
         # pred policy head
-        policy_logits = hk.Linear(output_size=self.spec.dim_action, name="pred_p")(
-            pred_trunk_flat
-        )
-        policy_logits = jax.nn.relu(policy_logits)
+        policy_logits = hk.nets.MLP(
+            output_sizes=[128, 128, self.spec.dim_action],
+            name="policy_head",
+        )(pred_trunk_flat)
+        policy_logits = jax.nn.leaky_relu(policy_logits)
         chex.assert_shape(policy_logits, (None, self.spec.dim_action))
 
         return value, policy_logits

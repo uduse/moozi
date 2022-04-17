@@ -1,4 +1,6 @@
 # %%
+import pprint
+import copy
 from dataclasses import dataclass, field
 import os
 from typing import List, Tuple
@@ -6,7 +8,6 @@ from typing import List, Tuple
 import moozi as mz
 import numpy as np
 import ray
-from absl import logging
 from loguru import logger
 from moozi.core import Config, link
 from moozi.core.env import make_env
@@ -18,7 +19,6 @@ from moozi.laws import (
     exit_if_no_input,
     increment_tick,
     make_policy_feed,
-    output_last_step_reward,
 )
 from moozi.logging import (
     JAXBoardLoggerActor,
@@ -35,9 +35,10 @@ from moozi.utils import WallTimer
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 # %%
-redis_password = None
-if redis_password:
-    ray.init(address="auto", _redis_password=redis_password)
+# redis_password = None
+# if redis_password:
+#     ray.init(address="auto", _redis_password=redis_password)
+ray.init(address="auto")
 
 # %%
 logger.add("logs/main.log")
@@ -45,7 +46,9 @@ logger.add("logs/main.log")
 # %%
 game_num_rows = 6
 game_num_cols = 6
-num_epochs = 500
+num_epochs = 200
+big_batch_size = 5000
+lr = 5e-3
 
 config = Config()
 config.env = f"catch(rows={game_num_rows},columns={game_num_cols})"
@@ -55,19 +58,19 @@ config.known_bound_max = 1
 config.discount = 0.99
 config.num_unroll_steps = 2
 config.num_td_steps = 100
-config.num_stacked_frames = 2
-config.lr = 5e-3
+config.num_stacked_frames = 1
+config.lr = lr
 
 config.replay_max_size = 100000
-config.replay_min_size = 1
-config.replay_prefetch_max_size = 256 * 16
+config.replay_min_size = 50
+config.replay_prefetch_max_size = big_batch_size * 2
 
 config.num_epochs = num_epochs
 
-config.big_batch_size = int(config.replay_prefetch_max_size * 0.5)
-config.batch_size = 256
+config.big_batch_size = big_batch_size
+config.batch_size = 64
 
-config.num_env_workers = 2
+config.num_env_workers = 3
 config.num_ticks_per_epoch = game_num_rows * 1
 config.num_universes_per_env_worker = 20
 
@@ -100,7 +103,7 @@ config.nn_spec = mz.nn.ResNetSpec(
     dyna_state_blocks=6,
 )
 
-logger.info(f"config: {config.asdict()}")
+logger.info(f"config: {pprint.pformat(config.asdict())}")
 
 # %%
 num_interactions = (
@@ -171,7 +174,7 @@ workers_env = make_rollout_workers(
 
 @link
 @dataclass
-class TestResultRecorder:
+class TestResultOutputWriter:
     renderings: List[str] = field(default_factory=list)
     action_probs: List[np.ndarray] = field(default_factory=list)
     actions: List[int] = field(default_factory=list)
@@ -193,7 +196,7 @@ class TestResultRecorder:
 
         if is_last:
             self.reward = reward
-            update["output_buffer"] = output_buffer + (self,)
+            update["output_buffer"] = output_buffer + (copy.deepcopy(self),)
 
         return update
 
@@ -209,10 +212,10 @@ class TestResultRecorder:
 
 # %%
 @ray.remote
-def convert_test_result_record(recorders: Tuple[TestResultRecorder, ...]):
+def convert_test_result_record(recorders: Tuple[TestResultOutputWriter, ...]):
     return [
-        LogScalar("mean_reward", np.mean([x.reward for x in recorders])),
-        LogText("test vis", "\n\n\n\n".join([str(x) for x in recorders])),
+        LogScalar("mean_reward", float(np.mean([x.reward for x in recorders]))),
+        LogText("test_vis", "\n\n\n\n".join([str(x) for x in recorders])),
     ]
 
 
@@ -234,7 +237,7 @@ workers_test = make_rollout_workers(
             dirichlet_alpha=0.1,
         ),
         ActionSamplerLaw(temperature=0.2),
-        TestResultRecorder(),
+        TestResultOutputWriter(),
         increment_tick,
     ],
 )
@@ -273,7 +276,7 @@ sample_futures: List[ray.ObjectRef] = []
 
 with WallTimer():
     for epoch in range(config.num_epochs):
-        logging.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
+        logger.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
 
         for w in workers_env + workers_test + workers_reanalyze:
             w.set_params_and_state.remote(param_opt.get_params_and_state.remote())
@@ -289,7 +292,7 @@ with WallTimer():
         env_samples = [w.run.remote(config.num_ticks_per_epoch) for w in workers_env]
         reanalyze_samples = [w.run.remote(None) for w in workers_reanalyze]
         sample_futures = env_samples + reanalyze_samples
-        test_result = workers_test[0].run.remote(6 * 10)
+        test_result = workers_test[0].run.remote(6 * 20)
         test_result_datum = convert_test_result_record.remote(test_result)
 
         for w in workers_reanalyze:
@@ -302,4 +305,6 @@ with WallTimer():
         done = jaxboard_logger.write.remote(test_result_datum)
 
     ray.get(done)
-    ray.get(jaxboard_logger.close.remote())
+
+ray.get(jaxboard_logger.close.remote())
+ray.get(param_opt.close.remote())

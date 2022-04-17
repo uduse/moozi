@@ -58,9 +58,11 @@ class ReplayBuffer:
         logger.info(f"Replay buffer created, {vars(self)}")
 
     async def add_samples(self, samples: List[TrajectorySample]):
+        logger.debug(f"Adding samples to replay buffer, size: {self.size()}")
         self.store.extend(samples)
-        self._compute_samples_valued_diff(samples)
-        logger.debug(f"Replay buffer size: {self.size()}")
+        if samples:
+            self._compute_samples_valued_diff(samples)
+        logger.debug(f"Replay buffer size after adding samples: {self.size()}")
         return self.size()
 
     def _compute_samples_valued_diff(self, samples: List[TrajectorySample]):
@@ -147,7 +149,7 @@ class ReplayBuffer:
     def size(self):
         return len(self.store)
 
-    def get_stats(self):
+    async def get_stats(self):
         return dict(replay_size=self.size(), value_diff=self._last_value_diff)
 
 

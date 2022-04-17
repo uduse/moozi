@@ -115,8 +115,8 @@ class RolloutWorkerWithWeights:
 
     def run(self, num_ticks: Optional[int] = 1):
         # ignore trio warning
-        import warnings
-        warnings.simplefilter("ignore")
+        # import warnings
+        # warnings.simplefilter("ignore")
 
         async def main_loop():
             async with trio.open_nursery() as main_nursery:

@@ -162,7 +162,7 @@ workers_env = make_rollout_workers(
             include_tree=False,
         ),
         ActionSamplerLaw(),
-        # TrajectoryOutputWriter(),
+        TrajectoryOutputWriter(),
         increment_tick,
     ],
     num_gpus=1 / 6,

@@ -31,8 +31,8 @@ class ReplayBuffer:
     store: Deque[TrajectorySample] = field(init=False)
 
     _prefetch_buffer: List[TrainTarget] = field(default_factory=list)
-    
-    _last_value_diff: float = float('inf')
+
+    _last_value_diff: float = float("inf")
 
     @staticmethod
     def from_config(config: Config, remote: bool = False):
@@ -128,6 +128,7 @@ class ReplayBuffer:
                 for _ in range(100):
                     target = self._sample_train_target_from_store()
                     self._prefetch_buffer.append(target)
+                logger.debug(f"Prefetch buffer size: {len(self._prefetch_buffer)}")
                 await asyncio.sleep(0)
             else:
                 await asyncio.sleep(1)
@@ -138,6 +139,7 @@ class ReplayBuffer:
     async def wait_until_started(self, delay: float = 5.0):
         while not self.is_started():
             await asyncio.sleep(delay)
+            logger.debug(f"Waiting for replay buffer to start, size: {self.size()}")
 
     def __len__(self):
         return self.size()

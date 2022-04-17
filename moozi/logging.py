@@ -21,14 +21,22 @@ class LogDatum:
         # TODO: this is a little bit stupid, we should register dataclasses as pytree
         assert isinstance(d, dict)
         mappers = (
-            (int, LogScalar),
             (float, LogScalar),
+            (int, LogScalar),
             (str, LogText),
             (np.array, LogHistogram),
         )
 
         def process(key, val):
-            if isinstance(val, jnp.ndarray):
+            if isinstance(val, (int, float)):
+                return LogScalar(key, val)
+
+            try:
+                return LogScalar(key, val.item())
+            except:
+                pass
+
+            if isinstance(val, (jnp.ndarray, np.ndarray)):
                 if val.size == 1:
                     return LogScalar(key, float(val))
                 else:
@@ -37,7 +45,7 @@ class LogDatum:
             for cast_fn, target_cls in mappers:
                 try:
                     val = cast_fn(val)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OverflowError):
                     pass
                 else:
                     return target_cls(key, val)

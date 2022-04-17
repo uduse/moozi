@@ -34,6 +34,11 @@ def mse(a, b):
     return jnp.mean((a - b) ** 2)
 
 
+def scale_gradient(x, scale):
+    """Scales the gradient for the backward pass."""
+    return x * scale + jax.lax.stop_gradient(x) * (1 - scale)
+
+
 @dataclass
 class MuZeroLoss(LossFn):
     num_unroll_steps: int
@@ -86,31 +91,38 @@ class MuZeroLoss(LossFn):
             batch.action_probs.take(0, axis=1), network_output.policy_logits
         )
 
-        # TODO: scale transition loss by number of steps?
+        transition_loss_scale = 1 / self.num_unroll_steps
         for i in range(self.num_unroll_steps):
+            hidden_state = scale_gradient(network_output.hidden_state, 0.5)
             recurr_inf_features = TransitionFeatures(
-                hidden_state=network_output.hidden_state,
+                hidden_state=hidden_state,
                 action=batch.action.take(0, axis=1),
             )
             network_output, state = model.trans_inference(
                 params, state, recurr_inf_features, is_training
             )
 
-            losses[f"loss:reward_{str(i + 1)}"] = vmap(mse)(
-                batch.last_reward.take(i + 1, axis=1), network_output.reward
+            losses[f"loss:reward_{str(i + 1)}"] = (
+                vmap(mse)(batch.last_reward.take(i + 1, axis=1), network_output.reward)
+                * transition_loss_scale
             )
-            losses[f"loss:value_{str(i + 1)}"] = vmap(mse)(
-                batch.n_step_return.take(i + 1, axis=1), network_output.value
+            losses[f"loss:value_{str(i + 1)}"] = (
+                vmap(mse)(batch.n_step_return.take(i + 1, axis=1), network_output.value)
+                * transition_loss_scale
             )
-            losses[f"loss:action_probs_{str(i + 1)}"] = vmap(
-                rlax.categorical_cross_entropy
-            )(batch.action_probs.take(i + 1, axis=1), network_output.policy_logits)
+            losses[f"loss:action_probs_{str(i + 1)}"] = (
+                vmap(rlax.categorical_cross_entropy)(
+                    batch.action_probs.take(i + 1, axis=1), network_output.policy_logits
+                )
+                * transition_loss_scale
+            )
 
         losses["loss:l2"] = jnp.reshape(
             params_l2_loss(params) * self.weight_decay, (1,)
         )
 
-        loss = jnp.sum(jnp.concatenate(tree.flatten(losses)))
+        loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
+
         losses["loss"] = loss
 
         step_data = {}

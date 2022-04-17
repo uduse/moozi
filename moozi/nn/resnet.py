@@ -148,8 +148,8 @@ class ResNetArchitecture(NNArchitecture):
         )
 
         # pred value head
-        value = hk.Linear(output_size=1, name="pred_v")(pred_trunk_flat)
         # TODO: sigmoid only for reward range [-1, 1]
+        value = hk.Linear(output_size=1, name="pred_v")(pred_trunk_flat)
         value = jax.nn.sigmoid(value)
         chex.assert_shape(value, (None, 1))
 
@@ -158,9 +158,6 @@ class ResNetArchitecture(NNArchitecture):
             pred_trunk_flat
         )
         policy_logits = jax.nn.relu(policy_logits)
-        # two other flavors of policy head final activation
-        # policy_logits = jnp.clip(policy_logits, 0, 20)
-        # policy_logits = jax.nn.sigmoid(policy_logits) * 20
         chex.assert_shape(policy_logits, (None, self.spec.dim_action))
 
         return value, policy_logits

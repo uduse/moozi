@@ -1,42 +1,46 @@
 # %%
+from dataclasses import dataclass, field
 import os
-
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
-from typing import List
+from typing import List, Tuple
 
 import moozi as mz
 import numpy as np
 import ray
 from absl import logging
+from loguru import logger
 from moozi.core import Config, link
 from moozi.core.env import make_env
 from moozi.laws import (
-    OpenSpielEnvLaw,
     FrameStacker,
+    OpenSpielEnvLaw,
     ReanalyzeEnvLaw,
     TrajectoryOutputWriter,
     exit_if_no_input,
     increment_tick,
     make_policy_feed,
     output_last_step_reward,
-    update_episode_stats,
 )
 from moozi.logging import (
     JAXBoardLoggerActor,
-    JAXBoardLoggerV2,
     LogScalar,
+    LogText,
     TerminalLoggerActor,
 )
-from moozi.parameter_optimizer import ParameterOptimizer
 from moozi.mcts import ActionSamplerLaw, Planner
+from moozi.parameter_optimizer import ParameterOptimizer
 from moozi.replay import ReplayBuffer
 from moozi.rollout_worker import make_rollout_workers
 from moozi.utils import WallTimer
 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 # %%
-# ray.init(address='auto', _redis_password='5241590000000000')
+redis_password = None
+if redis_password:
+    ray.init(address="auto", _redis_password=redis_password)
+
+# %%
+logger.add("logs/main.log")
 
 # %%
 game_num_rows = 6
@@ -51,23 +55,23 @@ config.known_bound_max = 1
 config.discount = 0.99
 config.num_unroll_steps = 2
 config.num_td_steps = 100
-config.num_stacked_frames = 1
-config.lr = 3e-3
+config.num_stacked_frames = 2
+config.lr = 5e-3
 
 config.replay_max_size = 100000
 config.replay_min_size = 1
-config.replay_prefetch_max_size = 8192
+config.replay_prefetch_max_size = 256 * 16
 
 config.num_epochs = num_epochs
 
-config.big_batch_size = 4096
-config.batch_size = 128
+config.big_batch_size = int(config.replay_prefetch_max_size * 0.5)
+config.batch_size = 256
 
 config.num_env_workers = 2
 config.num_ticks_per_epoch = game_num_rows * 1
-config.num_universes_per_env_worker = 10
+config.num_universes_per_env_worker = 20
 
-config.num_reanalyze_workers = 2
+config.num_reanalyze_workers = 0
 config.num_universes_per_reanalyze_worker = 10
 config.num_trajs_per_reanalyze_universe = 1
 
@@ -77,7 +81,7 @@ config.nn_arch_cls = mz.nn.ResNetArchitecture
 env_spec = mz.make_env_spec(config.env)
 single_frame_shape = env_spec.observations.observation.shape
 obs_channels = single_frame_shape[-1] * config.num_stacked_frames
-repr_channels = 4
+repr_channels = 6
 dim_action = env_spec.actions.num_values
 config.nn_spec = mz.nn.ResNetSpec(
     obs_rows=game_num_rows,
@@ -87,30 +91,53 @@ config.nn_spec = mz.nn.ResNetSpec(
     repr_cols=game_num_cols,
     repr_channels=repr_channels,
     dim_action=dim_action,
-    repr_tower_blocks=4,
-    repr_tower_dim=4,
-    pred_tower_blocks=4,
-    pred_tower_dim=4,
-    dyna_tower_blocks=4,
-    dyna_tower_dim=4,
-    dyna_state_blocks=4,
+    repr_tower_blocks=6,
+    repr_tower_dim=6,
+    pred_tower_blocks=6,
+    pred_tower_dim=6,
+    dyna_tower_blocks=6,
+    dyna_tower_dim=6,
+    dyna_state_blocks=6,
 )
 
-config.print()
+logger.info(f"config: {config.asdict()}")
 
-# %% 
+# %%
 num_interactions = (
     config.num_epochs
     * config.num_ticks_per_epoch
     * config.num_env_workers
     * config.num_universes_per_env_worker
 )
-print(f"num_interactions: {num_interactions}")
+logger.info(f"num_interactions: {num_interactions}")
+
+# %%
+total_update_calls = config.num_epochs * (
+    config.num_env_workers + config.num_reanalyze_workers
+)
+total_mini_batchs = total_update_calls * int(config.big_batch_size / config.batch_size)
+total_samples = total_update_calls * config.big_batch_size
+logger.info(f"total_update_calls: {total_update_calls}")
+logger.info(f"total_mini_batchs: {total_mini_batchs}")
+logger.info(f"total_samples: {total_samples}")
 
 
-@ray.remote
-def convert_reward_to_logger_datum(rewards):
-    return LogScalar("mean_reward", np.mean(rewards))
+# %%
+def frame_to_str(frame):
+    frame = frame[0]
+    items = []
+    for irow, row in enumerate(frame):
+        for val in row:
+            if np.isclose(val, 0.0):
+                items.append(".")
+                continue
+            assert np.isclose(val, 1), val
+            if irow == len(frame) - 1:
+                items.append("X")
+            else:
+                items.append("O")
+        items.append("\n\n")
+    return "".join(items)
 
 
 # %%
@@ -135,11 +162,59 @@ workers_env = make_rollout_workers(
             include_tree=False,
         ),
         ActionSamplerLaw(),
-        TrajectoryOutputWriter(),
+        # TrajectoryOutputWriter(),
         increment_tick,
     ],
     num_gpus=1 / 6,
 )
+
+
+@link
+@dataclass
+class TestResultRecorder:
+    renderings: List[str] = field(default_factory=list)
+    action_probs: List[np.ndarray] = field(default_factory=list)
+    actions: List[int] = field(default_factory=list)
+    reward: float = 0.0
+
+    def __call__(
+        self, obs, action_probs, action, reward, is_first, is_last, output_buffer
+    ):
+        if is_first:
+            self.renderings = []
+            self.action_probs = []
+            self.actions = []
+
+        self.renderings.append(frame_to_str(obs))
+        self.action_probs.append(np.round(action_probs, 2))
+        self.actions.append(action)
+
+        update = {}
+
+        if is_last:
+            self.reward = reward
+            update["output_buffer"] = output_buffer + (self,)
+
+        return update
+
+    def __str__(self):
+        s = ""
+        for rendering, action_probs, action in zip(
+            self.renderings, self.action_probs, self.actions
+        ):
+            s += f"{rendering}\n\n"
+            s += f"{action_probs} -> {action}\n\n"
+        return s
+
+
+# %%
+@ray.remote
+def convert_test_result_record(recorders: Tuple[TestResultRecorder, ...]):
+    return [
+        LogScalar("mean_reward", np.mean([x.reward for x in recorders])),
+        LogText("test vis", "\n\n\n\n".join([str(x) for x in recorders])),
+    ]
+
 
 workers_test = make_rollout_workers(
     name="test",
@@ -156,9 +231,10 @@ workers_test = make_rollout_workers(
             known_bound_min=config.known_bound_min,
             known_bound_max=config.known_bound_max,
             include_tree=False,
+            dirichlet_alpha=0.1,
         ),
-        ActionSamplerLaw(temperature=0.1),
-        output_last_step_reward,
+        ActionSamplerLaw(temperature=0.2),
+        TestResultRecorder(),
         increment_tick,
     ],
 )
@@ -214,7 +290,7 @@ with WallTimer():
         reanalyze_samples = [w.run.remote(None) for w in workers_reanalyze]
         sample_futures = env_samples + reanalyze_samples
         test_result = workers_test[0].run.remote(6 * 10)
-        test_result_datum = convert_reward_to_logger_datum.remote(test_result)
+        test_result_datum = convert_test_result_record.remote(test_result)
 
         for w in workers_reanalyze:
             reanalyze_input = replay_buffer.get_traj_batch.remote(
@@ -226,3 +302,4 @@ with WallTimer():
         done = jaxboard_logger.write.remote(test_result_datum)
 
     ray.get(done)
+    ray.get(jaxboard_logger.close.remote())

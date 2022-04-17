@@ -96,9 +96,6 @@ def make_sgd_step_fn(
                 model, batch, training_state.params, new_params, training_state.state
             )
             step_data["prior_kl"] = prior_kl
-        # step_data["value_diff"] = jnp.mean(
-        #     jnp.abs(batch.n_step_return - batch.root_value)
-        # )
         return new_training_state, dict(step_data=step_data)
 
     return sgd_step_fn
@@ -173,6 +170,10 @@ class ParameterOptimizer:
         train_targets: List[TrainTarget] = unstack_sequence_fields(
             big_batch, big_batch[0].shape[0]
         )
+        if len(train_targets) % batch_size != 0:
+            logger.warning(
+                f"Batch size {batch_size} is not a divisor of the batch size {len(train_targets)}"
+            )
 
         logger.debug(
             f"updating with {len(train_targets)} samples, batch size {batch_size}"

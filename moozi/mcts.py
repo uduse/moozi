@@ -91,7 +91,7 @@ class MCTSAsync:
 
     async def run(self, feed: PolicyFeed) -> Node:
         root, min_max_stats = await self.init_search_state(feed)
-        self.add_exploration_noise(root, self.dirichlet_alpha, self.frac)
+        self.add_exploration_noise(root)
 
         for _ in range(self.num_simulations):
             await self.simulate_once(root, min_max_stats)
@@ -198,6 +198,7 @@ class MCTSAsync:
             )
             # max(-scores) if the parent player is not the BASE_PLAYER
             if parent.player != BASE_PLAYER:
+                # TODO: this looks suspicious, it should include prior score too?
                 value_score = -value_score
         else:
             value_score = 0.0
@@ -222,13 +223,13 @@ class MCTSAsync:
         _, action, child = max(scores)
         return action, child
 
-    def add_exploration_noise(
-        self, node, dirichlet_alpha: float = 0.2, frac: float = 0.2
-    ):
+    def add_exploration_noise(self, node):
         actions = list(node.children.keys())
-        noise = np.random.dirichlet([dirichlet_alpha] * len(actions))
+        noise = np.random.dirichlet([self.dirichlet_alpha] * len(actions))
         for a, n in zip(actions, noise):
-            node.children[a].prior = node.children[a].prior * (1 - frac) + n * frac
+            node.children[a].prior = (
+                node.children[a].prior * (1 - self.frac) + n * self.frac
+            )
 
     def backpropagate(self, node: Node, value: float, min_max_stats: MinMaxStats):
         while True:
@@ -269,7 +270,8 @@ class Planner:
     known_bound_min: Optional[float]
     known_bound_max: Optional[float]
     include_tree: bool = False
-    # TODO: add noise alpha
+    dirichlet_alpha: float = 0.2
+    frac: float = 0.2
 
     # def __post__init__(self):
     #     logger.remove(0)
@@ -291,6 +293,8 @@ class Planner:
                 num_simulations=self.num_simulations,
                 known_bound_min=self.known_bound_min,
                 known_bound_max=self.known_bound_max,
+                dirichlet_alpha=self.dirichlet_alpha,
+                frac=self.frac,
             )
             mcts_root = await mcts.run(policy_feed)
             action_probs = mcts.get_children_visit_counts_as_probs(
@@ -304,8 +308,11 @@ class Planner:
 
             if self.include_tree:
                 update["mcts_root"] = copy.deepcopy(mcts_root)
+        else:
+            action_probs = np.ones_like(legal_actions_mask) / legal_actions_mask.size
+            update = dict(action_probs=action_probs, root_value=0.0)
 
-            return update
+        return update
 
 
 def sample_action(action_probs, temperature=1.0):

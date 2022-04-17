@@ -164,6 +164,7 @@ class RolloutWorkerWithWeights:
         return fn(self)
 
 
+# TODO: removing model and params_and_state?
 def make_rollout_workers(
     name,
     num_workers,

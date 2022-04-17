@@ -38,7 +38,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 # redis_password = None
 # if redis_password:
 #     ray.init(address="auto", _redis_password=redis_password)
-ray.init(address="auto")
+# ray.init(address="auto")
 
 # %%
 logger.add("logs/main.log")
@@ -47,7 +47,7 @@ logger.add("logs/main.log")
 game_num_rows = 6
 game_num_cols = 6
 num_epochs = 200
-big_batch_size = 5000
+big_batch_size = 2048
 lr = 5e-3
 
 config = Config()
@@ -84,7 +84,7 @@ config.nn_arch_cls = mz.nn.ResNetArchitecture
 env_spec = mz.make_env_spec(config.env)
 single_frame_shape = env_spec.observations.observation.shape
 obs_channels = single_frame_shape[-1] * config.num_stacked_frames
-repr_channels = 6
+repr_channels = 2
 dim_action = env_spec.actions.num_values
 config.nn_spec = mz.nn.ResNetSpec(
     obs_rows=game_num_rows,
@@ -94,13 +94,13 @@ config.nn_spec = mz.nn.ResNetSpec(
     repr_cols=game_num_cols,
     repr_channels=repr_channels,
     dim_action=dim_action,
-    repr_tower_blocks=6,
-    repr_tower_dim=6,
-    pred_tower_blocks=6,
-    pred_tower_dim=6,
-    dyna_tower_blocks=6,
-    dyna_tower_dim=6,
-    dyna_state_blocks=6,
+    repr_tower_blocks=2,
+    repr_tower_dim=2,
+    pred_tower_blocks=2,
+    pred_tower_dim=2,
+    dyna_tower_blocks=2,
+    dyna_tower_dim=2,
+    dyna_state_blocks=2,
 )
 
 logger.info(f"config: {pprint.pformat(config.asdict())}")
@@ -168,7 +168,7 @@ workers_env = make_rollout_workers(
         TrajectoryOutputWriter(),
         increment_tick,
     ],
-    num_gpus=1 / 6,
+    num_gpus=0.2,
 )
 
 
@@ -263,7 +263,7 @@ workers_reanalyze = make_rollout_workers(
         TrajectoryOutputWriter(),
         increment_tick,
     ],
-    num_gpus=1 / 6,
+    num_gpus=0.2,
 )
 
 

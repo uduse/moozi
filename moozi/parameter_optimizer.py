@@ -252,5 +252,4 @@ class ParameterOptimizer:
     def close(self):
         for logger in self.loggers:
             if isinstance(logger, mz.logging.JAXBoardLoggerV2):
-                logger.info(logger._name, "closed")
                 logger.close()

@@ -26,8 +26,6 @@ class Config:
     replay_prefetch_max_size: int = 10_000
 
     # mcts
-    num_env_simulations: int = 10
-    num_test_simulations: int = 30
 
     ## ================================================
     ## training
@@ -44,6 +42,11 @@ class Config:
     num_env_workers: int = 2
     num_ticks_per_epoch: int = 10
     num_universes_per_env_worker: int = 2
+    num_env_simulations: int = 10
+
+    # test worker
+    test_interval: int = 10
+    num_test_simulations: int = 30
 
     # reanalyze worker
     num_reanalyze_workers: int = 4

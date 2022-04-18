@@ -31,8 +31,9 @@ from moozi.parameter_optimizer import ParameterOptimizer
 from moozi.replay import ReplayBuffer
 from moozi.rollout_worker import make_rollout_workers
 from moozi.utils import WallTimer
+from dotenv import load_dotenv
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+load_dotenv()
 
 # %%
 # redis_password = None
@@ -47,7 +48,7 @@ logger.add("logs/main.log")
 game_num_rows = 6
 game_num_cols = 6
 num_epochs = 200
-big_batch_size = 2048
+big_batch_size = 4096
 lr = 5e-3
 
 config = Config()
@@ -62,19 +63,20 @@ config.num_stacked_frames = 1
 config.lr = lr
 
 config.replay_max_size = 100000
-config.replay_min_size = 50
+config.replay_min_size = 100
 config.replay_prefetch_max_size = big_batch_size * 2
 
 config.num_epochs = num_epochs
 
 config.big_batch_size = big_batch_size
-config.batch_size = 64
+config.batch_size = 128
 
 config.num_env_workers = 3
 config.num_ticks_per_epoch = game_num_rows * 1
 config.num_universes_per_env_worker = 20
 
-config.num_reanalyze_workers = 0
+reanalyze_workers = 0
+config.num_reanalyze_workers = reanalyze_workers
 config.num_universes_per_reanalyze_worker = 10
 config.num_trajs_per_reanalyze_universe = 1
 
@@ -84,7 +86,7 @@ config.nn_arch_cls = mz.nn.ResNetArchitecture
 env_spec = mz.make_env_spec(config.env)
 single_frame_shape = env_spec.observations.observation.shape
 obs_channels = single_frame_shape[-1] * config.num_stacked_frames
-repr_channels = 2
+repr_channels = 4
 dim_action = env_spec.actions.num_values
 config.nn_spec = mz.nn.ResNetSpec(
     obs_rows=game_num_rows,
@@ -94,13 +96,13 @@ config.nn_spec = mz.nn.ResNetSpec(
     repr_cols=game_num_cols,
     repr_channels=repr_channels,
     dim_action=dim_action,
-    repr_tower_blocks=2,
-    repr_tower_dim=2,
-    pred_tower_blocks=2,
-    pred_tower_dim=2,
-    dyna_tower_blocks=2,
-    dyna_tower_dim=2,
-    dyna_state_blocks=2,
+    repr_tower_blocks=4,
+    repr_tower_dim=4,
+    pred_tower_blocks=4,
+    pred_tower_dim=4,
+    dyna_tower_blocks=4,
+    dyna_tower_dim=4,
+    dyna_state_blocks=4,
 )
 
 logger.info(f"config: {pprint.pformat(config.asdict())}")
@@ -233,8 +235,7 @@ workers_test = make_rollout_workers(
             num_simulations=config.num_test_simulations,
             known_bound_min=config.known_bound_min,
             known_bound_max=config.known_bound_max,
-            include_tree=False,
-            dirichlet_alpha=0.1,
+            include_tree=True,
         ),
         ActionSamplerLaw(temperature=0.2),
         TestResultOutputWriter(),
@@ -292,8 +293,9 @@ with WallTimer():
         env_samples = [w.run.remote(config.num_ticks_per_epoch) for w in workers_env]
         reanalyze_samples = [w.run.remote(None) for w in workers_reanalyze]
         sample_futures = env_samples + reanalyze_samples
-        test_result = workers_test[0].run.remote(6 * 20)
-        test_result_datum = convert_test_result_record.remote(test_result)
+        if epoch % config.test_interval == 0:
+            test_result = workers_test[0].run.remote(6 * 20)
+            test_result_datum = convert_test_result_record.remote(test_result)
 
         for w in workers_reanalyze:
             reanalyze_input = replay_buffer.get_traj_batch.remote(

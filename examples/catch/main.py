@@ -45,6 +45,7 @@ load_dotenv()
 logger.add("logs/main.log")
 
 # %%
+seed = 0
 game_num_rows = 6
 game_num_cols = 6
 num_epochs = 200
@@ -63,7 +64,7 @@ config.num_stacked_frames = 1
 config.lr = lr
 
 config.replay_max_size = 100000
-config.replay_min_size = 100
+config.replay_min_size = 50
 config.replay_prefetch_max_size = big_batch_size * 2
 
 config.num_epochs = num_epochs
@@ -75,10 +76,10 @@ config.num_env_workers = 3
 config.num_ticks_per_epoch = game_num_rows * 1
 config.num_universes_per_env_worker = 20
 
-reanalyze_workers = 0
+reanalyze_workers = 2
 config.num_reanalyze_workers = reanalyze_workers
 config.num_universes_per_reanalyze_worker = 10
-config.num_trajs_per_reanalyze_universe = 1
+config.num_trajs_per_reanalyze_universe = 2
 
 config.weight_decay = 5e-2
 config.nn_arch_cls = mz.nn.ResNetArchitecture

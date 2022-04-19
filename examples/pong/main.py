@@ -108,7 +108,7 @@ print(f"num_interactions: {num_interactions}")
 
 # %%
 def make_parameter_optimizer(config):
-    param_opt = ray.remote(num_cpus=1, num_gpus=1)(ParameterOptimizer).remote()
+    param_opt = ray.remote(num_cpus=1, num_gpus=0.5)(ParameterOptimizer).remote()
     param_opt.make_training_suite.remote(config)
     param_opt.make_loggers.remote(
         lambda: [

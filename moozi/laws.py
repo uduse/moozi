@@ -232,6 +232,7 @@ class ReanalyzeEnvLaw:
             to_play=self._curr_traj.to_play[self._curr_step],
             reward=self._curr_traj.last_reward[self._curr_step],
             legal_actions_mask=self._curr_traj.legal_actions_mask[self._curr_step],
+            action=self._curr_traj.action[self._curr_step],
             input_buffer=input_buffer_update,
         )
 

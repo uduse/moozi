@@ -72,13 +72,13 @@ config.num_epochs = num_epochs
 config.big_batch_size = big_batch_size
 config.batch_size = 128
 
-config.num_env_workers = 3
-config.num_ticks_per_epoch = game_num_rows * 1
+config.num_env_workers = 6
+config.num_ticks_per_epoch = game_num_rows * 2
 config.num_universes_per_env_worker = 20
 
-reanalyze_workers = 2
-config.num_reanalyze_workers = reanalyze_workers
-config.num_universes_per_reanalyze_worker = 10
+num_reanalyze_workers = 0
+config.num_reanalyze_workers = num_reanalyze_workers
+config.num_universes_per_reanalyze_worker = 20
 config.num_trajs_per_reanalyze_universe = 2
 
 config.weight_decay = 5e-2
@@ -87,7 +87,7 @@ config.nn_arch_cls = mz.nn.ResNetArchitecture
 env_spec = mz.make_env_spec(config.env)
 single_frame_shape = env_spec.observations.observation.shape
 obs_channels = single_frame_shape[-1] * config.num_stacked_frames
-repr_channels = 4
+repr_channels = 6
 dim_action = env_spec.actions.num_values
 config.nn_spec = mz.nn.ResNetSpec(
     obs_rows=game_num_rows,
@@ -97,13 +97,13 @@ config.nn_spec = mz.nn.ResNetSpec(
     repr_cols=game_num_cols,
     repr_channels=repr_channels,
     dim_action=dim_action,
-    repr_tower_blocks=4,
-    repr_tower_dim=4,
-    pred_tower_blocks=4,
-    pred_tower_dim=4,
-    dyna_tower_blocks=4,
-    dyna_tower_dim=4,
-    dyna_state_blocks=4,
+    repr_tower_blocks=6,
+    repr_tower_dim=6,
+    pred_tower_blocks=6,
+    pred_tower_dim=6,
+    dyna_tower_blocks=6,
+    dyna_tower_dim=6,
+    dyna_state_blocks=6,
 )
 
 logger.info(f"config: {pprint.pformat(config.asdict())}")
@@ -261,7 +261,6 @@ workers_reanalyze = make_rollout_workers(
             known_bound_max=config.known_bound_max,
             include_tree=False,
         ),
-        ActionSamplerLaw(),
         TrajectoryOutputWriter(),
         increment_tick,
     ],

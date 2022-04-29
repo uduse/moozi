@@ -73,11 +73,11 @@ config.big_batch_size = big_batch_size
 config.batch_size = 128
 
 config.num_env_workers = 6
-config.num_ticks_per_epoch = game_num_rows * 2
+config.num_ticks_per_epoch = game_num_rows * 
 config.num_universes_per_env_worker = 20
 
-num_reanalyze_workers = 0
-config.num_reanalyze_workers = num_reanalyze_workers
+reanalyze_workers = 0
+config.num_reanalyze_workers = reanalyze_workers
 config.num_universes_per_reanalyze_worker = 20
 config.num_trajs_per_reanalyze_universe = 2
 

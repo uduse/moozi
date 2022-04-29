@@ -124,7 +124,7 @@ class ParameterOptimizer:
     @staticmethod
     def from_config(config: Config, remote: bool = False):
         if remote:
-            param_opt = ray.remote(num_gpus=1)(ParameterOptimizer).remote(
+            param_opt = ray.remote(num_gpus=0.4)(ParameterOptimizer).remote(
                 is_remote=True
             )
             param_opt.make_training_suite.remote(config)

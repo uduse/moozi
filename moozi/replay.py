@@ -2,19 +2,22 @@ import asyncio
 import collections
 import random
 from dataclasses import dataclass, field
-from enum import EnumMeta
-from typing import Deque, List, NamedTuple
+from typing import Deque, List
 
 import chex
 import numpy as np
 import ray
-import tensorflow as tf
 from acme.utils import tree_utils
 from loguru import logger
-from nptyping import NDArray
 
 import moozi as mz
 from moozi.core import Config, TrajectorySample, TrainTarget
+
+
+@dataclass
+class ReplayEntry:
+    target: TrainTarget
+    priority: float
 
 
 @dataclass(repr=False)
@@ -28,10 +31,10 @@ class ReplayBuffer:
     num_stacked_frames: int = 4
     discount: float = 1.0
 
-    store: Deque[TrajectorySample] = field(init=False)
+    trajs: Deque[TrajectorySample] = field(init=False)
+    entries: Deque[ReplayEntry] = field(init=False)
 
     _prefetch_buffer: List[TrainTarget] = field(default_factory=list)
-
     _last_value_diff: float = float("inf")
 
     @staticmethod
@@ -59,11 +62,25 @@ class ReplayBuffer:
 
     async def add_samples(self, samples: List[TrajectorySample]):
         logger.debug(f"Adding samples to replay buffer, size: {self.size()}")
-        self.store.extend(samples)
         if samples:
             self._compute_samples_valued_diff(samples)
         logger.debug(f"Replay buffer size after adding samples: {self.size()}")
         return self.size()
+
+    def make_entries(self, sample: TrajectorySample) -> List[ReplayEntry]:
+        entries = []
+        for i in range(len(sample.last_reward) - 1):
+            target = make_target_from_traj(
+                sample,
+                start_idx=i,
+                discount=self.discount,
+                num_unroll_steps=self.num_unroll_steps,
+                num_td_steps=self.num_td_steps,
+                num_stacked_frames=self.num_stacked_frames,
+            )
+            priority = np.abs(target.n_step_return - target.root_value)
+            entries.append(ReplayEntry(target, priority))
+        return entries
 
     def _compute_samples_valued_diff(self, samples: List[TrajectorySample]):
         total = []
@@ -264,10 +281,6 @@ def _get_accumulated_reward(
         zip(last_rewards, players_of_last_rewards)
     ):
         discounted_reward = last_rewrad * (discount ** i)
-        # if player == mz.BASE_PLAYER:
-        #     reward_sum += discounted_reward
-        # else:
-        #     reward_sum -= discounted_reward
         reward_sum += discounted_reward
     return reward_sum
 

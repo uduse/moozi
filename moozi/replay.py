@@ -37,10 +37,10 @@ class ReplayBuffer:
     discount: float = 1.0
 
     _traj_entries: Deque[ReplayEntry] = field(init=False)
-    _traj_entries_to_be_processed: Queue = field(default_factory=Queue)
-    _traj_processing_thread: Thread = field(init=False)
+    # _traj_entries_to_be_processed: Queue = field(default_factory=Queue)
+    # _traj_processing_thread: Thread = field(init=False)
     _train_target_entries: Deque[ReplayEntry] = field(init=False)
-    _trajs_being_processed: bool = False
+    # _trajs_being_processed: bool = False
 
     _value_diffs: Deque[float] = field(init=False)
 
@@ -51,8 +51,8 @@ class ReplayBuffer:
         logger.remove()
         logger.add("logs/replay.log", level="DEBUG")
         logger.info(f"Replay buffer created, {vars(self)}")
-        self._traj_processing_thread = Thread(target=self.process_trajs, daemon=True)
-        self._traj_processing_thread.start()
+        # self._traj_processing_thread = Thread(target=self.process_trajs, daemon=True)
+        # self._traj_processing_thread.start()
 
     @staticmethod
     def from_config(config: Config, remote: bool = False):
@@ -73,55 +73,38 @@ class ReplayBuffer:
             return ReplayBuffer(**kwargs)
 
     def add_trajs(self, trajs: List[TrajectorySample]):
-        for traj in trajs:
-            self._traj_entries_to_be_processed.put(traj)
+        self.process_trajs(trajs)
         traj_entries = [ReplayEntry(sample) for sample in trajs]
         logger.debug(f"Added {len(traj_entries)} trajs to processing queue")
         self._traj_entries.extend(traj_entries)
         logger.debug(f"Size after adding samples: {self.get_trajs_size()}")
         return self.get_trajs_size()
 
-    def process_trajs(self):
-        """Threaded"""
-        # TODO: maybe we don't need to do this in a separate thread if we
-        #       are smart enough about the main driver
-        logger.debug(f"Started processing trajs thread")
-        while True:
-            try:
-                traj = self._traj_entries_to_be_processed.get(block=False)
-            except Empty:
-                self._trajs_being_processed = False
-                logger.debug(f"No trajs to process, sleeping")
-                time.sleep(1)
-            else:
-                self._trajs_being_processed = True
-                for i in range(len(traj.last_reward) - 1):
-                    target = make_target_from_traj(
-                        traj,
-                        start_idx=i,
-                        discount=self.discount,
-                        num_unroll_steps=self.num_unroll_steps,
-                        num_td_steps=self.num_td_steps,
-                        num_stacked_frames=self.num_stacked_frames,
-                    )
-                    value_diff = np.abs(target.n_step_return - target.root_value)
-                    self._value_diffs.append(value_diff)
-                    entry = ReplayEntry(target, weight=value_diff)
-                    self._train_target_entries.append(entry)
-
-    def block_until_trajs_processed(self):
-        while self._trajs_being_processed:
-            logger.debug(f"Waiting for trajs to finish processing")
-            time.sleep(1)
+    def process_trajs(self, trajs: List[TrajectorySample]):
+        for traj in trajs:
+            for i in range(len(traj.last_reward) - 1):
+                target = make_target_from_traj(
+                    traj,
+                    start_idx=i,
+                    discount=self.discount,
+                    num_unroll_steps=self.num_unroll_steps,
+                    num_td_steps=self.num_td_steps,
+                    num_stacked_frames=self.num_stacked_frames,
+                )
+                value_diff = np.abs(
+                    target.n_step_return[0] - target.root_value[0]
+                ).item()
+                self._value_diffs.append(value_diff)
+                entry = ReplayEntry(target, weight=value_diff)
+                self._train_target_entries.append(entry)
 
     def get_trajs_batch(self, batch_size: int = 1) -> List[TrajectorySample]:
-        if len(self._traj_entries) >= self.min_size:
-            entries = self.sample_entries(self._traj_entries, batch_size)
-            train_targets: List[TrajectorySample] = [entry.payload for entry in entries]
-            return train_targets
-        else:
-            logger.debug(f"Waiting trajs, {len(self._traj_entries)=}")
-        return []
+        if len(self._traj_entries) == 0:
+            logger.error(f"No trajs available")
+            raise ValueError("No trajs available")
+        entries = self.sample_entries(self._traj_entries, batch_size)
+        train_targets: List[TrajectorySample] = [entry.payload for entry in entries]
+        return train_targets
 
     def get_train_targets_batch(self, batch_size: int = 1) -> TrainTarget:
         if len(self._train_target_entries) == 0:
@@ -135,17 +118,18 @@ class ReplayBuffer:
         return len(self._traj_entries)
 
     async def get_stats(self):
-        return dict(
+        ret = dict(
             trajs=self.get_trajs_size(),
-            value_diff=float(np.mean(self._value_diffs)),
         )
+        if self._value_diffs:
+            mean_value_diff = np.mean(self._value_diffs)
+            ret["mean_value_diff"] = mean_value_diff
+        return ret
 
     @staticmethod
     def sample_entries(
         entries: Sequence[ReplayEntry], batch_size: int
     ) -> List[ReplayEntry]:
-        # weights = [entry.weight for entry in entries]
-        # return random.choices(entries, weights=weights, k=batch_size)
         weights = np.array([entry.weight for entry in entries])
         p = weights / np.sum(weights)
         return np.random.choice(entries, size=batch_size, replace=True, p=p).tolist()

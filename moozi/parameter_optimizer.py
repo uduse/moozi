@@ -59,6 +59,7 @@ def make_sgd_step_fn(
     optimizer,
     target_update_period: int = 1,
     include_prior_kl: bool = True,
+    include_weights: bool = False,
 ):
     @jax.jit
     @chex.assert_max_traces(n=1)
@@ -88,15 +89,17 @@ def make_sgd_step_fn(
 
         step_data = extra["step_data"]
 
-        for module, weight_name, weights in hk.data_structures.traverse(new_params):
-            name = module + "/" + weight_name
-            step_data[name] = weights
+        if include_weights:
+            for module, weight_name, weights in hk.data_structures.traverse(new_params):
+                name = module + "/" + weight_name
+                step_data[name] = weights
 
         if include_prior_kl:
             prior_kl = _compute_prior_kl(
                 model, batch, training_state.params, new_params, training_state.state
             )
             step_data["prior_kl"] = prior_kl
+
         return new_training_state, dict(step_data=step_data)
 
     return sgd_step_fn
@@ -129,7 +132,7 @@ class ParameterOptimizer:
             param_opt.make_training_suite.remote(config)
             param_opt.make_loggers.remote(
                 lambda: [
-                    mz.logging.JAXBoardLoggerV2(name="param_opt", time_delta=15),
+                    mz.logging.JAXBoardLoggerV2(name="param_opt"),
                 ]
             )
             return param_opt
@@ -138,7 +141,7 @@ class ParameterOptimizer:
             param_opt.make_training_suite(config)
             param_opt.make_loggers(
                 lambda: [
-                    mz.logging.JAXBoardLoggerV2(name="param_opt", time_delta=15),
+                    mz.logging.JAXBoardLoggerV2(name="param_opt"),
                 ]
             )
             return param_opt

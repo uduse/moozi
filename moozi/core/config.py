@@ -23,14 +23,16 @@ class Config:
     # replay buffer
     replay_max_size: int = 1_000_000
     replay_min_size: int = 1
-    replay_prefetch_max_size: int = 10_000
+    replay_prefetch_max_size: int = 10_000  # TODO: deprecate this arg
+    replay_decay: float = 0.99
 
     # mcts
 
     ## ================================================
     ## training
     ## ================================================
-    num_epochs: int = 2
+    num_epochs: int = 10
+    epoch_train_start: int = 5
 
     # parameters optimizing
     big_batch_size: int = 2048

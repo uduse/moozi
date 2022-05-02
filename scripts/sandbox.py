@@ -1,25 +1,44 @@
 # %%
+from threading import Thread
+from dataclasses import dataclass
+from queue import Queue, Empty
+from time import sleep
 from ray import ObjectRef
 import ray
 
 
 @ray.remote
-def put_something():
-    return ray.put(10)
+class C:
+    def __init__(self) -> None:
+        self._q: Queue = Queue()
+        self._processed = []
+        self._thread = Thread(target=self.processing_thread, daemon=True)
+        self._thread.start()
 
-@ray.remote
-def return_something():
-    return 10
+    def add(self):
+        print("adding")
+        self._q.put(1)
+        print("adding done")
 
-@ray.remote
-def print_putted_thing(thing):
-    if isinstance(thing, ObjectRef):
-        print(ray.get(thing))
-    else:
-        print(thing)
+    def get(self):
+        print("get")
+        while True:
+            if len(self._processed) > 0:
+                print("getting done")
+                return self._processed.pop()
+            sleep(0.1)
+
+    def processing_thread(self):
+        while True:
+            print("processing")
+            item = self._q.get(block=False)
+            item = item + 1
+            self._processed.append(item)
 
 
-print_putted_thing.remote(put_something.remote())
-print_putted_thing.remote(return_something.remote())
+c = C.remote()
+# %%
+c.get.remote()
 
 # %%
+ray.add.remote()

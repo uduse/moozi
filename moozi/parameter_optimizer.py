@@ -1,7 +1,7 @@
 import random
 from dataclasses import dataclass, field
 import sys
-from typing import Callable, List, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 import chex
 import cloudpickle
@@ -116,9 +116,8 @@ class ParameterOptimizer:
 
     def __post_init__(self):
         logger.remove()
-        logger.add(sys.stderr, level="WARNING")
-        logger.add("logs/param_opt.debug.log", level="DEBUG")
-        logger.add("logs/param_opt.info.log", level="INFO")
+        logger.add(sys.stderr, level="ERROR")
+        logger.add("logs/param_opt.log", level="DEBUG")
         logger.info(f"Parameter optimizer created, {vars(self)}")
 
     @staticmethod
@@ -168,7 +167,7 @@ class ParameterOptimizer:
 
     def update(self, big_batch: TrainTarget, batch_size: int):
         if len(big_batch) == 0:
-            logger.warning("Batch is empty, update() skipped.")
+            logger.error("Batch is empty, update() skipped.")
             return
 
         train_targets: List[TrainTarget] = unstack_sequence_fields(
@@ -195,6 +194,7 @@ class ParameterOptimizer:
         logger.debug(self.get_stats())
 
     def get_params_and_state(self) -> Union[ray.ObjectRef, Tuple[hk.Params, hk.State]]:
+        logger.debug("getting params and state")
         ret = self.training_state.params, self.training_state.state
         if self.is_remote:
             return ray.put(ret)
@@ -202,14 +202,16 @@ class ParameterOptimizer:
             return ret
 
     def get_model(self):
+        logger.debug("getting model")
         return self.model
 
     def save(self, path):
+        logger.debug(f"saving model to {path}")
         with open(path, "wb") as f:
             cloudpickle.dump((self.training_state, self.model, self.n), f)
 
     def restore(self, path):
-        # NOTE: not tested
+        logger.debug(f"restoring model from {path}")
         with open(path, "rb") as f:
             self.training_state, self.model, self.sgd_step_fn = cloudpickle.load(f)
 

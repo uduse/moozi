@@ -1,4 +1,5 @@
 # %%
+import sys
 import pprint
 import copy
 from dataclasses import dataclass, field
@@ -42,7 +43,9 @@ load_dotenv()
 # ray.init(address="auto")
 
 # %%
-logger.add("logs/main.log")
+logger.remove()
+logger.add(sys.stderr, format="{message}", level="WARNING")
+logger.add("logs/main.log", level="DEBUG")
 
 # %%
 seed = 0
@@ -64,7 +67,7 @@ config.num_stacked_frames = 1
 config.lr = lr
 
 config.replay_max_size = 100000
-config.replay_min_size = 50
+config.replay_min_size = 50  # TODO: use epoch instead
 config.replay_prefetch_max_size = big_batch_size * 2
 
 config.num_epochs = num_epochs
@@ -73,7 +76,7 @@ config.big_batch_size = big_batch_size
 config.batch_size = 128
 
 config.num_env_workers = 6
-config.num_ticks_per_epoch = game_num_rows * 
+config.num_ticks_per_epoch = game_num_rows * 2
 config.num_universes_per_env_worker = 20
 
 reanalyze_workers = 0
@@ -87,7 +90,7 @@ config.nn_arch_cls = mz.nn.ResNetArchitecture
 env_spec = mz.make_env_spec(config.env)
 single_frame_shape = env_spec.observations.observation.shape
 obs_channels = single_frame_shape[-1] * config.num_stacked_frames
-repr_channels = 6
+repr_channels = 2
 dim_action = env_spec.actions.num_values
 config.nn_spec = mz.nn.ResNetSpec(
     obs_rows=game_num_rows,
@@ -97,13 +100,13 @@ config.nn_spec = mz.nn.ResNetSpec(
     repr_cols=game_num_cols,
     repr_channels=repr_channels,
     dim_action=dim_action,
-    repr_tower_blocks=6,
-    repr_tower_dim=6,
-    pred_tower_blocks=6,
-    pred_tower_dim=6,
-    dyna_tower_blocks=6,
-    dyna_tower_dim=6,
-    dyna_state_blocks=6,
+    repr_tower_blocks=2,
+    repr_tower_dim=2,
+    pred_tower_blocks=2,
+    pred_tower_dim=2,
+    dyna_tower_blocks=2,
+    dyna_tower_dim=2,
+    dyna_state_blocks=2,
 )
 
 logger.info(f"config: {pprint.pformat(config.asdict())}")
@@ -273,40 +276,52 @@ terminal_logger = TerminalLoggerActor.remote("terminal_logger")
 terminal_logger.write.remote(param_opt.get_properties.remote())
 
 # # %%
-sample_futures: List[ray.ObjectRef] = []
+traj_futures: List[ray.ObjectRef] = []
 
 with WallTimer():
     for epoch in range(config.num_epochs):
         logger.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
 
+        replay_buffer.block_until_trajs_processed.remote()
+
         for w in workers_env + workers_test + workers_reanalyze:
             w.set_params_and_state.remote(param_opt.get_params_and_state.remote())
+        logger.info(f"Get params and state scheduled, {len(traj_futures)=}")
 
-        while sample_futures:
-            next_sample, sample_futures = ray.wait(sample_futures)
-            replay_buffer.add_samples.remote(next_sample[0])
-            train_batch = replay_buffer.get_train_batch.remote(config.big_batch_size)
-            param_opt.update.remote(train_batch, config.batch_size)
-            param_opt.log.remote()
+        # train
+        for traj in traj_futures:
+            replay_buffer.add_trajs.remote(traj)
+            if epoch >= config.epoch_train_start:
+                logger.info(f"Add trajs scheduled, {len(traj_futures)=}")
+                train_batch = replay_buffer.get_train_targets_batch.remote(
+                    config.big_batch_size
+                )
+                logger.info(f"Get train targets batch scheduled, {len(traj_futures)=}")
+                update_done = param_opt.update.remote(train_batch, config.batch_size)
+
+                param_opt.log.remote()
+                logger.info(f"Update scheduled, {len(traj_futures)=}")
+
         jaxboard_logger.write.remote(replay_buffer.get_stats.remote())
+        env_trajs = [w.run.remote(config.num_ticks_per_epoch) for w in workers_env]
+        reanalyze_trajs = [w.run.remote(None) for w in workers_reanalyze]
+        traj_futures = env_trajs + reanalyze_trajs
 
-        env_samples = [w.run.remote(config.num_ticks_per_epoch) for w in workers_env]
-        reanalyze_samples = [w.run.remote(None) for w in workers_reanalyze]
-        sample_futures = env_samples + reanalyze_samples
+        # test
         if epoch % config.test_interval == 0:
             test_result = workers_test[0].run.remote(6 * 20)
             test_result_datum = convert_test_result_record.remote(test_result)
+        logger.info(f"test result scheduled.")
 
         for w in workers_reanalyze:
-            reanalyze_input = replay_buffer.get_traj_batch.remote(
+            reanalyze_input = replay_buffer.get_trajs_batch.remote(
                 config.num_trajs_per_reanalyze_universe
                 * config.num_universes_per_reanalyze_worker
             )
             w.set_inputs.remote(reanalyze_input)
+        logger.info(f"reanalyze scheduled.")
+        test_done = jaxboard_logger.write.remote(test_result_datum)
 
-        done = jaxboard_logger.write.remote(test_result_datum)
-
-    ray.get(done)
-
+ray.get(test_done)
 ray.get(jaxboard_logger.close.remote())
 ray.get(param_opt.close.remote())

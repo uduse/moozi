@@ -1,8 +1,11 @@
 import asyncio
+from threading import Thread
 import collections
 import random
 from dataclasses import dataclass, field
-from typing import Deque, List
+import time
+from typing import Any, Deque, List, Optional, Sequence, Union
+from queue import Queue, Empty
 
 import chex
 import numpy as np
@@ -14,10 +17,11 @@ import moozi as mz
 from moozi.core import Config, TrajectorySample, TrainTarget
 
 
+# TODO: move this into payload itself?
 @dataclass
 class ReplayEntry:
-    target: TrainTarget
-    priority: float
+    payload: Any
+    weight: float = 1.0
 
 
 @dataclass(repr=False)
@@ -25,20 +29,34 @@ class ReplayBuffer:
     max_size: int = 1_000_000
     min_size: int = 1_000
     prefetch_max_size: int = 1_000
+    decay: float = 0.99
 
     num_unroll_steps: int = 5
     num_td_steps: int = 5
     num_stacked_frames: int = 4
     discount: float = 1.0
 
-    trajs: Deque[TrajectorySample] = field(init=False)
-    entries: Deque[ReplayEntry] = field(init=False)
+    _traj_entries: Deque[ReplayEntry] = field(init=False)
+    _traj_entries_to_be_processed: Queue = field(default_factory=Queue)
+    _traj_processing_thread: Thread = field(init=False)
+    _train_target_entries: Deque[ReplayEntry] = field(init=False)
+    _trajs_being_processed: bool = False
 
-    _prefetch_buffer: List[TrainTarget] = field(default_factory=list)
-    _last_value_diff: float = float("inf")
+    _value_diffs: Deque[float] = field(init=False)
+
+    def __post_init__(self):
+        self._traj_entries = collections.deque(maxlen=self.max_size)
+        self._train_target_entries = collections.deque(maxlen=self.max_size)
+        self._value_diffs = collections.deque(maxlen=100)
+        logger.remove()
+        logger.add("logs/replay.log", level="DEBUG")
+        logger.info(f"Replay buffer created, {vars(self)}")
+        self._traj_processing_thread = Thread(target=self.process_trajs, daemon=True)
+        self._traj_processing_thread.start()
 
     @staticmethod
     def from_config(config: Config, remote: bool = False):
+        # TODO: have two separate sizes for train targets and trajs
         kwargs = dict(
             max_size=config.replay_max_size,
             min_size=config.replay_min_size,
@@ -47,127 +65,90 @@ class ReplayBuffer:
             num_td_steps=config.num_td_steps,
             num_stacked_frames=config.num_stacked_frames,
             prefetch_max_size=config.replay_prefetch_max_size,
+            decay=config.replay_decay,
         )
         if remote:
             return ray.remote(ReplayBuffer).remote(**kwargs)
         else:
             return ReplayBuffer(**kwargs)
 
-    def __post_init__(self):
-        self.store = collections.deque(maxlen=self.max_size)
-        asyncio.create_task(self.launch_prefetcher())
-        logger.remove()
-        logger.add("logs/replay.log", level="DEBUG")
-        logger.info(f"Replay buffer created, {vars(self)}")
+    def add_trajs(self, trajs: List[TrajectorySample]):
+        for traj in trajs:
+            self._traj_entries_to_be_processed.put(traj)
+        traj_entries = [ReplayEntry(sample) for sample in trajs]
+        logger.debug(f"Added {len(traj_entries)} trajs to processing queue")
+        self._traj_entries.extend(traj_entries)
+        logger.debug(f"Size after adding samples: {self.get_trajs_size()}")
+        return self.get_trajs_size()
 
-    async def add_samples(self, samples: List[TrajectorySample]):
-        logger.debug(f"Adding samples to replay buffer, size: {self.size()}")
-        if samples:
-            self._compute_samples_valued_diff(samples)
-        logger.debug(f"Replay buffer size after adding samples: {self.size()}")
-        return self.size()
-
-    def make_entries(self, sample: TrajectorySample) -> List[ReplayEntry]:
-        entries = []
-        for i in range(len(sample.last_reward) - 1):
-            target = make_target_from_traj(
-                sample,
-                start_idx=i,
-                discount=self.discount,
-                num_unroll_steps=self.num_unroll_steps,
-                num_td_steps=self.num_td_steps,
-                num_stacked_frames=self.num_stacked_frames,
-            )
-            priority = np.abs(target.n_step_return - target.root_value)
-            entries.append(ReplayEntry(target, priority))
-        return entries
-
-    def _compute_samples_valued_diff(self, samples: List[TrajectorySample]):
-        total = []
-        for sample in samples:
-            for i in range(len(sample.last_reward) - 1):
-                target = make_target_from_traj(
-                    sample,
-                    start_idx=i,
-                    discount=self.discount,
-                    num_unroll_steps=self.num_unroll_steps,
-                    num_td_steps=self.num_td_steps,
-                    num_stacked_frames=self.num_stacked_frames,
-                )
-                total.append(np.abs(target.n_step_return - target.root_value))
-        self._last_value_diff = float(np.mean(total))
-
-    async def get_train_batch(self, batch_size: int = 1) -> TrainTarget:
-        if batch_size > self.prefetch_max_size:
-            raise ValueError("batch_size must be <= prefetch_max_size")
-
-        await self.wait_until_started()
-
+    def process_trajs(self):
+        """Threaded"""
+        # TODO: maybe we don't need to do this in a separate thread if we
+        #       are smart enough about the main driver
+        logger.debug(f"Started processing trajs thread")
         while True:
-            if len(self._prefetch_buffer) >= batch_size:
-                batch = await self.take_batch_from_prefetch_buffer(batch_size)
-                return batch
+            try:
+                traj = self._traj_entries_to_be_processed.get(block=False)
+            except Empty:
+                self._trajs_being_processed = False
+                logger.debug(f"No trajs to process, sleeping")
+                time.sleep(1)
             else:
-                logger.warning(
-                    f"Waiting for prefetcher, prefetch buffer size: {len(self._prefetch_buffer)}"
-                )
-                await asyncio.sleep(5)
+                self._trajs_being_processed = True
+                for i in range(len(traj.last_reward) - 1):
+                    target = make_target_from_traj(
+                        traj,
+                        start_idx=i,
+                        discount=self.discount,
+                        num_unroll_steps=self.num_unroll_steps,
+                        num_td_steps=self.num_td_steps,
+                        num_stacked_frames=self.num_stacked_frames,
+                    )
+                    value_diff = np.abs(target.n_step_return - target.root_value)
+                    self._value_diffs.append(value_diff)
+                    entry = ReplayEntry(target, weight=value_diff)
+                    self._train_target_entries.append(entry)
 
-    async def get_traj_batch(self, batch_size: int = 1) -> List[TrajectorySample]:
-        await self.wait_until_started()
-        batch = random.choices(self.store, k=batch_size)
-        logger.debug(f"Trajectory batch size: {len(batch)}")
-        return batch
+    def block_until_trajs_processed(self):
+        while self._trajs_being_processed:
+            logger.debug(f"Waiting for trajs to finish processing")
+            time.sleep(1)
 
-    async def take_batch_from_prefetch_buffer(self, batch_size: int) -> TrainTarget:
-        batch = self._prefetch_buffer[:batch_size].copy()
-        self._prefetch_buffer = self._prefetch_buffer[batch_size:]
-        return tree_utils.stack_sequence_fields(batch)
+    def get_trajs_batch(self, batch_size: int = 1) -> List[TrajectorySample]:
+        if len(self._traj_entries) >= self.min_size:
+            entries = self.sample_entries(self._traj_entries, batch_size)
+            train_targets: List[TrajectorySample] = [entry.payload for entry in entries]
+            return train_targets
+        else:
+            logger.debug(f"Waiting trajs, {len(self._traj_entries)=}")
+        return []
 
-    def _sample_train_target_from_store(self) -> TrainTarget:
-        traj = random.choice(self.store)
-        random_start_idx = random.randrange(len(traj.last_reward))
-        target = make_target_from_traj(
-            traj,
-            start_idx=random_start_idx,
-            discount=self.discount,
-            num_unroll_steps=self.num_unroll_steps,
-            num_td_steps=self.num_td_steps,
-            num_stacked_frames=self.num_stacked_frames,
-        )
-        return target
+    def get_train_targets_batch(self, batch_size: int = 1) -> TrainTarget:
+        if len(self._train_target_entries) == 0:
+            logger.error(f"No train targets available")
+            raise ValueError("No train targets available")
+        entries = self.sample_entries(self._train_target_entries, batch_size)
+        train_targets = [entry.payload for entry in entries]
+        return tree_utils.stack_sequence_fields(train_targets)
 
-    async def launch_prefetcher(self):
-        await self.wait_until_started()
-
-        logger.info("Prefetcher started")
-
-        while 1:
-            if len(self._prefetch_buffer) <= self.prefetch_max_size:
-                for _ in range(100):
-                    target = self._sample_train_target_from_store()
-                    self._prefetch_buffer.append(target)
-                logger.debug(f"Prefetch buffer size: {len(self._prefetch_buffer)}")
-                await asyncio.sleep(0)
-            else:
-                await asyncio.sleep(1)
-
-    def is_started(self):
-        return self.size() >= self.min_size
-
-    async def wait_until_started(self, delay: float = 5.0):
-        while not self.is_started():
-            await asyncio.sleep(delay)
-            logger.debug(f"Waiting for replay buffer to start, size: {self.size()}")
-
-    def __len__(self):
-        return self.size()
-
-    def size(self):
-        return len(self.store)
+    def get_trajs_size(self):
+        return len(self._traj_entries)
 
     async def get_stats(self):
-        return dict(replay_size=self.size(), value_diff=self._last_value_diff)
+        return dict(
+            trajs=self.get_trajs_size(),
+            value_diff=float(np.mean(self._value_diffs)),
+        )
+
+    @staticmethod
+    def sample_entries(
+        entries: Sequence[ReplayEntry], batch_size: int
+    ) -> List[ReplayEntry]:
+        # weights = [entry.weight for entry in entries]
+        # return random.choices(entries, weights=weights, k=batch_size)
+        weights = np.array([entry.weight for entry in entries])
+        p = weights / np.sum(weights)
+        return np.random.choice(entries, size=batch_size, replace=True, p=p).tolist()
 
 
 def make_target_from_traj(

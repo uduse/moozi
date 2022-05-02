@@ -70,6 +70,8 @@ class TrainTarget(NamedTuple):
 
     # root value after the search
     root_value: NDArray[np.float32]
+    
+    # TODO: add importance sampling ratio
 
     def cast(self) -> "TrainTarget":
         return TrainTarget(

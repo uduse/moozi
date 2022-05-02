@@ -30,6 +30,9 @@ class StepSample(NamedTuple):
     action_probs: NDArray[np.float32]
     action: NDArray[np.int32]
 
+    # weight for sampling
+    weight: NDArray[np.float32]
+
     def cast(self) -> "StepSample":
         return StepSample(
             frame=np.asarray(self.frame, dtype=np.float32),
@@ -41,6 +44,7 @@ class StepSample(NamedTuple):
             root_value=np.asarray(self.root_value, dtype=np.float32),
             action_probs=np.asarray(self.action_probs, dtype=np.float32),
             action=np.asarray(self.action, dtype=np.int32),
+            weight=np.asarray(self.weight, dtype=np.float32),
         )
 
 
@@ -70,8 +74,9 @@ class TrainTarget(NamedTuple):
 
     # root value after the search
     root_value: NDArray[np.float32]
-    
-    # TODO: add importance sampling ratio
+
+    # weight is used to adjust the importance of the loss
+    weight: NDArray[np.float32]
 
     def cast(self) -> "TrainTarget":
         return TrainTarget(
@@ -81,6 +86,7 @@ class TrainTarget(NamedTuple):
             last_reward=np.asarray(self.last_reward, dtype=np.float32),
             action_probs=np.asarray(self.action_probs, dtype=np.float32),
             root_value=np.asarray(self.root_value, dtype=np.float32),
+            weight=np.asarray(self.weight, dtype=np.float32),
         )
 
 

@@ -52,7 +52,6 @@ seed = 0
 game_num_rows = 6
 game_num_cols = 6
 num_epochs = 100
-big_batch_size = 4096
 lr = 5e-3
 
 config = Config()
@@ -67,18 +66,17 @@ config.num_stacked_frames = 1
 config.lr = lr
 
 config.replay_max_size = 100000
-config.replay_min_size = 50  # TODO: use epoch instead
-config.replay_prefetch_max_size = big_batch_size * 2
 
 config.num_epochs = num_epochs
 config.epoch_train_start = 2
 
-config.big_batch_size = big_batch_size
-config.batch_size = 128
+num_batches_per_epoch = 128
+config.batch_size = 64
+config.big_batch_size = config.batch_size * num_batches_per_epoch
 
 config.num_env_workers = 6
 config.num_ticks_per_epoch = game_num_rows * 2
-config.num_universes_per_env_worker = 20
+config.num_universes_per_env_worker = 25
 
 reanalyze_workers = 0
 config.num_reanalyze_workers = reanalyze_workers
@@ -87,6 +85,8 @@ config.num_trajs_per_reanalyze_universe = 2
 
 config.weight_decay = 5e-2
 config.nn_arch_cls = mz.nn.ResNetArchitecture
+
+config.test_interval = 5
 
 env_spec = mz.make_env_spec(config.env)
 single_frame_shape = env_spec.observations.observation.shape
@@ -291,14 +291,14 @@ with WallTimer():
             traj = traj[0]
             replay_buffer.add_trajs.remote(traj)
 
-            if epoch >= config.epoch_train_start:
-                logger.debug(f"Add trajs scheduled, {len(traj_futures)=}")
-                train_batch = replay_buffer.get_train_targets_batch.remote(
-                    config.big_batch_size
-                )
-                logger.debug(f"Get train targets batch scheduled, {len(traj_futures)=}")
-                update_done = param_opt.update.remote(train_batch, config.batch_size)
-                logger.debug(f"Update scheduled, {len(traj_futures)=}")
+        if epoch >= config.epoch_train_start:
+            logger.debug(f"Add trajs scheduled, {len(traj_futures)=}")
+            train_batch = replay_buffer.get_train_targets_batch.remote(
+                config.big_batch_size
+            )
+            logger.debug(f"Get train targets batch scheduled, {len(traj_futures)=}")
+            update_done = param_opt.update.remote(train_batch, config.batch_size)
+            logger.debug(f"Update scheduled, {len(traj_futures)=}")
 
         param_opt.log.remote()
 

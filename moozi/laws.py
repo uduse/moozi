@@ -289,6 +289,7 @@ class TrajectoryOutputWriter:
             root_value=root_value,
             action_probs=action_probs,
             action=action,
+            weight=1.0,
         ).cast()
 
         self.traj_buffer.append(step_record)

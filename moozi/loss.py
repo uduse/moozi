@@ -120,7 +120,8 @@ class MuZeroLoss(LossFn):
         losses["loss:l2"] = jnp.reshape(
             params_l2_loss(params) * self.weight_decay, (1,)
         )
-
+        
+        importance_sampling_adjustment = 1 / batch.weight 
         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
 
         losses["loss"] = loss

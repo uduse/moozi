@@ -70,8 +70,8 @@ config.replay_max_size = 100000
 config.num_epochs = num_epochs
 config.epoch_train_start = 2
 
-num_batches_per_epoch = 128
-config.batch_size = 64
+num_batches_per_epoch = 64
+config.batch_size = 256
 config.big_batch_size = config.batch_size * num_batches_per_epoch
 
 config.num_env_workers = 6
@@ -298,9 +298,7 @@ with WallTimer():
             )
             logger.debug(f"Get train targets batch scheduled, {len(traj_futures)=}")
             update_done = param_opt.update.remote(train_batch, config.batch_size)
-            logger.debug(f"Update scheduled, {len(traj_futures)=}")
-
-        param_opt.log.remote()
+            logger.debug(f"Update scheduled")
 
         jaxboard_logger.write.remote(replay_buffer.get_stats.remote())
         env_trajs = [w.run.remote(config.num_ticks_per_epoch) for w in workers_env]
@@ -321,8 +319,9 @@ with WallTimer():
         logger.debug(f"reanalyze scheduled.")
         test_done = jaxboard_logger.write.remote(test_result_datum)
 
+        param_opt.log.remote()
         logger.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
 
-ray.get(test_done)
+logger.debug(ray.get(test_done))
 ray.get(jaxboard_logger.close.remote())
 ray.get(param_opt.close.remote())

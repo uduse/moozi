@@ -4,7 +4,7 @@ import collections
 import random
 from dataclasses import dataclass, field
 import time
-from typing import Any, Deque, List, Optional, Sequence, Union
+from typing import Any, Deque, List, Optional, Sequence, TypeVar, Union
 from queue import Queue, Empty
 
 import chex
@@ -15,6 +15,13 @@ from loguru import logger
 
 import moozi as mz
 from moozi.core import Config, TrajectorySample, TrainTarget
+
+
+@dataclass
+class ReplayEntry:
+    payload: Any
+    weight: float = 1.0
+    num_sampled: int = 0
 
 
 @dataclass(repr=False)
@@ -29,19 +36,17 @@ class ReplayBuffer:
     num_stacked_frames: int = 4
     discount: float = 1.0
 
-    _trajs: Deque[TrajectorySample] = field(init=False)
-    _train_targets: Deque[TrainTarget] = field(init=False)
+    _trajs: Deque[ReplayEntry] = field(init=False)
+    _train_targets: Deque[ReplayEntry] = field(init=False)
     _value_diffs: Deque[float] = field(init=False)
 
     def __post_init__(self):
         self._trajs = collections.deque(maxlen=self.max_size)
         self._train_targets = collections.deque(maxlen=self.max_size)
-        self._value_diffs = collections.deque(maxlen=100)
+        self._value_diffs = collections.deque(maxlen=256)
         logger.remove()
         logger.add("logs/replay.log", level="DEBUG")
         logger.info(f"Replay buffer created, {vars(self)}")
-        # self._traj_processing_thread = Thread(target=self.process_trajs, daemon=True)
-        # self._traj_processing_thread.start()
 
     @staticmethod
     def from_config(config: Config, remote: bool = False):
@@ -62,9 +67,9 @@ class ReplayBuffer:
             return ReplayBuffer(**kwargs)
 
     def add_trajs(self, trajs: List[TrajectorySample]):
+        self._trajs.extend([ReplayEntry(traj) for traj in trajs])
         self.process_trajs(trajs)
         logger.debug(f"Added {len(trajs)} trajs to processing queue")
-        self._trajs.extend(trajs)
         logger.debug(f"Size after adding samples: {self.get_trajs_size()}")
         return self.get_trajs_size()
 
@@ -82,15 +87,14 @@ class ReplayBuffer:
                 value_diff = np.abs(target.n_step_return[0] - target.root_value[0])
                 target = target._replace(weight=value_diff)
                 self._value_diffs.append(value_diff)
-                self._train_targets.append(target)
+                self._train_targets.append(ReplayEntry(target, weight=value_diff))
 
     def get_trajs_batch(self, batch_size: int = 1) -> List[TrajectorySample]:
         if len(self._trajs) == 0:
             logger.error(f"No trajs available")
             raise ValueError("No trajs available")
         entries = self.sample_entries(self._trajs, batch_size)
-        train_targets: List[TrajectorySample] = [entry.payload for entry in entries]
-        return train_targets
+        return [entry.payload for entry in entries]
 
     def get_train_targets_batch(self, batch_size: int = 1) -> TrainTarget:
         if len(self._train_targets) == 0:
@@ -98,6 +102,7 @@ class ReplayBuffer:
             raise ValueError("No train targets available")
         entries = self.sample_entries(self._train_targets, batch_size)
         train_targets = [entry.payload for entry in entries]
+        logger.debug(f"Returning {len(train_targets)} train targets")
         return tree_utils.stack_sequence_fields(train_targets)
 
     def get_trajs_size(self):
@@ -113,21 +118,18 @@ class ReplayBuffer:
         return ret
 
     @staticmethod
-    def sample_entries(sequence: Sequence, batch_size: int) -> list:
-        weights = np.array([item.weight for item in sequence])
-        # number of axis is larger than 1
-        if len(weights.shape) == 2:
-            weights = weights.sum(axis=1)
-        elif len(weights.shape) > 2:
-            raise ValueError(f"Unsupported shape: {weights.shape}")
-        p = weights / np.sum(weights)
-        return np.random.choice(sequence, size=batch_size, replace=True, p=p).tolist()
+    def sample_entries(
+        entries: List[ReplayEntry], batch_size: int
+    ) -> List[ReplayEntry]:
+        weights = [item.weight for item in entries]
+        batch = random.choices(entries, weights=weights, k=batch_size)
+        for item in batch:
+            item.num_sampled += 1
+        return batch
 
     def apply_decay(self):
-        for traj in self._trajs:
-            traj.weight *= self.decay
-        for target in self._train_targets:
-            target.weight *= self.decay
+        for entry in self._tras + self._train_targets:
+            entry.weight *= self.decay
 
 
 def make_target_from_traj(

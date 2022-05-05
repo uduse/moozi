@@ -76,6 +76,8 @@ class TrainTarget(NamedTuple):
     root_value: NDArray[np.float32]
 
     # weight is used to adjust the importance of the loss
+    # base weight is 1.0
+    # if a sample is twice likely to be sampled, it should have a weight of 2.0
     weight: NDArray[np.float32]
 
     def cast(self) -> "TrainTarget":

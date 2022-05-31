@@ -11,6 +11,7 @@ from gym.wrappers.monitoring.video_recorder import VideoRecorder
 from loguru import logger
 
 from moozi.core import BASE_PLAYER, PolicyFeed, StepSample, link
+from moozi.core.types import TrainTarget
 
 
 @link
@@ -233,6 +234,21 @@ class ReanalyzeEnvLaw:
             reward=self._curr_traj.last_reward[self._curr_step],
             legal_actions_mask=self._curr_traj.legal_actions_mask[self._curr_step],
             action=self._curr_traj.action[self._curr_step],
+            input_buffer=input_buffer_update,
+        )
+
+
+@link
+@dataclass
+class ReanalyzeEnvLawV2:
+    def __call__(self, input_buffer):
+        input_buffer_update = tuple(input_buffer[1:])
+        train_target: TrainTarget = input_buffer[0]
+        assert isinstance(train_target, TrainTarget)
+        return dict(
+            stacked_frames=train_target.stacked_frames,
+            is_last=False,
+            legal_actions_mask=np.ones_like(train_target.action_probs),
             input_buffer=input_buffer_update,
         )
 

@@ -23,7 +23,7 @@ def train_target(env: dm_env.Environment, num_unroll_steps, num_stacked_frames):
     n_step_return = np.zeros((num_unroll_steps,))
     last_reward = np.zeros((num_unroll_steps,))
     root_value = np.zeros((num_unroll_steps,))
-    weight = np.ones((num_unroll_steps,))
+    weight = np.ones((1,))
 
     target = TrainTarget(
         stacked_frames=stacked_frames,

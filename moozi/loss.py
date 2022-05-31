@@ -71,6 +71,7 @@ class MuZeroLoss(LossFn):
             ],
             prefix_len=1,
         )  # assert same batch dim
+        batch_size = batch.stacked_frames.shape[0]
 
         init_inf_features = RootFeatures(
             obs=batch.stacked_frames,
@@ -117,11 +118,17 @@ class MuZeroLoss(LossFn):
                 * transition_loss_scale
             )
 
+        # all batched losses should be the shape of (batch_size,)
+        tree.map_structure(lambda x: chex.assert_shape(x, (batch_size,)), losses)
+
         losses["loss:l2"] = jnp.reshape(
             params_l2_loss(params) * self.weight_decay, (1,)
         )
-        
-        importance_sampling_adjustment = 1 / batch.weight 
+
+        # apply importance sampling adjustment
+        # losses = tree.map_structure(lambda x: x * (1 / batch.weight), losses)
+
+        # sum all losses
         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
 
         losses["loss"] = loss

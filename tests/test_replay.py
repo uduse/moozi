@@ -21,6 +21,7 @@ SINGLE_PLAYER_SAMPLE = TrajectorySample(
     action_probs=_ACTION_PROBS,
     action=[101, 102, 103, 104, 105, -1],
     legal_actions_mask=np.ones((6, 3)),
+    weight=np.ones(6),
 ).cast()
 
 REPLAY_TEST_CASES = []
@@ -41,6 +42,7 @@ REPLAY_TEST_CASES.append(
             last_reward=[0, 200],
             action_probs=SINGLE_PLAYER_SAMPLE.action_probs[0:2],
             root_value=[10, 20],
+            weight=[1.0],
         ).cast(),
     )
 )
@@ -65,6 +67,7 @@ REPLAY_TEST_CASES.append(
             last_reward=[0, 200, 300],
             action_probs=SINGLE_PLAYER_SAMPLE.action_probs[0:3],
             root_value=[10, 20, 30],
+            weight=[1.0],
         ).cast(),
     )
 )
@@ -85,6 +88,7 @@ REPLAY_TEST_CASES.append(
             last_reward=[0, 400],
             action_probs=SINGLE_PLAYER_SAMPLE.action_probs[2:4],
             root_value=[30, 40],
+            weight=[1.0],
         ).cast(),
     ),
 )
@@ -105,6 +109,7 @@ REPLAY_TEST_CASES.append(
             last_reward=[0, 0],
             action_probs=[np.ones(3) / 3, np.ones(3) / 3],
             root_value=[0, 0],
+            weight=[1.0],
         ).cast(),
     )
 )
@@ -130,6 +135,7 @@ REPLAY_TEST_CASES.append(
                 np.ones(3) / 3,
             ],
             root_value=[50, 0, 0, 0],
+            weight=[1.0],
         ).cast(),
     )
 )
@@ -155,6 +161,7 @@ REPLAY_TEST_CASES.append(
                 np.ones(3) / 3,
             ],
             root_value=[0, 0, 0, 0],
+            weight=[1.0],
         ).cast(),
     )
 )
@@ -171,6 +178,7 @@ TWO_PLAYER_SAMPLE = TrajectorySample(
     + [np.ones(3) / 3],
     action=[101, 102, 103, -1],
     legal_actions_mask=np.ones((6, 3)),
+    weight=np.ones(6),
 ).cast()
 
 REPLAY_TEST_CASES.append(
@@ -192,6 +200,7 @@ REPLAY_TEST_CASES.append(
             last_reward=[0, 200],
             action_probs=TWO_PLAYER_SAMPLE.action_probs[0:2],
             root_value=[10, 20],
+            weight=[1.0],
         ).cast(),
     )
 )
@@ -212,6 +221,7 @@ REPLAY_TEST_CASES.append(
             last_reward=[0, -300, 400],
             action_probs=TWO_PLAYER_SAMPLE.action_probs[1:4],
             root_value=[20, 30, 0],
+            weight=[1.0],
         ).cast(),
     )
 )
@@ -237,6 +247,7 @@ REPLAY_TEST_CASES.append(
                 np.ones(3) / 3,
             ],
             root_value=[30, 0, 0, 0],
+            weight=[1.0],
         ).cast(),
     )
 )

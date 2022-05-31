@@ -273,18 +273,14 @@ class Planner:
     dirichlet_alpha: float = 0.2
     frac: float = 0.2
 
-    # def __post__init__(self):
-    #     logger.remove(0)
-    #     logger.add("logs/planner.log", level="DEBUG")
-
     async def __call__(
         self,
         is_last,
-        legal_actions_mask,
-        policy_feed,
+        policy_feed: PolicyFeed,
         root_inf_fn,
         trans_inf_fn,
     ):
+        legal_actions_mask = policy_feed.legal_actions_mask
         if not is_last:
             mcts = MCTSAsync(
                 root_inf_fn=root_inf_fn,

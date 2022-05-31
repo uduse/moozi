@@ -167,7 +167,7 @@ def make_target_from_traj(
         last_reward=unrolled_data_stacked[1],
         action_probs=unrolled_data_stacked[2],
         root_value=unrolled_data_stacked[3],
-        weight=np.array(1.0),
+        weight=np.ones((1,)),
     )
 
 

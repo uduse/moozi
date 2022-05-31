@@ -30,7 +30,10 @@ class StepSample(NamedTuple):
     action_probs: NDArray[np.float32]
     action: NDArray[np.int32]
 
-    # weight for sampling
+    # weight is used to adjust the importance of the loss
+    # base weight is 1.0
+    # if a sample is twice likely to be sampled, it should have a weight of 2.0
+    # TODO: currrently set but not used
     weight: NDArray[np.float32]
 
     def cast(self) -> "StepSample":

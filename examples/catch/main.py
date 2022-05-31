@@ -16,6 +16,7 @@ from moozi.laws import (
     FrameStacker,
     OpenSpielEnvLaw,
     ReanalyzeEnvLaw,
+    ReanalyzeEnvLawV2,
     TrajectoryOutputWriter,
     exit_if_no_input,
     increment_tick,
@@ -256,8 +257,8 @@ workers_reanalyze = make_rollout_workers(
     params_and_state=param_opt.get_params_and_state.remote(),
     laws_factory=lambda: [
         exit_if_no_input,
-        ReanalyzeEnvLaw(),
-        FrameStacker(num_frames=config.num_stacked_frames, player=0),
+        ReanalyzeEnvLawV2(),
+        # FrameStacker(num_frames=config.num_stacked_frames, player=0),
         make_policy_feed,
         Planner(
             num_simulations=config.num_env_simulations,
@@ -311,7 +312,7 @@ with WallTimer():
         logger.debug(f"test result scheduled.")
 
         for w in workers_reanalyze:
-            reanalyze_input = replay_buffer.get_trajs_batch.remote(
+            reanalyze_input = replay_buffer.get_train_targets_batch.remote(
                 config.num_trajs_per_reanalyze_universe
                 * config.num_universes_per_reanalyze_worker
             )

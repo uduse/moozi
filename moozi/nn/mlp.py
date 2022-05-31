@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 from dataclasses import dataclass
-
+import haiku as hk
+import jax
 from moozi.nn import NNSpec, NNArchitecture
 
 

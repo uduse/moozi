@@ -11,6 +11,7 @@ from acme.wrappers import (
     EnvironmentWrapper,
     AtariWrapper,
     GymAtariAdapter,
+    GymWrapper,
     wrap_all,
 )
 from acme.specs import make_environment_spec
@@ -55,57 +56,57 @@ class TransformObservationWrapper(EnvironmentWrapper):
 
 
 def make_catch(num_rows=5, num_cols=5):
-    prev_verbosity = logging.get_verbosity()
-    logging.set_verbosity(logging.WARNING)
-
-    def transform_obs(obs):
-        return obs.reshape((num_rows, num_cols, 1))
-
-    raw_env = open_spiel.python.rl_environment.Environment(
-        f"catch(rows={num_rows},columns={num_cols})"
-    )
-
-    env = OpenSpielWrapper(raw_env)
-    env = SinglePrecisionWrapper(env)
-    env = TransformObservationWrapper(env, transform_obs)
-    env_spec = make_environment_spec(env)
-
-    logging.set_verbosity(prev_verbosity)
-    return env, env_spec
+    env_str = f"catch(rows={num_rows},columns={num_cols})"
+    return make_openspiel_env_and_spec(env_str)
 
 
-def make_tic_tac_toe():
-    prev_verbosity = logging.get_verbosity()
-    logging.set_verbosity(logging.WARNING)
+# def make_tic_tac_toe():
+#     prev_verbosity = logging.get_verbosity()
+#     logging.set_verbosity(logging.WARNING)
 
-    def transform_obs(obs):
-        return obs.reshape((3, 3, 3)).swapaxes(0, 2)
+#     def transform_obs(obs):
+#         return obs.reshape((3, 3, 3)).swapaxes(0, 2)
 
-    raw_env = open_spiel.python.rl_environment.Environment(f"tic_tac_toe")
-    env = OpenSpielWrapper(raw_env)
-    env = SinglePrecisionWrapper(env)
-    env = TransformObservationWrapper(env, transform_obs)
-    env_spec = make_environment_spec(env)
+#     raw_env = open_spiel.python.rl_environment.Environment(f"tic_tac_toe")
 
-    logging.set_verbosity(prev_verbosity)
-    return env, env_spec
+#     env = OpenSpielWrapper(raw_env)
+#     env = SinglePrecisionWrapper(env)
+#     env = TransformObservationWrapper(env, transform_obs)
+#     env_spec = make_environment_spec(env)
+
+#     logging.set_verbosity(prev_verbosity)
+#     return env, env_spec
 
 
 def make_openspiel_env_and_spec(str):
     prev_verbosity = logging.get_verbosity()
     logging.set_verbosity(logging.WARNING)
+
     raw_env = open_spiel.python.rl_environment.Environment(str)
+
+    if raw_env.name == "catch":
+        game_params = raw_env.game.get_parameters()
+        num_rows, num_cols = game_params["rows"], game_params["columns"]
+
+        def transform_obs(obs):
+            return obs.reshape((num_rows, num_cols, 1))
+
+    elif raw_env.name == "tic_tac_toe":
+
+        def transform_obs(obs):
+            return obs.reshape((3, 3, 3)).swapaxes(0, 2)
+
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
+    env = TransformObservationWrapper(env, transform_obs)
     env_spec = make_environment_spec(env)
 
     logging.set_verbosity(prev_verbosity)
+
     return env, env_spec
 
 
-def make_atari_env(
-    level: str = "PongNoFrameskip-v4",
-) -> dm_env.Environment:
+def make_atari_env(level) -> dm_env.Environment:
     """Loads the Atari environment."""
     env = gym.make(level, full_action_space=True)
 
@@ -119,34 +120,54 @@ def make_atari_env(
             num_stacked_frames=1,
             to_float=True,
         ),
+        SinglePrecisionWrapper,
     ]
-    wrapper_list.append(SinglePrecisionWrapper)
 
     return wrap_all(env, wrapper_list)
 
 
-def make_env_and_spec(str):
-    try:
-        import gym
-        ids = [x.id for x in gym.envs.registry.all()]
-        if str in ids:
-            env = make_atari_env(str)
-            return env, make_environment_spec(env)
-    except:
-        pass
+def make_minatar_env(level) -> dm_env.Environment:
+    env = gym.make("MinAtar/" + level)
 
-    try:
-        env, env_spec = make_openspiel_env_and_spec(str)
-        if env.name == "catch":
-            game_params = env.environment._environment._game.get_parameters()
-            num_rows, num_cols = game_params["rows"], game_params["columns"]
-            return make_catch(num_rows=num_rows, num_cols=num_cols)
-        elif env.name == "tic_tac_toe":
-            return make_tic_tac_toe()
+    wrapper_list = [
+        GymWrapper,
+        SinglePrecisionWrapper,
+    ]
+
+    return wrap_all(env, wrapper_list)
+
+
+def make_env_and_spec(env_str):
+    if ":" in env_str:
+        lib_type, env_name = env_str.split(":")
+        if lib_type == "OpenSpiel":
+            return make_openspiel_env_and_spec(env_name)
+
+        elif lib_type == "Gym":
+            import gym
+
+            env = make_atari_env(env_name)
+            return env, make_environment_spec(env)
+        elif lib_type == "MinAtar":
+            import gym
+
+            env = make_minatar_env(env_name)
+            return env, make_environment_spec(env)
         else:
-            return env, env_spec
-    except:
-        raise ValueError(f"Environment {str} not found")
+            raise ValueError(f"Unknown library type: {lib_type}")
+    else:
+        try:
+            ids = [x.id for x in gym.envs.registry.all()]
+            if env_str in ids:
+                env = make_atari_env(env_str)
+                return env, make_environment_spec(env)
+        except:
+            pass
+
+        try:
+            return make_openspiel_env_and_spec(env_str)
+        except:
+            raise ValueError(f"Environment {env_str} not found")
 
 
 def make_env(str):
@@ -155,5 +176,5 @@ def make_env(str):
 
 # environment specs should be the same if the `str` is the same
 @functools.lru_cache(maxsize=None)
-def make_env_spec(str):
+def make_spec(str):
     return make_env_and_spec(str)[1]

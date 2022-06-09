@@ -58,7 +58,7 @@ config.weight_decay = 5e-2
 config.nn_arch_cls = mz.nn.ResNetArchitecture
 
 # %%
-env_spec = mz.make_env_spec(config.env)
+env_spec = mz.make_spec(config.env)
 single_frame_shape = env_spec.observations.observation.shape
 obs_channels = single_frame_shape[-1] * config.num_stacked_frames
 repr_channels = 4

@@ -14,8 +14,7 @@ from moozi.core import Config, link
 from moozi.core.env import make_env
 from moozi.laws import (
     FrameStacker,
-    OpenSpielEnvLaw,
-    ReanalyzeEnvLaw,
+    MinAtarEnvLaw,
     ReanalyzeEnvLawV2,
     TrajectoryOutputWriter,
     exit_if_no_input,
@@ -38,26 +37,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # %%
-# redis_password = None
-# if redis_password:
-#     ray.init(address="auto", _redis_password=redis_password)
-# ray.init(address="auto")
-
-# %%
 logger.remove()
 logger.add(sys.stderr, level="INFO")
-logger.add("logs/main.log", level="DEBUG")
+# logger.add("logs/main.log", level="DEBUG")
 
 # %%
 seed = 0
-game_num_rows = 6
-game_num_cols = 6
 num_epochs = 100
 lr = 5e-3
 
 config = Config()
-config.env = f"catch(rows={game_num_rows},columns={game_num_cols})"
-config.known_bound_min = -1
+config.env = f"MinAtar:Breakout-v1"
+config.known_bound_min = 0
 config.known_bound_max = 1
 
 config.discount = 0.99
@@ -76,8 +67,8 @@ config.batch_size = 256
 config.big_batch_size = config.batch_size * num_batches_per_epoch
 
 config.num_env_workers = 6
-config.num_ticks_per_epoch = game_num_rows * 2
-config.num_universes_per_env_worker = 25
+config.num_ticks_per_epoch = 30
+config.num_universes_per_env_worker = 50
 
 reanalyze_workers = 0
 config.num_reanalyze_workers = reanalyze_workers
@@ -89,8 +80,10 @@ config.nn_arch_cls = mz.nn.ResNetArchitecture
 
 config.test_interval = 5
 
+game_num_rows = 10
+game_num_cols = 10
 env_spec = mz.make_spec(config.env)
-single_frame_shape = env_spec.observations.observation.shape
+single_frame_shape = env_spec.observations.shape
 obs_channels = single_frame_shape[-1] * config.num_stacked_frames
 repr_channels = 6
 dim_action = env_spec.actions.num_values
@@ -163,7 +156,7 @@ workers_env = make_rollout_workers(
     model=param_opt.get_model.remote(),
     params_and_state=param_opt.get_params_and_state.remote(),
     laws_factory=lambda: [
-        OpenSpielEnvLaw(make_env(config.env), num_players=1),
+        MinAtarEnvLaw(make_env(config.env)),
         FrameStacker(num_frames=config.num_stacked_frames, player=0),
         make_policy_feed,
         Planner(
@@ -196,7 +189,7 @@ class TestResultOutputWriter:
             self.action_probs = []
             self.actions = []
 
-        self.renderings.append(frame_to_str(obs))
+        # self.renderings.append(frame_to_str(obs))
         self.action_probs.append(np.round(action_probs, 2))
         self.actions.append(action)
 
@@ -208,14 +201,14 @@ class TestResultOutputWriter:
 
         return update
 
-    def __str__(self):
-        s = ""
-        for rendering, action_probs, action in zip(
-            self.renderings, self.action_probs, self.actions
-        ):
-            s += f"{rendering}\n\n"
-            s += f"{action_probs} -> {action}\n\n"
-        return s
+    # def __str__(self):
+    #     s = ""
+    #     for rendering, action_probs, action in zip(
+    #         self.renderings, self.action_probs, self.actions
+    #     ):
+    #         s += f"{rendering}\n\n"
+    #         s += f"{action_probs} -> {action}\n\n"
+    #     return s
 
 
 # %%
@@ -223,7 +216,7 @@ class TestResultOutputWriter:
 def convert_test_result_record(recorders: Tuple[TestResultOutputWriter, ...]):
     return [
         LogScalar("mean_reward", float(np.mean([x.reward for x in recorders]))),
-        LogText("test_vis", "\n\n\n\n".join([str(x) for x in recorders])),
+        # LogText("test_vis", "\n\n\n\n".join([str(x) for x in recorders])),
     ]
 
 
@@ -234,7 +227,7 @@ workers_test = make_rollout_workers(
     model=param_opt.get_model.remote(),
     params_and_state=param_opt.get_params_and_state.remote(),
     laws_factory=lambda: [
-        OpenSpielEnvLaw(make_env(config.env), num_players=1),
+        MinAtarEnvLaw(make_env(config.env)),
         FrameStacker(num_frames=config.num_stacked_frames, player=0),
         make_policy_feed,
         Planner(
@@ -277,8 +270,11 @@ jaxboard_logger = JAXBoardLoggerActor.remote("jaxboard_logger")
 terminal_logger = TerminalLoggerActor.remote("terminal_logger")
 terminal_logger.write.remote(param_opt.get_properties.remote())
 
-# # %%
+# %%
 traj_futures: List[ray.ObjectRef] = []
+
+# %%
+enable_test = True
 
 # Driver
 with WallTimer():
@@ -306,10 +302,11 @@ with WallTimer():
         reanalyze_trajs = [w.run.remote(None) for w in workers_reanalyze]
         traj_futures = env_trajs + reanalyze_trajs
 
-        if epoch % config.test_interval == 0:
-            test_result = workers_test[0].run.remote(6 * 20)
-            test_result_datum = convert_test_result_record.remote(test_result)
-        logger.debug(f"test result scheduled.")
+        if enable_test:
+            if epoch % config.test_interval == 0:
+                test_result = workers_test[0].run.remote(1000)
+                test_result_datum = convert_test_result_record.remote(test_result)
+            logger.debug(f"test result scheduled.")
 
         for w in workers_reanalyze:
             reanalyze_input = replay_buffer.get_train_targets_batch.remote(
@@ -318,11 +315,14 @@ with WallTimer():
             )
             w.set_inputs.remote(reanalyze_input)
         logger.debug(f"reanalyze scheduled.")
-        test_done = jaxboard_logger.write.remote(test_result_datum)
+
+        if enable_test:
+            test_done = jaxboard_logger.write.remote(test_result_datum)
 
         param_opt.log.remote()
         logger.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
 
-logger.debug(ray.get(test_done))
+if enable_test:
+    logger.debug(ray.get(test_done))
 ray.get(jaxboard_logger.close.remote())
 ray.get(param_opt.close.remote())

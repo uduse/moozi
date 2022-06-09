@@ -6,7 +6,7 @@ import tree
 from acme.utils.tree_utils import unstack_sequence_fields
 
 from moozi.batching_layer import BatchingLayer
-from moozi import Config, make_env, make_env_spec
+from moozi import Config, make_env, make_spec
 from moozi.core import UniverseAsync, Tape
 from moozi.laws import (
     OpenSpielEnvLaw,
@@ -55,7 +55,7 @@ def make_rollout_worker_batching_layers(self: RolloutWorkerWithWeights, config: 
 
 
 def make_param_opt_properties(config):
-    env_spec = make_env_spec(config.env)
+    env_spec = make_spec(config.env)
     dim_action = env_spec.actions.num_values
     frame_shape = env_spec.observations.observation.shape
     stacked_frame_shape = (config.num_stacked_frames,) + frame_shape

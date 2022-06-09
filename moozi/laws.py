@@ -210,6 +210,34 @@ class AtariEnvLaw:
 
 @link
 @dataclass
+class MinAtarEnvLaw:
+    env: dm_env.Environment
+
+    def __call__(self, is_first, is_last, action: int):
+        if is_last:
+            timestep = self.env.reset()
+        else:
+            timestep = self.env.step(action)
+
+        if timestep.reward is None:
+            reward = 0.0
+        else:
+            reward = timestep.reward
+
+        legal_actions_mask = np.ones(self.env.action_space.n, dtype=np.float32)
+
+        return dict(
+            obs=np.array(timestep.observation, dtype=float),
+            is_first=timestep.first(),
+            is_last=timestep.last(),
+            to_play=0,
+            reward=reward,
+            legal_actions_mask=legal_actions_mask,
+        )
+
+
+@link
+@dataclass
 class ReanalyzeEnvLaw:
     _curr_traj: Optional[List[StepSample]] = None
     _curr_step: int = 0

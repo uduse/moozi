@@ -12,14 +12,12 @@ import optax
 import ray
 import tree
 from absl import logging
-from acme.specs import make_environment_spec
-from gym.envs.atari.environment import AtariEnv
-from moozi.core import Config, UniverseAsync, link
+from moozi.core import Config, link
 from moozi.core.env import make_env
 from moozi.core.link import link
 from moozi.core.tape import Tape
 from moozi.laws import (
-    AtariEnvLaw,
+    AtariEnvWrapper,
     FrameStacker,
     OpenSpielEnvLaw,
     TrajectoryOutputWriter,
@@ -27,7 +25,6 @@ from moozi.laws import (
     output_last_step_reward,
     update_episode_stats,
 )
-from moozi.learner import TrainingState
 from moozi.logging import (
     JAXBoardLoggerActor,
     JAXBoardLoggerV2,
@@ -39,7 +36,7 @@ from moozi.loss import MuZeroLoss
 from moozi.nn.nn import RootFeatures, make_model
 from moozi.nn.resnet import ResNetArchitecture, ResNetSpec
 from moozi.parameter_optimizer import ParameterOptimizer
-from moozi.policy.mcts import ActionSampler, planner_law
+from moozi.policy import ActionSampler, planner_law
 from moozi.replay import ReplayBuffer
 from moozi.rollout_worker import RolloutWorkerWithWeights
 from moozi.utils import WallTimer
@@ -70,7 +67,7 @@ config.known_bound_min = -1
 config.known_bound_max = 1
 
 # %%
-env_spec = mz.make_env_spec(config.env)
+env_spec = mz.make_spec(config.env)
 single_frame_shape = env_spec.observations.shape
 obs_rows, obs_cols = single_frame_shape[:2]
 obs_channels = single_frame_shape[-1] * config.num_stacked_frames
@@ -120,7 +117,7 @@ def make_parameter_optimizer(config):
 
 def make_laws_train(config):
     return [
-        AtariEnvLaw(make_env(config.env)),
+        AtariEnvWrapper(make_env(config.env)),
         FrameStacker(num_frames=config.num_stacked_frames, player=0),
         make_policy_feed,
         planner_law,
@@ -132,7 +129,7 @@ def make_laws_train(config):
 def make_laws_eval(config):
     return [
         link(lambda: dict(num_simulations=15)),
-        AtariEnvLaw(make_env(config.env), record_video=True),
+        AtariEnvWrapper(make_env(config.env), record_video=True),
         FrameStacker(num_frames=config.num_stacked_frames, player=0),
         make_policy_feed,
         planner_law,

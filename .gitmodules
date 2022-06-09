@@ -1,0 +1,3 @@
+[submodule "local_deps/MinAtar"]
+	path = local_deps/MinAtar
+	url = https://github.com/kenjyoung/MinAtar.git

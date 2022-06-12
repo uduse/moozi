@@ -201,8 +201,6 @@ def stack_frames(stacked_frames, obs):
 
 
 # %%
-
-
 @dataclass(repr=False)
 class RolloutWorkerVec:
     name: str = "rollout_worker_vec"

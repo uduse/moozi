@@ -168,7 +168,7 @@ def write_traj_batched(
     step_records: Tuple[Tuple[StepSample, ...], ...],
     output_buffer,
 ):
-    new_step_records = step_records
+    new_step_records = list(step_records)
     for i in range(len(step_records)):
         step_record = StepSample(
             frame=obs[i],
@@ -186,11 +186,11 @@ def write_traj_batched(
         if is_last[i]:
             traj = stack_sequence_fields(step_records[i] + (step_record,))
             output_buffer = output_buffer + (traj,)
-            new_step_records.append(tuple())
+            new_step_records[i] = tuple()
         else:
-            new_step_records.append(step_records[i] + (step_record,))
+            new_step_records[i] = step_records[i] + (step_record,)
 
-    return dict(step_records=new_step_records, output_buffer=output_buffer)
+    return dict(step_records=tuple(new_step_records), output_buffer=output_buffer)
 
 
 # %%

@@ -1,19 +1,29 @@
 # %%
+import mctx
 import functools
 import inspect
+import os
 import pickle
-from dataclasses import asdict, dataclass
-from typing import Callable, Optional
+from dataclasses import asdict, dataclass, field
+from functools import partial
+from re import I
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from acme.jax.utils import add_batch_dim
 
 import dm_env
 import gym
+import haiku as hk
 import jax
 import jax.numpy as jnp
 import moozi as mz
 import numpy as np
+import ray
+import tree
+from absl import logging
 from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
-from moozi import Tape
-from moozi.core.types import PolicyFeed
+from loguru import logger
+from moozi.core.types import PolicyFeed, StepSample
+from moozi.nn import RootFeatures, TransitionFeatures
 
 
 def link(fn):
@@ -27,6 +37,7 @@ def link(fn):
         for k in keys:
             kwargs[k] = d[k]
         updates = fn(**kwargs)
+        d = d.copy()
         d.update(updates)
         return d
 
@@ -50,10 +61,9 @@ class OpenSpielVecEnv:
 
     def __call__(self, is_last, action):
         updates_list = []
-        for law, is_last_, action_ in zip(self._envs, is_last, action):
-            updates = law(is_last=is_last_, action=action_)
+        for env, is_last_, action_ in zip(self._envs, is_last, action):
+            updates = env(is_last=is_last_, action=action_)
             updates_list.append(updates)
-        print(updates_list[0]["obs"][0].shape)
         return stack_sequence_fields(updates_list)
 
 
@@ -133,168 +143,265 @@ def make_env_law():
     return OpenSpielEnv(make_env())
 
 
-# %%
-num_envs = 2
-vec_env = link_class(OpenSpielVecEnv)(make_env_law, num_envs)
-
-# %%
-tape = asdict(Tape())
-tape["obs"] = np.zeros((num_envs, 6, 6, 1), dtype=np.float32)
-tape["is_first"] = np.full((num_envs), fill_value=True, dtype=bool)
-tape["is_last"] = np.full((num_envs), fill_value=False, dtype=bool)
-tape["action"] = np.full((num_envs), fill_value=0, dtype=np.int32)
-
-# %%
-vec_env(tape)
-
-
-@link
-def make_policy_feed(stacked_frames, legal_actions_mask, to_play):
+def make_policy_feed(stacked_frames, legal_actions_mask, to_play, random_key):
+    random_key, new_key = jax.random.split(random_key)
     feed = PolicyFeed(
         stacked_frames=stacked_frames,
         to_play=to_play,
         legal_actions_mask=legal_actions_mask,
-        random_key=jax.random.PRNGKey(0),
+        random_key=new_key,
     )
-    return dict(policy_feed=feed)
+    return dict(policy_feed=feed, random_key=random_key)
 
 
+@link
+def write_traj_batched(
+    obs,
+    to_play,
+    action,
+    reward,
+    root_value,
+    is_first,
+    is_last,
+    action_probs,
+    legal_actions_mask,
+    step_records: Tuple[Tuple[StepSample, ...], ...],
+    output_buffer,
+):
+    new_step_records = step_records
+    for i in range(len(step_records)):
+        step_record = StepSample(
+            frame=obs[i],
+            last_reward=reward[i],
+            is_first=is_first[i],
+            is_last=is_last[i],
+            to_play=to_play[i],
+            legal_actions_mask=legal_actions_mask[i],
+            root_value=root_value[i],
+            action_probs=action_probs[i],
+            action=action[i],
+            weight=1.0,
+        )
+
+        if is_last[i]:
+            traj = stack_sequence_fields(step_records[i] + (step_record,))
+            output_buffer = output_buffer + (traj,)
+            new_step_records.append(tuple())
+        else:
+            new_step_records.append(step_records[i] + (step_record,))
+
+    return dict(step_records=new_step_records, output_buffer=output_buffer)
+
+
+# %%
+def stack_frames(stacked_frames, obs):
+    ret = jnp.append(stacked_frames, obs, axis=-1)
+    ret = ret[..., np.array(obs.shape[-1]) :]
+    return {"stacked_frames": ret}
+
+
+# %%
+
+
+@dataclass(repr=False)
+class RolloutWorkerVec:
+    name: str = "rollout_worker_vec"
+    universe: "Universe" = field(init=False)
+
+    def run(self, termination: str = "episode"):
+        try:
+            while 1:
+                self.universe.tick()
+        except UniverseInterrupt:
+            pass
+        finally:
+            return
+
+    def set_params_and_state(
+        self, params_and_state: Union[ray.ObjectRef, Tuple[hk.Params, hk.State]]
+    ):
+        if isinstance(params_and_state, ray.ObjectRef):
+            params, state = ray.get(params_and_state)
+        else:
+            params, state = params_and_state
+        self.universe.tape["params"] = params
+        self.universe.tape["state"] = state
+
+
+# %%
+def make_paritial_recurr_fn(state):
+    def recurr_fn(params, random_key, action, hidden_state):
+        trans_feats = mz.nn.TransitionFeatures(hidden_state, action)
+        is_training = False
+        nn_output, _ = model.trans_inference(params, state, trans_feats, is_training)
+        rnn_output = mctx.RecurrentFnOutput(
+            reward=nn_output.reward.squeeze(-1),
+            discount=jnp.ones_like(nn_output.reward.squeeze(-1)),
+            prior_logits=nn_output.policy_logits,
+            value=nn_output.value.squeeze(-1),
+        )
+        return rnn_output, nn_output.hidden_state
+
+    return recurr_fn
+
+
+def make_planner(model: mz.nn.NNModel):
+    def planner(params: hk.Params, state: hk.State, stacked_frames, random_key):
+        is_training = False
+        random_key, new_key = jax.random.split(random_key, 2)
+        root_feats = mz.nn.RootFeatures(
+            obs=stacked_frames,
+            player=np.zeros((stacked_frames.shape[0]), dtype=np.int32),
+        )
+        nn_output, _ = model.root_inference(params, state, root_feats, is_training)
+        root = mctx.RootFnOutput(
+            prior_logits=nn_output.policy_logits,
+            value=nn_output.value.squeeze(-1),
+            embedding=nn_output.hidden_state,
+        )
+        nn_output, _ = model.root_inference(params, state, root_feats, is_training)
+        policy_output = mctx.muzero_policy(
+            params=params,
+            rng_key=new_key,
+            root=root,
+            recurrent_fn=make_paritial_recurr_fn(state),
+            num_simulations=20,
+        )
+        stats = policy_output.search_tree.summary()
+        return {
+            "action_probs": policy_output.action_weights,
+            "root_value": stats.value,
+        }
+
+    return planner
+
+
+# %%
 class Universe:
-    def __init__(self, vec_env) -> None:
+    def __init__(self, tape, vec_env, agent) -> None:
+        self._tape = tape
         self._vec_env = vec_env
-        self._vec_agent = None
+        self._agent = agent
 
-    def tick(self, tape):
-        self._vec_env(tape)
-        self._vec_agent(tape)
-        return tape
+    def tick(self):
+        self._tape = self._vec_env(self._tape)
+        self._tape = self._agent(self._tape)
+        return self._tape
+
+
+class UniverseInterrupt(Exception):
+    pass
+
+
+@dataclass
+class Tape:
+    # statistics
+    num_ticks: int = 0
+    num_episodes: int = 0
+    avg_episodic_reward: float = 0
+    sum_episodic_reward: float = 0
+
+    # environment
+    obs: np.ndarray = None
+    is_first: bool = True
+    is_last: bool = False
+    to_play: int = 0
+    reward: float = 0.0
+    action: int = 0
+    discount: float = 1.0
+    legal_actions_mask: np.ndarray = np.array(1)
+
+    # planner output
+    root_value: float = 0
+    action_probs: np.ndarray = np.array(0.0)
+    # mcts_root: Optional[Any] = None
+
+    # nn
+    params: hk.Params = None
+    state: hk.State = None
+
+    # player inputs
+    stacked_frames: np.ndarray = np.array(0)
+    policy_feed: Optional[PolicyFeed] = None
+
+    input_buffer: tuple = field(default_factory=tuple)
+    output_buffer: tuple = field(default_factory=tuple)
+
+    signals: Dict[str, bool] = field(default_factory=lambda: {"exit": False})
 
 
 # %%
-def stack_frame(stacked_frames, obs):
-    shifted = jnp.roll(stacked_frames, shift=1, axis=0)
-    filed = stacked_frames.at[]
-
-
-num_stacked_frames = 3
-stacked_frames = np.zeros((num_envs, 6, 6, num_stacked_frames), dtype=np.float32)
-tape = {"stacked_frames": stacked_frames}
+def slice_tape(tape, exclude: Set[str]):
+    return {k: v for k, v in tape.items() if k not in exclude}
 
 
 # %%
-# model = mz.nn.make_model(
-#     mz.nn.ResNetArchitecture,
-#     mz.nn.ResNetSpec(
-#         obs_rows=10,
-#         obs_cols=10,
-#         obs_channels=10,
-#         repr_rows=10,
-#         repr_cols=10,
-#         repr_channels=10,
-#         dim_action=6,
-#         repr_tower_blocks=2,
-#         repr_tower_dim=8,
-#         pred_tower_blocks=2,
-#         pred_tower_dim=8,
-#         dyna_tower_blocks=2,
-#         dyna_tower_dim=8,
-#         dyna_state_blocks=2,
-#     ),
-# )
-# # %%
-# random_key = jax.random.PRNGKey(0)
-# params, state = model.init_params_and_state(random_key)
+class Agent:
+    def __init__(self, model: mz.nn.NNModel):
+        frame_stacker = link(stack_frames)
+        policy_feed_maker = link(make_policy_feed)
+        planner = link(make_planner(model))
+        traj_writer = link(write_traj_batched)
 
-# # %%
-# env = mz.make_env("MinAtar:Seaquest-v1")
-# timestep = env.reset()
-# obs = jnp.array(timestep.observation, dtype=jnp.float32)
+        @jax.jit
+        def policy(tape):
+            tape = frame_stacker(tape)
+            tape = policy_feed_maker(tape)
+            tape = planner(tape)
+            return tape
 
+        def run(tape):
+            tape = policy(tape)
+            tape = traj_writer(tape)
+            return tape
 
-# # %%
-# def recurr_fn(params, state, random_key, action, hidden_state):
-#     trans_feats = mz.nn.TransitionFeatures(hidden_state, action)
-#     is_training = False
-#     nn_output, _ = model.trans_inference(params, state, trans_feats, is_training)
-#     rnn_output = mctx.RecurrentFnOutput(
-#         reward=nn_output.reward.squeeze(-1),
-#         discount=jnp.ones_like(nn_output.reward.squeeze(-1)),
-#         prior_logits=nn_output.policy_logits,
-#         value=nn_output.value.squeeze(-1),
-#     )
-#     return rnn_output, nn_output.hidden_state
+        self._run = run
 
+    def __call__(self, tape):
+        return self._run(tape)
 
-# def plan(params, state, random_key):
-#     root_feats = mz.nn.RootFeatures(
-#         obs=obs,
-#         player=jnp.array([0], dtype=jnp.int32),
-#         root_feats=add_batch_dim(root_feats),
-#     )
-#     root = mctx.RootFnOutput(
-#         prior_logits=nn_output.policy_logits,
-#         value=nn_output.value.squeeze(-1),
-#         embedding=nn_output.hidden_state,
-#     )
-#     nn_output, state = model.root_inference(
-#         params, state, root_feats, is_training=False
-#     )
-#     policy_output = mctx.muzero_policy(
-#         params=params,
-#         rng_key=jax.random.PRNGKey(0),
-#         root=root,
-#         recurrent_fn=partial(recurr_fn, state=state),
-#         num_simulations=10,
-#     )
-#     return policy_output
-
-
-# @link
-# @dataclass
-# class Planner:
-#     num_simulations: int
-#     known_bound_min: Optional[float]
-#     known_bound_max: Optional[float]
-#     include_tree: bool = False
-#     dirichlet_alpha: float = 0.2
-#     frac: float = 0.2
-
-#     async def __call__(
-#         self,
-#         is_last,
-#         policy_feed: PolicyFeed,
-#         root_inf_fn,
-#         trans_inf_fn,
-#     ):
-#         legal_actions_mask = policy_feed.legal_actions_mask
-#         if not is_last:
-#             mcts = MCTSAsync(
-#                 root_inf_fn=root_inf_fn,
-#                 trans_inf_fn=trans_inf_fn,
-#                 dim_action=legal_actions_mask.size,
-#                 num_simulations=self.num_simulations,
-#                 known_bound_min=self.known_bound_min,
-#                 known_bound_max=self.known_bound_max,
-#                 dirichlet_alpha=self.dirichlet_alpha,
-#                 frac=self.frac,
-#             )
-#             mcts_root = await mcts.run(policy_feed)
-#             action_probs = mcts.get_children_visit_counts_as_probs(
-#                 mcts_root,
-#             )
-
-#             update = dict(
-#                 action_probs=action_probs,
-#                 root_value=mcts_root.value,
-#             )
-
-#             if self.include_tree:
-#                 update["mcts_root"] = copy.deepcopy(mcts_root)
-#         else:
-#             action_probs = np.ones_like(legal_actions_mask) / legal_actions_mask.size
-#             update = dict(action_probs=action_probs, root_value=0.0)
-
-#         return update
-# %%
 
 # %%
+num_envs = 2
+num_stacked_frames = 2
+
+model = mz.nn.make_model(
+    mz.nn.MLPArchitecture,
+    mz.nn.MLPSpec(
+        obs_rows=6,
+        obs_cols=6,
+        obs_channels=num_stacked_frames,
+        repr_rows=6,
+        repr_cols=6,
+        repr_channels=4,
+        dim_action=3,
+    ),
+)
+random_key = jax.random.PRNGKey(0)
+random_key, new_key = jax.random.split(random_key)
+params, state = model.init_params_and_state(new_key)
+
+# %%
+random_key, new_key = jax.random.split(random_key)
+tape = asdict(Tape())
+tape["obs"] = np.zeros((num_envs, 6, 6, 1), dtype=np.float32)
+tape["is_first"] = np.full((num_envs), fill_value=False, dtype=bool)
+tape["is_last"] = np.full((num_envs), fill_value=True, dtype=bool)
+tape["action"] = np.full((num_envs), fill_value=0, dtype=np.int32)
+tape["stacked_frames"] = np.zeros(
+    (num_envs, 6, 6, num_stacked_frames), dtype=np.float32
+)
+tape["random_key"] = new_key
+tape["params"] = params
+tape["state"] = state
+
+# %%
+vec_env = link_class(OpenSpielVecEnv)(make_env_law, num_envs)
+agent = Agent(model)
+universe = Universe(tape, vec_env, agent)
+
+# %%
+for i in range(6):
+    print(f"{i=}")
+    tape = universe.tick()
+    print()

@@ -176,7 +176,6 @@ class NNModel:
 
         # TODO: add chex assert max trace
         return NNModel(
-            # spec=copy.deepcopy(self.spec),
             init_params_and_state=self.init_params_and_state,
             root_inference=jax.jit(self.root_inference, static_argnums=3),
             trans_inference=jax.jit(self.trans_inference, static_argnums=3),
@@ -188,6 +187,9 @@ class NNModel:
             ),
             hk_transformed=self.hk_transformed,
         )
+
+    def __hash__(self) -> int:
+        return 0
 
 
 def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:

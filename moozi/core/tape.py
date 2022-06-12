@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 import numpy as np
 
 from moozi.nn.nn import NNModel
@@ -10,8 +10,6 @@ from .types import PolicyFeed
 # TODO: fix type hints here
 @dataclass
 class Tape:
-    universe_id: int = -1
-
     # statistics
     num_ticks: int = 0
     num_episodes: int = 0
@@ -28,10 +26,6 @@ class Tape:
     discount: float = 1.0
     legal_actions_mask: np.ndarray = np.array(1)
 
-    # planner input
-    root_inf_fn: Callable = None
-    trans_inf_fn: Callable = None
-
     # planner output
     root_value: float = 0
     action_probs: np.ndarray = np.array(0.0)
@@ -44,4 +38,4 @@ class Tape:
     input_buffer: tuple = field(default_factory=tuple)
     output_buffer: tuple = field(default_factory=tuple)
 
-    interrupt_exit: bool = False
+    signals: Dict[str, bool] = field(default_factory=lambda: {"exit": False})

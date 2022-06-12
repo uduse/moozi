@@ -32,7 +32,7 @@ def train_target(env: dm_env.Environment, num_unroll_steps, num_stacked_frames):
         last_reward=last_reward,
         action_probs=action_probs,
         root_value=root_value,
-        weight=weight,
+        importance_sampling_ratio=weight,
     ).cast()
 
     return add_batch_dim(target)

@@ -20,7 +20,7 @@ from moozi.core import Config, TrajectorySample, TrainTarget
 @dataclass
 class ReplayEntry:
     payload: Any
-    weight: float = 1.0
+    priority: float = 1.0
     num_sampled: int = 0
 
 
@@ -30,6 +30,8 @@ class ReplayBuffer:
     min_size: int = 1_000
     prefetch_max_size: int = 1_000
     decay: float = 0.99
+    sampling_strategy: str = "uniform"
+    is_remote: bool = False
 
     num_unroll_steps: int = 5
     num_td_steps: int = 5
@@ -47,24 +49,6 @@ class ReplayBuffer:
         logger.remove()
         logger.add("logs/replay.log", level="DEBUG")
         logger.info(f"Replay buffer created, {vars(self)}")
-
-    @staticmethod
-    def from_config(config: Config, remote: bool = False):
-        # TODO: have two separate sizes for train targets and trajs
-        kwargs = dict(
-            max_size=config.replay_max_size,
-            min_size=config.replay_min_size,
-            discount=config.discount,
-            num_unroll_steps=config.num_unroll_steps,
-            num_td_steps=config.num_td_steps,
-            num_stacked_frames=config.num_stacked_frames,
-            prefetch_max_size=config.replay_prefetch_max_size,
-            decay=config.replay_decay,
-        )
-        if remote:
-            return ray.remote(ReplayBuffer).remote(**kwargs)
-        else:
-            return ReplayBuffer(**kwargs)
 
     def add_trajs(self, trajs: List[TrajectorySample]):
         self._trajs.extend([ReplayEntry(traj) for traj in trajs])
@@ -85,22 +69,14 @@ class ReplayBuffer:
                     num_stacked_frames=self.num_stacked_frames,
                 )
                 value_diff = np.abs(target.n_step_return[0] - target.root_value[0])
-                target = target._replace(weight=value_diff)
                 self._value_diffs.append(value_diff)
-                self._train_targets.append(ReplayEntry(target, weight=value_diff))
-
-    def get_trajs_batch(self, batch_size: int = 1) -> List[TrajectorySample]:
-        if len(self._trajs) == 0:
-            logger.error(f"No trajs available")
-            raise ValueError("No trajs available")
-        entries = self.sample_entries(self._trajs, batch_size)
-        return [entry.payload for entry in entries]
+                self._train_targets.append(ReplayEntry(target, priority=value_diff))
 
     def get_train_targets_batch(self, batch_size: int = 1) -> TrainTarget:
         if len(self._train_targets) == 0:
             logger.error(f"No train targets available")
             raise ValueError("No train targets available")
-        entries = self.sample_entries(self._train_targets, batch_size)
+        entries = self.sample_targets(batch_size)
         train_targets = [entry.payload for entry in entries]
         logger.debug(f"Returning {len(train_targets)} train targets")
         return tree_utils.stack_sequence_fields(train_targets)
@@ -117,19 +93,26 @@ class ReplayBuffer:
             ret["mean_value_diff"] = mean_value_diff
         return ret
 
-    @staticmethod
-    def sample_entries(
-        entries: List[ReplayEntry], batch_size: int
-    ) -> List[ReplayEntry]:
-        weights = [item.weight for item in entries]
-        batch = random.choices(entries, weights=weights, k=batch_size)
+    def sample_targets(self, batch_size: int) -> List[ReplayEntry]:
+        if self.sampling_strategy == "uniform":
+            batch = np.random.choice(list(self._train_targets), size=20).tolist()
+        elif self.sampling_strategy == "ranking":
+            priorities = np.array([item.priority for item in self._train_targets])
+            ranks = np.argsort(-priorities)
+            weights = 1 / (ranks + 1)
+            weights_sum = np.sum(weights)
+            weights /= weights_sum
+            indices = np.arange(priorities.size)
+            batch_indices = np.random.choice(indices, size=batch_size, p=weights)
+            importance_sampling_ratio = (1 / weights[batch_indices]) / weights.size
+            batch = [self._train_targets[i] for i in batch_indices]
+            for i, target in enumerate(batch):
+                target.payload = target.payload._replace(
+                    importance_sampling_ratio=importance_sampling_ratio[i]
+                )
         for item in batch:
             item.num_sampled += 1
         return batch
-
-    def apply_decay(self):
-        for entry in self._tras + self._train_targets:
-            entry.weight *= self.decay
 
 
 def make_target_from_traj(
@@ -167,7 +150,7 @@ def make_target_from_traj(
         last_reward=unrolled_data_stacked[1],
         action_probs=unrolled_data_stacked[2],
         root_value=unrolled_data_stacked[3],
-        weight=np.ones((1,)),
+        importance_sampling_ratio=np.ones((1,)),
     )
 
 

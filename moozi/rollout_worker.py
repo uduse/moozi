@@ -25,12 +25,9 @@ from moozi.nn.nn import RootFeatures, TransitionFeatures
 class RolloutWorkerWithWeights:
     name: str = "rollout_worker"
 
-    universes: List[UniverseAsync] = field(init=False)
     model: mz.nn.NNModel = field(init=False)
     params: hk.Params = field(init=False)
     state: hk.State = field(init=False)
-
-    batching_layers: List[BatchingLayer] = field(default_factory=list)
 
     def __post_init__(self):
         logger.remove()

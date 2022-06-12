@@ -25,6 +25,7 @@ class Config:
     replay_min_size: int = 1
     replay_prefetch_max_size: int = 10_000  # TODO: deprecate this arg
     replay_decay: float = 0.99
+    replay_sampling_strategy: str = "uniform"
 
     # mcts
 

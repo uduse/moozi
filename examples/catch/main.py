@@ -60,31 +60,32 @@ config.env = f"catch(rows={game_num_rows},columns={game_num_cols})"
 config.known_bound_min = -1
 config.known_bound_max = 1
 
-config.discount = 0.99
+config.discount = 0.997
 config.num_unroll_steps = 2
 config.num_td_steps = 100
-config.num_stacked_frames = 1
+config.num_stacked_frames = 2
 config.lr = lr
 
-config.replay_max_size = 100000
+config.replay_max_size = 1000000
+config.replay_sampling_strategy = "ranking"
 
 config.num_epochs = num_epochs
 config.epoch_train_start = 2
 
 num_batches_per_epoch = 64
-config.batch_size = 256
+config.batch_size = 128
 config.big_batch_size = config.batch_size * num_batches_per_epoch
 
 config.num_env_workers = 6
-config.num_ticks_per_epoch = game_num_rows * 2
+config.num_ticks_per_epoch = game_num_rows * 1
 config.num_universes_per_env_worker = 25
 
 reanalyze_workers = 0
 config.num_reanalyze_workers = reanalyze_workers
-config.num_universes_per_reanalyze_worker = 20
-config.num_trajs_per_reanalyze_universe = 2
+config.num_universes_per_reanalyze_worker = 25
+config.num_trajs_per_reanalyze_universe = 1
 
-config.weight_decay = 5e-2
+config.weight_decay = 5e-3
 config.nn_arch_cls = mz.nn.ResNetArchitecture
 
 config.test_interval = 5
@@ -153,7 +154,7 @@ def frame_to_str(frame):
 
 # %%
 param_opt = ParameterOptimizer.from_config(config, remote=True)
-replay_buffer = ReplayBuffer.from_config(config, remote=True)
+replay_buffer = ReplayBuffer.make(config, remote=True)
 
 
 workers_env = make_rollout_workers(

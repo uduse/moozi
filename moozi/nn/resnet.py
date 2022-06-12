@@ -115,6 +115,9 @@ class ResNetArchitecture(NNArchitecture):
         )
 
         hidden_state = ConvBlock(self.spec.repr_channels)(hidden_state, is_training)
+        hidden_state = hk.Conv2D(self.spec.repr_channels, (3, 3), padding="same")(
+            hidden_state
+        )
         chex.assert_shape(
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
@@ -210,6 +213,9 @@ class ResNetArchitecture(NNArchitecture):
         )(dyna_trunk, is_training)
         next_hidden_state = ConvBlock(self.spec.repr_channels)(
             next_hidden_state, is_training
+        )
+        next_hidden_state = hk.Conv2D(self.spec.repr_channels, (3, 3), padding="same")(
+            next_hidden_state
         )
         chex.assert_shape(
             next_hidden_state,

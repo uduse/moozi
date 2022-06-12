@@ -11,24 +11,39 @@
         - "*.yml"
         - exclude:
             dir: local_deps
-    tune:
-      description: tune catch
-      steps:
-        - run: run
-          tag: tune
-          maximize: "actor:rolling_reward"
-          max-trials: 50
-          optimizer: gbrt
-          flags:
-            batch_size: 2048
-            dim_repr: [1, 2, 4, 8, 16]
-            lr: loguniform[1e-4:5e-2]
-            max_replay_size: loguniform[1e3:1e7]
-            num_steps: 500_000
-            obs_ratio: loguniform[1e2:1e4]
-            weight_decay: loguniform[1e-5:1e-2]
-            entropy_reg: loguniform[5e-2:2]
 
+- model: seaquest
+  operations:
+    train:
+      default: true
+      main: examples.minatar_seaquest.main
+      output-scalars: off
+      flags-dest: config:examples/minatar_seaquest/config.yml
+      flags-import: all
+      sourcecode:
+        - "*.py"
+        - "*.yml"
+        - exclude:
+            dir: local_deps
+
+    # tune:
+
+    #   description: tune catch
+    #   steps:
+    #     - run: run
+    #       tag: tune
+    #       maximize: "actor:rolling_reward"
+    #       max-trials: 50
+    #       optimizer: gbrt
+    #       flags:
+    #         batch_size: 2048
+    #         dim_repr: [1, 2, 4, 8, 16]
+    #         lr: loguniform[1e-4:5e-2]
+    #         max_replay_size: loguniform[1e3:1e7]
+    #         num_steps: 500_000
+    #         obs_ratio: loguniform[1e2:1e4]
+    #         weight_decay: loguniform[1e-5:1e-2]
+    #         entropy_reg: loguniform[5e-2:2]
 #   default: true
 #   operations:
 #     run:

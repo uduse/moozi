@@ -78,10 +78,10 @@ class TrainTarget(NamedTuple):
     # root value after the search
     root_value: NDArray[np.float32]
 
-    # weight is used to adjust the importance of the loss
-    # base weight is 1.0
-    # if a sample is twice likely to be sampled, it should have a weight of 2.0
-    weight: NDArray[np.float32]
+    # importance sampling (IS) ratio
+    # 1.0 if uniform sampling
+    # if a sample is twice more likely to be sampled, it should have a IS ratio of 0.5
+    importance_sampling_ratio: NDArray[np.float32]
 
     def cast(self) -> "TrainTarget":
         return TrainTarget(
@@ -91,7 +91,9 @@ class TrainTarget(NamedTuple):
             last_reward=np.asarray(self.last_reward, dtype=np.float32),
             action_probs=np.asarray(self.action_probs, dtype=np.float32),
             root_value=np.asarray(self.root_value, dtype=np.float32),
-            weight=np.asarray(self.weight, dtype=np.float32),
+            importance_sampling_ratio=np.asarray(
+                self.importance_sampling_ratio, dtype=np.float32
+            ),
         )
 
 

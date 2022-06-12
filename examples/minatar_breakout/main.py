@@ -146,7 +146,7 @@ def frame_to_str(frame):
 
 # %%
 param_opt = ParameterOptimizer.from_config(config, remote=True)
-replay_buffer = ReplayBuffer.from_config(config, remote=True)
+replay_buffer = ReplayBuffer.make(config, remote=True)
 
 
 workers_env = make_rollout_workers(

@@ -126,7 +126,9 @@ class MuZeroLoss(LossFn):
         )
 
         # apply importance sampling adjustment
-        # losses = tree.map_structure(lambda x: x * (1 / batch.weight), losses)
+        losses = tree.map_structure(
+            lambda x: x * batch.importance_sampling_ratio, losses
+        )
 
         # sum all losses
         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))

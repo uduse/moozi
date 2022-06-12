@@ -110,7 +110,7 @@ class ParameterOptimizer:
     model: mz.nn.NNModel = field(init=False)
     training_state: TrainingState = field(init=False)
     sgd_step_fn: Callable = field(init=False)
-    is_remote: bool = False
+    use_remote: bool = False
 
     loggers: List[mz.logging.Logger] = field(default_factory=list)
 
@@ -123,40 +123,23 @@ class ParameterOptimizer:
         logger.add("logs/param_opt.log", level="DEBUG")
         logger.info(f"Parameter optimizer created, {vars(self)}")
 
-    @staticmethod
-    def from_config(config: Config, remote: bool = False):
-        if remote:
-            param_opt = ray.remote(num_gpus=0.4)(ParameterOptimizer).remote(
-                is_remote=True
-            )
-            param_opt.make_training_suite.remote(config)
-            param_opt.make_loggers.remote(
-                lambda: [
-                    mz.logging.JAXBoardLoggerV2(name="param_opt"),
-                ]
-            )
-            return param_opt
-        else:
-            param_opt = ParameterOptimizer()
-            param_opt.make_training_suite(config)
-            param_opt.make_loggers(
-                lambda: [
-                    mz.logging.JAXBoardLoggerV2(name="param_opt"),
-                ]
-            )
-            return param_opt
-
-    def make_training_suite(self, config: Config):
-        self.model = make_model(config.nn_arch_cls, config.nn_spec)
-        params, state = self.model.init_params_and_state(
-            jax.random.PRNGKey(config.seed)
-        )
+    def make_training_suite(
+        self,
+        seed: int,
+        nn_arch_cls,
+        nn_spec,
+        weight_decay,
+        lr,
+        num_unroll_steps,
+    ):
+        self.model = make_model(nn_arch_cls, nn_spec)
+        params, state = self.model.init_params_and_state(jax.random.PRNGKey(seed))
         loss_fn = mz.loss.MuZeroLoss(
-            num_unroll_steps=config.num_unroll_steps, weight_decay=config.weight_decay
+            num_unroll_steps=num_unroll_steps, weight_decay=weight_decay
         )
         optimizer = optax.chain(
             optax.clip_by_global_norm(1),
-            optax.adam(config.lr, b1=0.9, b2=0.99),
+            optax.adam(lr, b1=0.9, b2=0.99),
         )
         self.training_state = TrainingState(
             params=params,
@@ -164,7 +147,7 @@ class ParameterOptimizer:
             state=state,
             opt_state=optimizer.init(params),
             steps=0,
-            rng_key=jax.random.PRNGKey(config.seed),
+            rng_key=jax.random.PRNGKey(seed),
         )
         self.sgd_step_fn = make_sgd_step_fn(self.model, loss_fn, optimizer)
 
@@ -199,7 +182,7 @@ class ParameterOptimizer:
     def get_params_and_state(self) -> Union[ray.ObjectRef, Tuple[hk.Params, hk.State]]:
         logger.debug("getting params and state")
         ret = self.training_state.params, self.training_state.state
-        if self.is_remote:
+        if self.use_remote:
             return ray.put(ret)
         else:
             return ret

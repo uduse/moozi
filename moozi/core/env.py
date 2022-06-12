@@ -56,33 +56,15 @@ class TransformObservationWrapper(EnvironmentWrapper):
 
 
 def make_catch(num_rows=5, num_cols=5):
-    env_str = f"catch(rows={num_rows},columns={num_cols})"
-    return make_openspiel_env_and_spec(env_str)
+    env_name = f"catch(rows={num_rows},columns={num_cols})"
+    return make_openspiel_env_and_spec(env_name)
 
 
-# def make_tic_tac_toe():
-#     prev_verbosity = logging.get_verbosity()
-#     logging.set_verbosity(logging.WARNING)
-
-#     def transform_obs(obs):
-#         return obs.reshape((3, 3, 3)).swapaxes(0, 2)
-
-#     raw_env = open_spiel.python.rl_environment.Environment(f"tic_tac_toe")
-
-#     env = OpenSpielWrapper(raw_env)
-#     env = SinglePrecisionWrapper(env)
-#     env = TransformObservationWrapper(env, transform_obs)
-#     env_spec = make_environment_spec(env)
-
-#     logging.set_verbosity(prev_verbosity)
-#     return env, env_spec
-
-
-def make_openspiel_env_and_spec(str):
+def make_openspiel_env_and_spec(env_name):
     prev_verbosity = logging.get_verbosity()
     logging.set_verbosity(logging.WARNING)
 
-    raw_env = open_spiel.python.rl_environment.Environment(str)
+    raw_env = open_spiel.python.rl_environment.Environment(env_name)
 
     if raw_env.name == "catch":
         game_params = raw_env.game.get_parameters()
@@ -95,6 +77,16 @@ def make_openspiel_env_and_spec(str):
 
         def transform_obs(obs):
             return obs.reshape((3, 3, 3)).swapaxes(0, 2)
+
+    elif raw_env.name == "go":
+
+        board_size = raw_env.game.get_parameters()["board_size"]
+
+        def transform_obs(obs):
+            return obs.reshape((board_size, board_size, 4))
+
+    else:
+        raise ValueError(f"Unknown OpenSpiel environment: {raw_env.name}")
 
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
@@ -137,9 +129,9 @@ def make_minatar_env(level) -> dm_env.Environment:
     return wrap_all(env, wrapper_list)
 
 
-def make_env_and_spec(env_str):
-    if ":" in env_str:
-        lib_type, env_name = env_str.split(":")
+def make_env_and_spec(env_name):
+    if ":" in env_name:
+        lib_type, env_name = env_name.split(":")
         if lib_type == "OpenSpiel":
             return make_openspiel_env_and_spec(env_name)
 
@@ -158,23 +150,23 @@ def make_env_and_spec(env_str):
     else:
         try:
             ids = [x.id for x in gym.envs.registry.all()]
-            if env_str in ids:
-                env = make_atari_env(env_str)
+            if env_name in ids:
+                env = make_atari_env(env_name)
                 return env, make_environment_spec(env)
         except:
             pass
 
         try:
-            return make_openspiel_env_and_spec(env_str)
+            return make_openspiel_env_and_spec(env_name)
         except:
-            raise ValueError(f"Environment {env_str} not found")
+            raise ValueError(f"Environment {env_name} not found")
 
 
-def make_env(str):
-    return make_env_and_spec(str)[0]
+def make_env(env_name):
+    return make_env_and_spec(env_name)[0]
 
 
-# environment specs should be the same if the `str` is the same
+# environment specs should be the same if the `env_name` is the same
 @functools.lru_cache(maxsize=None)
-def make_spec(str):
-    return make_env_and_spec(str)[1]
+def make_spec(env_name):
+    return make_env_and_spec(env_name)[1]

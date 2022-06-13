@@ -1,4 +1,6 @@
 # %%
+import tree
+import chex
 import mctx
 import functools
 import inspect
@@ -143,54 +145,44 @@ def make_env_law():
     return OpenSpielEnv(make_env())
 
 
-def make_policy_feed(stacked_frames, legal_actions_mask, to_play, random_key):
-    random_key, new_key = jax.random.split(random_key)
-    feed = PolicyFeed(
-        stacked_frames=stacked_frames,
-        to_play=to_play,
-        legal_actions_mask=legal_actions_mask,
-        random_key=new_key,
-    )
-    return dict(policy_feed=feed, random_key=random_key)
+class BatchedTrajWriter:
+    def __init__(self, batch_size: int) -> None:
+        self._step_samples: List[List[StepSample]] = [[] for _ in range(batch_size)]
 
+    def __call__(
+        self,
+        obs,
+        to_play,
+        action,
+        reward,
+        root_value,
+        is_first,
+        is_last,
+        action_probs,
+        legal_actions_mask,
+        output_buffer,
+    ):
+        for i in range(len(self._step_samples)):
+            step_sample = StepSample(
+                frame=obs[i],
+                last_reward=reward[i],
+                is_first=is_first[i],
+                is_last=is_last[i],
+                to_play=to_play[i],
+                legal_actions_mask=legal_actions_mask[i],
+                root_value=root_value[i],
+                action_probs=action_probs[i],
+                action=action[i],
+                weight=1.0,
+            )
 
-@link
-def write_traj_batched(
-    obs,
-    to_play,
-    action,
-    reward,
-    root_value,
-    is_first,
-    is_last,
-    action_probs,
-    legal_actions_mask,
-    step_records: Tuple[Tuple[StepSample, ...], ...],
-    output_buffer,
-):
-    new_step_records = list(step_records)
-    for i in range(len(step_records)):
-        step_record = StepSample(
-            frame=obs[i],
-            last_reward=reward[i],
-            is_first=is_first[i],
-            is_last=is_last[i],
-            to_play=to_play[i],
-            legal_actions_mask=legal_actions_mask[i],
-            root_value=root_value[i],
-            action_probs=action_probs[i],
-            action=action[i],
-            weight=1.0,
-        )
+            self._step_samples[i].append(step_sample)
+            if is_last[i]:
+                traj = stack_sequence_fields(self._step_samples[i])
+                self._step_samples[i].clear()
+                output_buffer = output_buffer + (traj,)
 
-        if is_last[i]:
-            traj = stack_sequence_fields(step_records[i] + (step_record,))
-            output_buffer = output_buffer + (traj,)
-            new_step_records[i] = tuple()
-        else:
-            new_step_records[i] = step_records[i] + (step_record,)
-
-    return dict(step_records=tuple(new_step_records), output_buffer=output_buffer)
+        return dict(output_buffer=output_buffer)
 
 
 # %%
@@ -243,7 +235,13 @@ def make_paritial_recurr_fn(state):
     return recurr_fn
 
 
-def make_planner(model: mz.nn.NNModel):
+def make_planner(
+    model: mz.nn.NNModel,
+    num_simulations: int = 10,
+    dirichlet_fraction: float = 0.25,
+    dirichlet_alpha: float = 0.3,
+    temperature: float = 1.0,
+):
     def planner(params: hk.Params, state: hk.State, stacked_frames, random_key):
         is_training = False
         random_key, new_key = jax.random.split(random_key, 2)
@@ -263,12 +261,16 @@ def make_planner(model: mz.nn.NNModel):
             rng_key=new_key,
             root=root,
             recurrent_fn=make_paritial_recurr_fn(state),
-            num_simulations=20,
+            num_simulations=num_simulations,
+            dirichlet_fraction=dirichlet_fraction,
+            dirichlet_alpha=dirichlet_alpha,
+            temperature=temperature,
         )
         stats = policy_output.search_tree.summary()
         return {
             "action_probs": policy_output.action_weights,
             "root_value": stats.value,
+            "random_key": random_key,
         }
 
     return planner
@@ -284,48 +286,14 @@ class Universe:
     def tick(self):
         self._tape = self._vec_env(self._tape)
         self._tape = self._agent(self._tape)
+
+    @property
+    def tape(self):
         return self._tape
 
 
 class UniverseInterrupt(Exception):
     pass
-
-
-@dataclass
-class Tape:
-    # statistics
-    num_ticks: int = 0
-    num_episodes: int = 0
-    avg_episodic_reward: float = 0
-    sum_episodic_reward: float = 0
-
-    # environment
-    obs: np.ndarray = None
-    is_first: bool = True
-    is_last: bool = False
-    to_play: int = 0
-    reward: float = 0.0
-    action: int = 0
-    discount: float = 1.0
-    legal_actions_mask: np.ndarray = np.array(1)
-
-    # planner output
-    root_value: float = 0
-    action_probs: np.ndarray = np.array(0.0)
-    # mcts_root: Optional[Any] = None
-
-    # nn
-    params: hk.Params = None
-    state: hk.State = None
-
-    # player inputs
-    stacked_frames: np.ndarray = np.array(0)
-    policy_feed: Optional[PolicyFeed] = None
-
-    input_buffer: tuple = field(default_factory=tuple)
-    output_buffer: tuple = field(default_factory=tuple)
-
-    signals: Dict[str, bool] = field(default_factory=lambda: {"exit": False})
 
 
 # %%
@@ -335,21 +303,23 @@ def slice_tape(tape, exclude: Set[str]):
 
 # %%
 class Agent:
-    def __init__(self, model: mz.nn.NNModel):
+    def __init__(self, model: mz.nn.NNModel, num_envs: int):
         frame_stacker = link(stack_frames)
-        policy_feed_maker = link(make_policy_feed)
         planner = link(make_planner(model))
-        traj_writer = link(write_traj_batched)
+        traj_writer = link_class(BatchedTrajWriter)(num_envs)
 
-        @jax.jit
+        @partial(jax.jit, backend="gpu")
+        @chex.assert_max_traces(n=1)
         def policy(tape):
             tape = frame_stacker(tape)
-            tape = policy_feed_maker(tape)
             tape = planner(tape)
             return tape
 
         def run(tape):
-            tape = policy(tape)
+            tape_slice = slice_tape(tape, {"output_buffer", "signals"})
+            tape_slice = policy(tape_slice)
+            tape.update(tape_slice)
+
             tape = traj_writer(tape)
             return tape
 
@@ -360,8 +330,9 @@ class Agent:
 
 
 # %%
-num_envs = 2
-num_stacked_frames = 2
+num_envs = 30
+num_stacked_frames = 1
+num_actions = 3
 
 model = mz.nn.make_model(
     mz.nn.MLPArchitecture,
@@ -371,7 +342,7 @@ model = mz.nn.make_model(
         obs_channels=num_stacked_frames,
         repr_rows=6,
         repr_cols=6,
-        repr_channels=4,
+        repr_channels=1,
         dim_action=3,
     ),
 )
@@ -381,25 +352,46 @@ params, state = model.init_params_and_state(new_key)
 
 # %%
 random_key, new_key = jax.random.split(random_key)
-tape = asdict(Tape())
-tape["obs"] = np.zeros((num_envs, 6, 6, 1), dtype=np.float32)
-tape["is_first"] = np.full((num_envs), fill_value=False, dtype=bool)
-tape["is_last"] = np.full((num_envs), fill_value=True, dtype=bool)
-tape["action"] = np.full((num_envs), fill_value=0, dtype=np.int32)
-tape["stacked_frames"] = np.zeros(
-    (num_envs, 6, 6, num_stacked_frames), dtype=np.float32
-)
-tape["random_key"] = new_key
-tape["params"] = params
-tape["state"] = state
+
+
+def make_tape(seed, num_envs, num_actions, num_stacked_frames):
+    tape = {}
+    tape["root_value"] = np.zeros(num_envs, dtype=np.float32)
+    tape["obs"] = np.zeros((num_envs, 6, 6, 1), dtype=np.float32)
+    tape["is_first"] = np.full(num_envs, fill_value=False, dtype=bool)
+    tape["is_last"] = np.full(num_envs, fill_value=True, dtype=bool)
+    tape["action"] = np.full(num_envs, fill_value=0, dtype=np.int32)
+    tape["action_probs"] = np.full(
+        (num_envs, num_actions), fill_value=0, dtype=np.float32
+    )
+    tape["stacked_frames"] = np.zeros(
+        (num_envs, 6, 6, num_stacked_frames), dtype=np.float32
+    )
+    tape["random_key"] = new_key
+    tape["params"] = params
+    tape["state"] = state
+    tape["output_buffer"] = tuple()
+    return tape
+
 
 # %%
+tape = make_tape(0, num_envs, num_actions, num_stacked_frames)
 vec_env = link_class(OpenSpielVecEnv)(make_env_law, num_envs)
-agent = Agent(model)
+agent = Agent(model, num_envs)
 universe = Universe(tape, vec_env, agent)
+universe.tick()
 
 # %%
-for i in range(6):
+num_ticks = 20
+timer = mz.utils.WallTimer()
+timer.start()
+for i in range(num_ticks):
     print(f"{i=}")
-    tape = universe.tick()
-    print()
+    universe.tick()
+timer.end()
+
+num_interactions = num_envs * num_ticks
+interactions_per_second = num_interactions / timer.delta
+
+# %%
+print(f"{interactions_per_second=}")

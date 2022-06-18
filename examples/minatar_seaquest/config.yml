@@ -46,14 +46,15 @@ nn:
     dyna_state_blocks: 6
 
 mcts:
-  dirichlet_alpha: 0.2
-  frac: 0.2
   known_bound_min: ${env.known_bound_min}
   known_bound_max: ${env.known_bound_max}
+  dirichlet_alpha: 0.2
+  frac: 0.2
 
 train:
   num_epochs: 200
   epoch_train_start: 2
+  # TODO: make ratio-based
   num_batches_per_epoch: 64
   batch_size: 256
   lr: 5.0e-3

@@ -283,9 +283,17 @@ class Universe:
         self._vec_env = vec_env
         self._agent = agent
 
+        self._env_timer = mz.utils.WallTimer()
+        self._agent_timer = mz.utils.WallTimer()
+
     def tick(self):
+        self._env_timer.start()
         self._tape = self._vec_env(self._tape)
+        self._env_timer.end()
+
+        self._agent_timer.start()
         self._tape = self._agent(self._tape)
+        self._agent_timer.end()
 
     @property
     def tape(self):
@@ -330,7 +338,7 @@ class Agent:
 
 
 # %%
-num_envs = 30
+num_envs = 2
 num_stacked_frames = 1
 num_actions = 3
 
@@ -382,16 +390,22 @@ universe = Universe(tape, vec_env, agent)
 universe.tick()
 
 # %%
-num_ticks = 20
+num_ticks = 50
 timer = mz.utils.WallTimer()
 timer.start()
+# jax.profiler.start_trace("/tmp/tensorboard")
 for i in range(num_ticks):
     print(f"{i=}")
     universe.tick()
 timer.end()
+# jax.profiler.stop_trace()
 
 num_interactions = num_envs * num_ticks
 interactions_per_second = num_interactions / timer.delta
 
 # %%
 print(f"{interactions_per_second=}")
+
+# %%
+print(f"{universe._agent_timer.delta=}")
+print(f"{universe._env_timer.delta=}")

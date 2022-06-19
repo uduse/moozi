@@ -1,4 +1,5 @@
 import collections
+import jax.numpy as jnp
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Deque, List, Optional, Union
@@ -10,58 +11,60 @@ from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from gym.wrappers.monitoring.video_recorder import VideoRecorder
 from loguru import logger
 
-from moozi.core import BASE_PLAYER, PolicyFeed, StepSample, link
+from moozi.core import BASE_PLAYER, PolicyFeed, StepSample
+from moozi.core.link import link
 from moozi.core.types import TrainTarget
 
+# TODO: make __call__ not a method but a static method or a function
 
-@link
-@dataclass
-class FrameStacker:
-    num_frames: int = 1
-    player: int = 0
+# @link
+# @dataclass
+# class FrameStacker:
+#     num_frames: int = 1
+#     player: int = 0
 
-    padding: Optional[np.ndarray] = None
-    deque: Deque = field(init=False)
+#     padding: Optional[np.ndarray] = None
+#     deque: Deque = field(init=False)
 
-    def __post_init__(self):
-        self.deque = collections.deque(maxlen=self.num_frames)
+#     def __post_init__(self):
+#         self.deque = collections.deque(maxlen=self.num_frames)
 
-    def __call__(self, obs: Union[np.ndarray, List[np.ndarray]], is_last) -> Any:
-        if is_last:
-            self.reset()
-        else:
-            self.add(obs)
-            return dict(stacked_frames=self.get())
+#     def __call__(self, obs: Union[np.ndarray, List[np.ndarray]], is_last) -> Any:
+#         if is_last:
+#             self.reset()
+#         else:
+#             self.add(obs)
+#             return dict(stacked_frames=self.get())
 
-    def add(self, obs: Union[np.ndarray, List[np.ndarray]]):
-        assert isinstance(obs, (np.ndarray, list))
-        player_obs = self._get_player_obs(obs)
+#     def add(self, obs: Union[np.ndarray, List[np.ndarray]]):
+#         assert isinstance(obs, (np.ndarray, list))
+#         player_obs = self._get_player_obs(obs)
 
-        if self.padding is None:
-            self.padding = np.zeros_like(player_obs)
+#         if self.padding is None:
+#             self.padding = np.zeros_like(player_obs)
 
-        self.deque.append(player_obs)
+#         self.deque.append(player_obs)
 
-    def reset(self):
-        self.deque.clear()
+#     def reset(self):
+#         self.deque.clear()
 
-    def get(self):
-        stacked_frames = np.concatenate(list(self.deque), axis=-1)
-        num_frames_to_pad = self.num_frames - len(self.deque)
-        if num_frames_to_pad > 0:
-            paddings = self.padding.repeat(num_frames_to_pad, axis=-1)
-            stacked_frames = np.concatenate([paddings, stacked_frames], axis=-1)
-        return stacked_frames
+#     def get(self):
+#         stacked_frames = np.concatenate(list(self.deque), axis=-1)
+#         num_frames_to_pad = self.num_frames - len(self.deque)
+#         if num_frames_to_pad > 0:
+#             paddings = self.padding.repeat(num_frames_to_pad, axis=-1)
+#             stacked_frames = np.concatenate([paddings, stacked_frames], axis=-1)
+#         return stacked_frames
 
-    def _get_player_obs(self, obs: Union[np.ndarray, List[np.ndarray]]) -> np.ndarray:
-        if isinstance(obs, np.ndarray):
-            return obs
-        elif isinstance(obs, list):
-            return obs[self.player]
-        else:
-            raise ValueError(
-                f"obs must be np.ndarray or list of np.ndarray, got {type(obs)}"
-            )
+#     def _get_player_obs(self, obs: Union[np.ndarray, List[np.ndarray]]) -> np.ndarray:
+#         if isinstance(obs, np.ndarray):
+#             return obs
+#         elif isinstance(obs, list):
+#             return obs[self.player]
+#         else:
+#             raise ValueError(
+#                 f"obs must be np.ndarray or list of np.ndarray, got {type(obs)}"
+#             )
 
 
 @link
@@ -281,30 +284,86 @@ class ReanalyzeEnvLawV2:
         )
 
 
-@link
 def exit_if_no_input(input_buffer):
     if not input_buffer:
         return {"interrupt_exit": True}
 
 
-@link
-def increment_tick(num_ticks):
-    return {"num_ticks": num_ticks + 1}
+# @link
+# def increment_tick(num_ticks):
+#     return {"num_ticks": num_ticks + 1}
 
 
-@link
-def set_random_action_from_timestep(is_last, legal_actions):
-    action = -1
-    if not is_last:
-        random_action = np.random.choice(np.flatnonzero(legal_actions == 1))
-        action = random_action
-    return dict(action=action)
+# @link
+# def set_random_action_from_timestep(is_last, legal_actions):
+#     action = -1
+#     if not is_last:
+#         random_action = np.random.choice(np.flatnonzero(legal_actions == 1))
+#         action = random_action
+#     return dict(action=action)
 
 
-@link
+# @link
+# @dataclass
+# class TrajectoryOutputWriter:
+#     traj_buffer: list = field(default_factory=list)
+
+#     def __call__(
+#         self,
+#         obs,
+#         to_play,
+#         action,
+#         reward,
+#         root_value,
+#         is_first,
+#         is_last,
+#         action_probs,
+#         legal_actions_mask,
+#         output_buffer,
+#     ):
+#         if isinstance(obs, list):
+#             # assume perfect information (same obs for both players)
+#             obs = obs[BASE_PLAYER]
+
+#         step_record = StepSample(
+#             frame=obs,
+#             last_reward=reward,
+#             is_first=is_first,
+#             is_last=is_last,
+#             to_play=to_play,
+#             legal_actions_mask=legal_actions_mask,
+#             root_value=root_value,
+#             action_probs=action_probs,
+#             action=action,
+#             weight=1.0,
+#         ).cast()
+
+#         self.traj_buffer.append(step_record)
+
+#         if is_last:
+#             traj = stack_sequence_fields(self.traj_buffer)
+#             self.traj_buffer.clear()
+#             return dict(output_buffer=output_buffer + (traj,))
+
+
+# @link
+# def make_policy_feed(is_last, stacked_frames, legal_actions_mask, to_play):
+#     if not is_last:
+#         feed = PolicyFeed(
+#             stacked_frames=stacked_frames,
+#             to_play=to_play,
+#             legal_actions_mask=legal_actions_mask,
+#             random_key=None,
+#         )
+#         return dict(policy_feed=feed)
+
+
 @dataclass
-class TrajectoryOutputWriter:
-    traj_buffer: list = field(default_factory=list)
+class TrajWriter:
+    num_envs: int
+
+    def malloc(self):
+        return {"step_samples": [[] for _ in range(self.num_envs)]}
 
     def __call__(
         self,
@@ -317,40 +376,55 @@ class TrajectoryOutputWriter:
         is_last,
         action_probs,
         legal_actions_mask,
+        step_samples,
         output_buffer,
     ):
-        if isinstance(obs, list):
-            # assume perfect information (same obs for both players)
-            obs = obs[BASE_PLAYER]
+        for i in range(len(step_samples)):
+            step_sample = StepSample(
+                frame=obs[i],
+                last_reward=reward[i],
+                is_first=is_first[i],
+                is_last=is_last[i],
+                to_play=to_play[i],
+                legal_actions_mask=legal_actions_mask[i],
+                root_value=root_value[i],
+                action_probs=action_probs[i],
+                action=action[i],
+                weight=1.0,
+            )
 
-        step_record = StepSample(
-            frame=obs,
-            last_reward=reward,
-            is_first=is_first,
-            is_last=is_last,
-            to_play=to_play,
-            legal_actions_mask=legal_actions_mask,
-            root_value=root_value,
-            action_probs=action_probs,
-            action=action,
-            weight=1.0,
-        ).cast()
+            step_samples[i].append(step_sample)
+            if is_last[i]:
+                traj = stack_sequence_fields(step_samples[i])
+                step_samples[i].clear()
+                output_buffer = output_buffer + (traj,)
 
-        self.traj_buffer.append(step_record)
-
-        if is_last:
-            traj = stack_sequence_fields(self.traj_buffer)
-            self.traj_buffer.clear()
-            return dict(output_buffer=output_buffer + (traj,))
+        return dict(output_buffer=output_buffer)
 
 
-@link
-def make_policy_feed(is_last, stacked_frames, legal_actions_mask, to_play):
-    if not is_last:
-        feed = PolicyFeed(
-            stacked_frames=stacked_frames,
-            to_play=to_play,
-            legal_actions_mask=legal_actions_mask,
-            random_key=None,
-        )
-        return dict(policy_feed=feed)
+@dataclass
+class BatchFrameStacker:
+    num_envs: int
+    num_rows: int
+    num_cols: int
+    num_channels: int
+    num_stacked_frames: int
+
+    def malloc(self):
+        return {
+            "stacked_frames": jnp.zeros(
+                (
+                    self.num_envs,
+                    self.num_rows,
+                    self.num_cols,
+                    self.num_stacked_frames * self.num_channels,
+                ),
+                dtype=jnp.float32,
+            )
+        }
+
+    def __call__(self, stacked_frames, obs):
+        ret = jnp.append(stacked_frames, obs, axis=-1)
+        ret = ret[..., np.array(obs.shape[-1]) :]
+        return {"stacked_frames": ret}
+

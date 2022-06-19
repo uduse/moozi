@@ -32,7 +32,7 @@ from moozi.logging import (
     TerminalLogger,
     TerminalLoggerActor,
 )
-from moozi.loss import MuZeroLoss
+from moozi.nn.loss import MuZeroLoss
 from moozi.nn.nn import RootFeatures, make_model
 from moozi.nn.resnet import ResNetArchitecture, ResNetSpec
 from moozi.parameter_optimizer import ParameterOptimizer

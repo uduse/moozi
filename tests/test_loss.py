@@ -7,7 +7,7 @@ from acme.wrappers.open_spiel_wrapper import OLT
 import dm_env
 
 from moozi import TrainTarget
-from moozi.loss import MuZeroLoss
+from moozi.nn.loss import MuZeroLoss
 
 
 @pytest.fixture

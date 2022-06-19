@@ -16,10 +16,10 @@ from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from loguru import logger
 
 import moozi as mz
-from moozi.core import Config, TrainingState, TrainTarget
+from moozi.core import TrainingState, TrainTarget
 from moozi.logging import LogDatum
-from moozi.nn import RootFeatures
-from moozi.nn.nn import NNModel, make_model
+from moozi.nn.nn import NNArchitecture, NNSpec
+from moozi.nn.training import make_training_suite
 
 
 @ray.remote
@@ -31,81 +31,6 @@ class LoggerActor:
         self.logger.write(data)
 
 
-def _compute_prior_kl(
-    model: NNModel, batch: TrainTarget, orig_params, new_params, state
-):
-    is_training = False
-    orig_out, _ = model.root_inference(
-        orig_params,
-        state,
-        RootFeatures(obs=batch.stacked_frames, player=jnp.array(0)),
-        is_training,
-    )
-    orig_logits = orig_out.policy_logits
-    new_out, _ = model.root_inference(
-        new_params,
-        state,
-        RootFeatures(obs=batch.stacked_frames, player=jnp.array(0)),
-        is_training,
-    )
-    new_logits = new_out.policy_logits
-    prior_kl = jnp.mean(rlax.categorical_kl_divergence(orig_logits, new_logits))
-    return prior_kl
-
-
-def make_sgd_step_fn(
-    model: mz.nn.NNModel,
-    loss_fn: mz.loss.LossFn,
-    optimizer,
-    target_update_period: int = 1,
-    include_prior_kl: bool = True,
-    include_weights: bool = False,
-):
-    @jax.jit
-    @chex.assert_max_traces(n=1)
-    def sgd_step_fn(training_state: TrainingState, batch: mz.replay.TrainTarget):
-        # gradient descend
-        _, new_key = jax.random.split(training_state.rng_key)
-        grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
-            model, training_state.params, training_state.state, batch
-        )
-        updates, new_opt_state = optimizer.update(grads, training_state.opt_state)
-        new_params = optax.apply_updates(training_state.params, updates)
-        new_steps = training_state.steps + 1
-
-        # TODO: put the target_update_period in the config and use it
-        target_params = rlax.periodic_update(
-            new_params, training_state.target_params, new_steps, target_update_period
-        )
-
-        new_training_state = TrainingState(
-            params=new_params,
-            target_params=target_params,
-            state=extra["state"],
-            opt_state=new_opt_state,
-            steps=new_steps,
-            rng_key=new_key,
-        )
-
-        step_data = extra["step_data"]
-
-        if include_weights:
-            for module, weight_name, weights in hk.data_structures.traverse(new_params):
-                name = module + "/" + weight_name
-                step_data[name] = weights
-
-        if include_prior_kl:
-            prior_kl = _compute_prior_kl(
-                model, batch, training_state.params, new_params, training_state.state
-            )
-            step_data["prior_kl"] = prior_kl
-
-        return new_training_state, dict(step_data=step_data)
-
-    return sgd_step_fn
-
-
-@dataclass(repr=False)
 class ParameterOptimizer:
     model: mz.nn.NNModel = field(init=False)
     training_state: TrainingState = field(init=False)
@@ -123,33 +48,18 @@ class ParameterOptimizer:
         logger.add("logs/param_opt.log", level="DEBUG")
         logger.info(f"Parameter optimizer created, {vars(self)}")
 
-    def make_training_suite(
+    def setup(
         self,
         seed: int,
-        nn_arch_cls,
-        nn_spec,
-        weight_decay,
-        lr,
-        num_unroll_steps,
+        nn_arch_cls: NNArchitecture,
+        nn_spec: NNSpec,
+        weight_decay: float,
+        lr: float,
+        num_unroll_steps: int,
     ):
-        self.model = make_model(nn_arch_cls, nn_spec)
-        params, state = self.model.init_params_and_state(jax.random.PRNGKey(seed))
-        loss_fn = mz.loss.MuZeroLoss(
-            num_unroll_steps=num_unroll_steps, weight_decay=weight_decay
+        self.model, self.trainig_state, self.sgd_step_fn = make_training_suite(
+            seed, nn_arch_cls, nn_spec, weight_decay, lr, num_unroll_steps
         )
-        optimizer = optax.chain(
-            optax.clip_by_global_norm(1),
-            optax.adam(lr, b1=0.9, b2=0.99),
-        )
-        self.training_state = TrainingState(
-            params=params,
-            target_params=params,
-            state=state,
-            opt_state=optimizer.init(params),
-            steps=0,
-            rng_key=jax.random.PRNGKey(seed),
-        )
-        self.sgd_step_fn = make_sgd_step_fn(self.model, loss_fn, optimizer)
 
     def update(self, big_batch: TrainTarget, batch_size: int):
         if len(big_batch) == 0:
@@ -168,7 +78,7 @@ class ParameterOptimizer:
             f"updating with {len(train_targets)} samples, batch size {batch_size}"
         )
 
-        for i in range(0, len(train_targets), batch_size):
+        for i in range(0, len(train_targets) - len(train_targets), batch_size):
             batch_slice = train_targets[i : i + batch_size]
             if len(batch_slice) != batch_size:
                 break
@@ -243,3 +153,63 @@ class ParameterOptimizer:
         for logger in self.loggers:
             if isinstance(logger, mz.logging.JAXBoardLoggerV2):
                 logger.close()
+
+
+class ParameterServer:
+    def __init__(self, training_suite_factory, use_remote=False):
+        self.model, self.training_state, self.sgd_step_fn = training_suite_factory()
+        self.use_remote = use_remote
+
+    def update(self, big_batch: TrainTarget, batch_size: int):
+        if len(big_batch) == 0:
+            logger.error("Batch is empty, update() skipped.")
+            return
+
+        train_targets: List[TrainTarget] = unstack_sequence_fields(
+            big_batch, big_batch[0].shape[0]
+        )
+        if len(train_targets) % batch_size != 0:
+            logger.warning(
+                f"Batch size {batch_size} is not a divisor of the batch size {len(train_targets)}"
+            )
+
+        logger.debug(
+            f"updating with {len(train_targets)} samples, batch size {batch_size}"
+        )
+
+        for i in range(0, len(train_targets) - len(train_targets), batch_size):
+            batch_slice = train_targets[i : i + batch_size]
+            if len(batch_slice) != batch_size:
+                break
+            batch = stack_sequence_fields(batch_slice)
+            self.training_state, extra = self.sgd_step_fn(self.training_state, batch)
+
+        # logger.debug(self.get_stats())
+
+    def get_params_and_state(self) -> Union[ray.ObjectRef, Tuple[hk.Params, hk.State]]:
+        logger.debug("getting params and state")
+        ret = self.training_state.params, self.training_state.state
+        if self.use_remote:
+            return ray.put(ret)
+        else:
+            return ret
+
+    def get_params(self):
+        logger.debug("getting params")
+        ret = self.training_state.params
+        if self.use_remote:
+            return ray.put(ret)
+        else:
+            return ret
+
+    def get_state(self):
+        logger.debug("getting state")
+        ret = self.training_state.state
+        if self.use_remote:
+            return ray.put(ret)
+        else:
+            return ret
+
+    def get_model(self):
+        logger.debug("getting model")
+        return self.model

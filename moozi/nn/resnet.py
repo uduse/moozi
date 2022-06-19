@@ -227,5 +227,6 @@ class ResNetArchitecture(NNArchitecture):
         reward = hk.Linear(output_size=1, name="dyna_reward")(dyna_trunk_flat)
         chex.assert_shape(reward, (None, 1))
 
+        # TODO: scaling hidden to [0, 1] is not done this way
         next_hidden_state = jax.nn.sigmoid(next_hidden_state)
         return next_hidden_state, reward

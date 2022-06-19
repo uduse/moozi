@@ -1,0 +1,85 @@
+seed: 0
+discount: 0.99
+num_unroll_steps: 2
+num_td_steps: 100
+num_stacked_frames: 1
+dim_actions: 4
+
+env:
+  name: MinAtar:SpaceInvaders-v1
+  num_rows: 10
+  num_cols: 10
+  num_channels: 6
+  known_bound_min: 0
+  known_bound_max: 1
+
+replay:
+  use_remote: true
+  max_size: 1_000_000
+  min_size: 1_000
+  sampling_strategy: ranking
+  num_unroll_steps: ${num_unroll_steps}
+  num_td_steps: ${num_td_steps}
+  num_stacked_frames: ${num_stacked_frames}
+  discount: ${discount}
+
+scalar_transform:
+  support_min: -10
+  support_max: 10
+  eps: 1.0e-3
+
+param_opt:
+  use_remote: true
+  num_gpus: 0.5
+  save_dir: ./save/
+
+nn:
+  arch_cls: moozi.nn.ResNetArchitecture
+  spec_cls: moozi.nn.ResNetSpec
+  spec_kwargs:
+    obs_rows: ${env.num_rows}
+    obs_cols: ${env.num_cols}
+    obs_channels: ${env.num_channels}
+    repr_rows: 10
+    repr_cols: 10
+    repr_channels: 4
+    dim_action: ${dim_actions}
+    repr_tower_blocks: 4
+    repr_tower_dim: 4
+    pred_tower_blocks: 4
+    pred_tower_dim: 4
+    dyna_tower_blocks: 4
+    dyna_tower_dim: 4
+    dyna_state_blocks: 4
+
+mcts:
+  known_bound_min: ${env.known_bound_min}
+  known_bound_max: ${env.known_bound_max}
+  dirichlet_alpha: 0.2
+  dirichlet_fraction: 0.2
+  temperature: 1.0
+
+train:
+  num_epochs: 200
+  epoch_train_start: 2
+  sample_update_ratio: 1.0
+  batch_size: 256
+  lr: 5.0e-3
+  weight_decay: 5.0e-2
+
+  env_workers:
+    num_workers: 6
+    num_envs: 2
+    num_cpus: 1
+    num_gpus: 1
+
+  reanalyze_workers:
+    num_workers: 0
+    num_universes: 50
+    num_trajs: 1
+
+test:
+  num_universes_per_env_worker: 50
+  num_universes_per_reanalyze_worker: 20
+  num_trajs_per_reanalyze_universe: 2
+  test_interval: 5

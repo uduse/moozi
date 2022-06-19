@@ -17,7 +17,7 @@ from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 
 import moozi as mz
 from moozi.batching_layer import BatchingLayer
-from moozi.core import Tape, UniverseAsync, link, TrajectorySample
+from moozi.core import TrajectorySample
 from moozi.nn.nn import RootFeatures, TransitionFeatures
 
 
@@ -34,45 +34,6 @@ class RolloutWorkerWithWeights:
         logger.add(f"logs/rollout_worker.{self.name}.debug.log", level="DEBUG")
         logger.add(f"logs/rollout_worker.{self.name}.info.log", level="INFO")
         logger.info(f"RolloutWorker created, {vars(self)}")
-
-    def make_batching_layers(self, batch_size: int):
-        def batched_root_inf(feats: List[RootFeatures]):
-            batch_size = len(feats)
-            nn_outputs, _ = self.model.root_inference(
-                self.params, self.state, stack_sequence_fields(feats), is_training=False
-            )
-            nn_outputs = tree.map_structure(np.array, nn_outputs)
-            return unstack_sequence_fields(nn_outputs, batch_size)
-
-        def batched_trans_inf(feats: List[TransitionFeatures]):
-            batch_size = len(feats)
-            nn_outputs, _ = self.model.trans_inference(
-                self.params, self.state, stack_sequence_fields(feats), is_training=False
-            )
-            nn_outputs = tree.map_structure(np.array, nn_outputs)
-            return unstack_sequence_fields(nn_outputs, batch_size)
-
-        bl_root_inf = BatchingLayer(
-            max_batch_size=batch_size,
-            process_fn=batched_root_inf,
-            name="[batched_root_inf]",
-            batch_process_period=1e-1,
-        )
-        bl_trans_inf = BatchingLayer(
-            max_batch_size=batch_size,
-            process_fn=batched_trans_inf,
-            name="[batche_trans_inf]",
-            batch_process_period=1e-1,
-        )
-        self.batching_layers = [bl_root_inf, bl_trans_inf]
-
-    def make_universes_from_laws(self, laws_factory, num_universes):
-        def _make_universe(index):
-            tape = Tape(index)
-            laws = laws_factory()
-            return UniverseAsync(tape, laws)
-
-        self.universes = [_make_universe(i) for i in range(num_universes)]
 
     def _set_inferences(self):
         # TODO: check client unnecsesary respawned

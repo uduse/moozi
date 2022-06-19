@@ -7,8 +7,9 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 import numpy as np
-import tree
 from acme.jax.utils import add_batch_dim, squeeze_batch_dim
+
+from moozi import ScalarTransform
 
 
 # NOTE: NamedTuple are used for data structures that need to be passed to jax.jit functions
@@ -78,6 +79,8 @@ class NNSpec:
 
     dim_action: int
 
+    scalar_transform: ScalarTransform
+
 
 class NNArchitecture(hk.Module):
     def __init__(self, spec: NNSpec):
@@ -110,6 +113,10 @@ class NNArchitecture(hk.Module):
 
         chex.assert_rank([value, reward, policy_logits, hidden_state], [2, 2, 2, 4])
 
+        if is_training:
+            value = self.spec.scalar_transform.transform(value)
+            reward = self.spec.scalar_transform.transform(reward)
+
         return NNOutput(
             value=value,
             reward=reward,
@@ -128,6 +135,11 @@ class NNArchitecture(hk.Module):
         chex.assert_rank(
             [value, reward, policy_logits, next_hidden_state], [2, 2, 2, 4]
         )
+
+        if is_training:
+            value = self.spec.scalar_transform.transform(value)
+            reward = self.spec.scalar_transform.transform(reward)
+
         return NNOutput(
             value=value,
             reward=reward,
@@ -175,6 +187,7 @@ class NNModel:
         """Return a new model with inference functions passed through `jax.jit`."""
 
         # TODO: add chex assert max trace
+        # NOTE: is static_argnum really should be used?
         return NNModel(
             init_params_and_state=self.init_params_and_state,
             root_inference=jax.jit(self.root_inference, static_argnums=3),
@@ -227,6 +240,9 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
     # workaround for https://github.com/deepmind/dm-haiku/issues/325#event-6253407164
     # TODO: follow up update for the issue and make changes accordingly
     # TODO: or, alternatively, actually use random key so we could use things like dropouts
+    # otherwise we can do:
+    # root_inference = hk.without_apply_rng(hk_transformed).apply[0]
+    # trans_inference = hk.without_apply_rng(hk_transformed).apply[1]
     dummy_random_key = jax.random.PRNGKey(0)
 
     def root_inference(params, state, feats, is_training):

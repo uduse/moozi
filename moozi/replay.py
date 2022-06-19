@@ -14,7 +14,7 @@ from acme.utils import tree_utils
 from loguru import logger
 
 import moozi as mz
-from moozi.core import Config, TrajectorySample, TrainTarget
+from moozi.core import TrajectorySample, TrainTarget
 
 
 @dataclass

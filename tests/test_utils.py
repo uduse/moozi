@@ -1,14 +1,21 @@
-def test_frame_stacker():
-    # num_stacked_frames = 3
-    # frame_shape = (3, 3, 2)
-    # frames = [jnp.full(frame_shape, fill_value=i, dtype=np.float32) for i in range(10)]
-    # frame_stacker = jax.jit(frame_stacker)
-    # stacked_frames_shape = frame_shape[:-1] + (frame_shape[-1] * num_stacked_frames,)
-    # stacked_frames = np.zeros(stacked_frames_shape, dtype=np.float32)
-    # tape = {"stacked_frames": stacked_frames}
-    # for frame in frames:
-    #     tape["obs"] = frame
-    #     tape = frame_stacker(tape)
+import numpy as np
+from moozi import ScalarTransform
 
-    # tape["stacked_frames"][:, :, :4]
-    pass
+
+def test_scalar_transform():
+    scalar_transform = ScalarTransform(support_min=-10, support_max=10)
+
+    inputs = np.random.randn(5) ** 100
+    transformed = scalar_transform.transform(inputs)
+    outputs = scalar_transform.inverse_transform(transformed)
+    assert np.allclose(inputs, outputs, atol=1e-3)
+
+# def test_mask_tape()
+# # %%
+# tape = {0: "a", 1: "b", 2: "c"}
+# print(tape)
+# with mask_tape(tape, {0}) as masked:
+#     print(masked)
+#     masked[1] = "bbb"
+#     print(masked)
+# print(tape)

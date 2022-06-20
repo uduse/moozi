@@ -28,15 +28,13 @@ class ReplayEntry:
 class ReplayBuffer:
     max_size: int = 1_000_000
     min_size: int = 1_000
-    prefetch_max_size: int = 1_000
-    decay: float = 0.99
     sampling_strategy: str = "uniform"
-    is_remote: bool = False
+    use_remote: bool = False
 
     num_unroll_steps: int = 5
     num_td_steps: int = 5
     num_stacked_frames: int = 4
-    discount: float = 1.0
+    discount: float = 0.997
 
     _trajs: Deque[ReplayEntry] = field(init=False)
     _train_targets: Deque[ReplayEntry] = field(init=False)
@@ -72,7 +70,7 @@ class ReplayBuffer:
                 self._value_diffs.append(value_diff)
                 self._train_targets.append(ReplayEntry(target, priority=value_diff))
 
-    def get_train_targets_batch(self, batch_size: int = 1) -> TrainTarget:
+    def get_train_targets_batch(self, batch_size: int) -> TrainTarget:
         if len(self._train_targets) == 0:
             logger.error(f"No train targets available")
             raise ValueError("No train targets available")
@@ -84,9 +82,13 @@ class ReplayBuffer:
     def get_trajs_size(self):
         return len(self._trajs)
 
-    async def get_stats(self):
+    def get_targets_size(self):
+        return len(self._train_targets)
+
+    def get_stats(self):
         ret = dict(
-            trajs=self.get_trajs_size(),
+            trajs_size=self.get_trajs_size(),
+            targets_size=self.get_targets_size(),
         )
         if self._value_diffs:
             mean_value_diff = np.mean(self._value_diffs)

@@ -1,5 +1,4 @@
 # %%
-from random import weibullvariate
 import tree
 import contextlib
 from functools import partial
@@ -48,7 +47,6 @@ print(OmegaConf.to_yaml(config))
 def exclude(tape: dict, to_exclude: set):
     masked = {k: v for k, v in tape.items() if k not in to_exclude}
     yield masked
-    tape.update(masked)
 
 
 @contextlib.contextmanager
@@ -57,11 +55,6 @@ def include(tape: dict, to_include: set):
         raise ValueError(f"{tape.keys()} does not contain key {to_include}")
     masked = {k: v for k, v in tape.items() if k in to_include}
     yield masked
-    tape.update(masked)
-
-
-class UniverseInterrupt(Exception):
-    pass
 
 
 class Universe:
@@ -74,19 +67,18 @@ class Universe:
         self.tape = self.law(self.tape)
 
     def run(self):
-        try:
-            while True:
-                self.tick()
-        except UniverseInterrupt:
-            return self.flush()
+        while True:
+            self.tick()
+            if self.tape["quit"]:
+                break
+        return self.flush()
 
     def flush(self):
         ret = self.tape["output_buffer"]
+        logger.debug(f"flushing {len(ret)} trajectories")
         self.tape["output_buffer"] = tuple()
         return ret
 
-
-# %%
 
 # %%
 class RolloutWorker:
@@ -124,7 +116,9 @@ class L:
 def make_output_buffer_size_termination(size: int):
     def forward(output_buffer):
         if len(output_buffer) >= size:
-            raise UniverseInterrupt()
+            return {"quit": True}
+        else:
+            return {"quit": False}
 
     return L(
         name="episode_termination",
@@ -142,15 +136,21 @@ def make_universe(config):
 
     model = make_model(nn_arch_cls, nn_spec)
     num_envs = config.train.env_workers.num_envs
-    tape = {"random_key": jax.random.PRNGKey(config.seed)}
+    tape = {
+        "random_key": jax.random.PRNGKey(config.seed),
+        "output_buffer": tuple(),
+        "quit": False,
+    }
     vec_env = VecEnv(config.env.name, num_envs)
     tape.update(vec_env.malloc())
     vec_env = link(vec_env)
 
-    frame_shape = tape["envs"][0].observation_spec().shape
-    num_rows, num_cols, num_channels = frame_shape
     frame_stacker = BatchFrameStacker(
-        num_envs, num_rows, num_cols, num_channels, config.num_stacked_frames
+        num_envs,
+        config.env.num_rows,
+        config.env.num_cols,
+        config.env.num_channels,
+        config.num_stacked_frames,
     )
     tape.update(frame_stacker.malloc())
     frame_stacker = link(frame_stacker)
@@ -181,6 +181,7 @@ def make_universe(config):
         return tape
 
     def law(tape):
+        tape = vec_env(tape)
         with include(
             tape,
             {
@@ -189,6 +190,8 @@ def make_universe(config):
                 "params",
                 "state",
                 "random_key",
+                "is_first",
+                "is_last",
             },
         ) as tape_slice:
             updates = policy(tape_slice)
@@ -232,5 +235,19 @@ worker.set_universe_property("params", parameter_server.get_params())
 worker.set_universe_property("state", parameter_server.get_state())
 
 # %%
-worker.universe.tick()
+replay_buffer = ReplayBuffer(**config.replay)
+
 # %%
+print(parameter_server.get_properties())
+for _ in range(1000):
+    result = worker.universe.run()
+    replay_buffer.add_trajs(result)
+
+    batch = replay_buffer.get_train_targets_batch(128)
+    print(replay_buffer.get_stats())
+    print(parameter_server.update(batch, batch_size=128))
+    worker.set_universe_property("params", parameter_server.get_params())
+    worker.set_universe_property("state", parameter_server.get_state())
+
+# %%
+replay_buffer.get_train_targets_batch(10).last_reward

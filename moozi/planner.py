@@ -67,6 +67,7 @@ def make_planner(
         )
         stats = policy_output.search_tree.summary()
         return {
+            "action": policy_output.action,
             "action_probs": policy_output.action_weights,
             "root_value": stats.value,
             "random_key": random_key,

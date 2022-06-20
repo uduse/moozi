@@ -336,7 +336,7 @@ def make_sgd_step_fn(
             )
             step_data["prior_kl"] = prior_kl
 
-        return new_training_state, dict(step_data=step_data)
+        return new_training_state, step_data
 
     return sgd_step_fn
 
@@ -370,4 +370,4 @@ def make_training_suite(
         rng_key=jax.random.PRNGKey(seed),
     )
     sgd_step_fn = make_sgd_step_fn(model, loss_fn, optimizer)
-    return model, training_state, sgd_step_fn
+    return model.with_jit(), training_state, sgd_step_fn

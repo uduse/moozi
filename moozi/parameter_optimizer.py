@@ -118,27 +118,6 @@ class ParameterOptimizer:
     def get_stats(self):
         return dict(num_updates=self._num_updates)
 
-    def get_properties(self) -> dict:
-        import os
-
-        import jax
-
-        ray_gpu_ids = ray.get_gpu_ids()
-        cuda_visible_devices = os.environ["CUDA_VISIBLE_DEVICES"]
-        jax_devices = jax.devices()
-
-        model_size_in_bytes = hk.data_structures.tree_size(
-            (self.training_state.params, self.training_state.state)
-        )
-        model_size_human = f"{model_size_in_bytes / 1e6:.2f} MB"
-
-        return dict(
-            ray_gpu_ids=ray_gpu_ids,
-            cuda_visible_devices=cuda_visible_devices,
-            jax_devices=str(jax_devices),
-            model_size=model_size_human,
-        )
-
     def log(self):
         for logger in self.loggers:
             if isinstance(logger, mz.logging.JAXBoardLoggerV2):
@@ -177,22 +156,15 @@ class ParameterServer:
             f"updating with {len(train_targets)} samples, batch size {batch_size}"
         )
 
-        for i in range(0, len(train_targets) - len(train_targets), batch_size):
+        ret = None
+        for i in range(0, len(train_targets), batch_size):
             batch_slice = train_targets[i : i + batch_size]
             if len(batch_slice) != batch_size:
                 break
             batch = stack_sequence_fields(batch_slice)
             self.training_state, extra = self.sgd_step_fn(self.training_state, batch)
-
-        # logger.debug(self.get_stats())
-
-    def get_params_and_state(self) -> Union[ray.ObjectRef, Tuple[hk.Params, hk.State]]:
-        logger.debug("getting params and state")
-        ret = self.training_state.params, self.training_state.state
-        if self.use_remote:
-            return ray.put(ret)
-        else:
-            return ret
+            ret = extra["loss"]
+        return ret
 
     def get_params(self):
         logger.debug("getting params")
@@ -213,3 +185,23 @@ class ParameterServer:
     def get_model(self):
         logger.debug("getting model")
         return self.model
+
+    def get_properties(self) -> dict:
+        import os
+        import jax
+
+        ray_gpu_ids = ray.get_gpu_ids()
+        cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", None)
+        jax_devices = jax.devices()
+
+        model_size_in_bytes = hk.data_structures.tree_size(
+            (self.training_state.params, self.training_state.state)
+        )
+        model_size_human = f"{model_size_in_bytes / 1e6:.2f} MB"
+
+        return dict(
+            ray_gpu_ids=ray_gpu_ids,
+            cuda_visible_devices=cuda_visible_devices,
+            jax_devices=str(jax_devices),
+            model_size=model_size_human,
+        )

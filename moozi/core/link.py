@@ -25,9 +25,10 @@ def link(fn):
         for k in keys:
             kwargs[k] = tape[k]
         updates = fn(**kwargs)
-        tape = tape.copy()
-        tape.update(updates)
-        return tape
+        new_tape = tape.copy()
+        if updates:
+            new_tape.update(updates)
+        return new_tape
 
     return _wrapper
 

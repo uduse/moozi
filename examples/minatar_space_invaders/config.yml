@@ -42,15 +42,15 @@ nn:
     obs_channels: ${env.num_channels}
     repr_rows: 10
     repr_cols: 10
-    repr_channels: 4
+    repr_channels: 6
     dim_action: ${dim_actions}
-    repr_tower_blocks: 4
-    repr_tower_dim: 4
-    pred_tower_blocks: 4
-    pred_tower_dim: 4
-    dyna_tower_blocks: 4
-    dyna_tower_dim: 4
-    dyna_state_blocks: 4
+    repr_tower_blocks: 8
+    repr_tower_dim: 6
+    pred_tower_blocks: 8
+    pred_tower_dim: 6
+    dyna_tower_blocks: 8
+    dyna_tower_dim: 6
+    dyna_state_blocks: 8
 
 mcts:
   known_bound_min: ${env.known_bound_min}
@@ -69,7 +69,7 @@ train:
 
   env_workers:
     num_workers: 6
-    num_envs: 2
+    num_envs: 50
     num_cpus: 1
     num_gpus: 1
 

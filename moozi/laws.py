@@ -211,14 +211,16 @@ class AtariEnvLaw:
         )
 
 
-@link
 @dataclass
 class MinAtarEnvLaw:
     env: dm_env.Environment
+    record_video: bool = False
 
-    def __call__(self, is_first, is_last, action: int):
+    def __call__(self, is_last, action: int):
         if is_last:
             timestep = self.env.reset()
+            if self.record_video:
+                pass
         else:
             timestep = self.env.step(action)
 
@@ -427,4 +429,3 @@ class BatchFrameStacker:
         ret = jnp.append(stacked_frames, obs, axis=-1)
         ret = ret[..., np.array(obs.shape[-1]) :]
         return {"stacked_frames": ret}
-

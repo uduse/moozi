@@ -23,6 +23,8 @@ from acme.specs import make_environment_spec
 import open_spiel
 from absl import logging
 
+from moozi.laws import MinAtarEnvLaw
+
 
 class TransformObservationWrapper(EnvironmentWrapper):
     """Wrapper which converts environments from double- to single-precision."""
@@ -185,11 +187,12 @@ class VecEnv:
     def malloc(self):
         envs = [make_env(self.env_name) for _ in range(self.num_envs)]
         dim_actions = envs[0].action_spec().num_values
+        obs_shape = envs[0].observation_spec().shape
+        envs = [MinAtarEnvLaw(env) for env in envs]
         action = np.full(self.num_envs, fill_value=0, dtype=jnp.int32)
         action_probs = jnp.full(
             (self.num_envs, dim_actions), fill_value=0, dtype=jnp.float32
         )
-        obs_shape = envs[0].observation_spec().shape
         obs = jnp.zeros((self.num_envs, *obs_shape), dtype=jnp.float32)
         is_first = jnp.full(self.num_envs, fill_value=False, dtype=bool)
         is_last = jnp.full(self.num_envs, fill_value=True, dtype=bool)

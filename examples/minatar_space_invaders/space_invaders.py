@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from loguru import logger
 import moozi as mz
 from moozi.core import scalar_transform
-from moozi.core.env import make_env, VecEnv
+from moozi.core.env import make_env
 from moozi.core.scalar_transform import ScalarTransform, make_scalar_transform
 from moozi.core.tape import make_tape, include, exclude
 from moozi.nn.nn import NNModel, make_model
@@ -47,13 +47,13 @@ print(OmegaConf.to_yaml(config))
 
 
 class Universe:
-    def __init__(self, tape, law) -> None:
+    def __init__(self, tape, law: Law) -> None:
         assert isinstance(tape, dict)
         self.tape = tape
         self.law = law
 
     def tick(self):
-        self.tape = self.law(self.tape)
+        self.tape = self.law.apply(self.tape)
 
     def run(self):
         while True:
@@ -79,7 +79,7 @@ def make_min_atar_gif_recorder(n_channels=6):
         Path("gifs").mkdir(parents=True, exist_ok=True)
         return {"images": []}
 
-    def forward(is_last, obs, images: List[Image.Image], root_value):
+    def apply(is_last, obs, images: List[Image.Image], root_value):
         numerical_state = np.array(
             np.amax(obs[0] * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2)
             + 0.5,
@@ -108,11 +108,16 @@ def make_min_atar_gif_recorder(n_channels=6):
                 optimize=False,
                 duration=40,
             )
-            logger.info("gif saved to ", str(gif_fpath))
+            logger.info("gif saved to " + str(gif_fpath))
             images = []
         return {"images": images}
 
-    return malloc, forward
+    return Law(
+        name=f"min_atar_gif_recorder({n_channels=})",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )
 
 
 # %%
@@ -135,116 +140,25 @@ class RolloutWorker:
     def run(self):
         return self.universe.run()
 
-    def set_universe_property(self, key, value):
+    def set(self, key, value):
         if isinstance(value, ray.ObjectRef):
             value = ray.get(value)
         self.universe.tape[key] = value
 
 
-@dataclass
-class L:
-    name: str
-    apply: Callable
-    keys: Set[str]
-
-
-
-def make_universe(config):
-    scalar_transform = make_scalar_transform(**config.scalar_transform)
-    nn_arch_cls = eval(config.nn.arch_cls)
-    nn_spec = eval(config.nn.spec_cls)(
-        **config.nn.spec_kwargs, scalar_transform=scalar_transform
-    )
-
-    model = make_model(nn_arch_cls, nn_spec)
-    num_envs = config.train.env_workers.num_envs
-    tape = {
-        "random_key": jax.random.PRNGKey(config.seed),
-        "output_buffer": tuple(),
-        "quit": False,
-    }
-    vec_env = VecEnv(config.env.name, num_envs)
-    tape.update(vec_env.malloc())
-    vec_env = link(vec_env)
-
-    m, gifer = make_min_atar_gif_recorder()
-    tape.update(m())
-    gifer = link(gifer)
-
-    frame_stacker = BatchFrameStacker(
-        num_envs,
-        config.env.num_rows,
-        config.env.num_cols,
-        config.env.num_channels,
-        config.num_stacked_frames,
-    )
-    tape.update(frame_stacker.malloc())
-    frame_stacker = link(frame_stacker)
-
-    malloc, planner = make_planner(
-        num_envs=num_envs,
-        dim_actions=config.dim_actions,
-        model=model,
-        num_simulations=10,
-        dirichlet_fraction=config.mcts.dirichlet_fraction,
-        dirichlet_alpha=config.mcts.dirichlet_alpha,
-        temperature=1.0,
-    )
-    tape.update(malloc())
-    planner = link(planner)
-
-    traj_writer = TrajWriter(num_envs)
-    tape.update(traj_writer.malloc())
-    traj_writer = link(traj_writer)
-
-    terminator = link(make_terminator(num_envs).apply)
-
-    @partial(jax.jit, backend="cpu")
-    @chex.assert_max_traces(n=1)
-    def policy(tape):
-        tape = frame_stacker(tape)
-        tape = planner(tape)
-        return tape
-
-    def law(tape):
-        tape = vec_env(tape)
-        with include(
-            tape,
-            {
-                "obs",
-                "stacked_frames",
-                "params",
-                "state",
-                "random_key",
-                "is_first",
-                "is_last",
-            },
-        ) as tape_slice:
-            updates = policy(tape_slice)
-        tape.update(updates)
-        tape = traj_writer(tape)
-        tape = gifer(tape)
-        tape = terminator(tape)
-        return tape
-
-    return Universe(tape, law)
-
+# %%
+scalar_transform = make_scalar_transform(**config.scalar_transform)
+nn_arch_cls = eval(config.nn.arch_cls)
+nn_spec = eval(config.nn.spec_cls)(
+    **config.nn.spec_kwargs, scalar_transform=scalar_transform
+)
+gif_recorder = make_min_atar_gif_recorder(n_channels=6)
+model = make_model(nn_arch_cls, nn_spec)
 
 # %%
-def make_universe_v2(config):
-    scalar_transform = make_scalar_transform(**config.scalar_transform)
-    nn_arch_cls = eval(config.nn.arch_cls)
-    nn_spec = eval(config.nn.spec_cls)(
-        **config.nn.spec_kwargs, scalar_transform=scalar_transform
-    )
-
-    model = make_model(nn_arch_cls, nn_spec)
-
-    tape = make_tape(seed=config.seed)
-
+def make_env_worker_universe(config):
     num_envs = config.train.env_workers.num_envs
     vec_env = make_vec_env(config.env.name, num_envs)
-    gif_recorder = make_min_atar_gif_recorder()
     frame_stacker = make_batch_frame_stacker(
         num_envs,
         config.env.num_rows,
@@ -259,57 +173,72 @@ def make_universe_v2(config):
         num_simulations=10,
         dirichlet_fraction=config.mcts.dirichlet_fraction,
         dirichlet_alpha=config.mcts.dirichlet_alpha,
-        temperature=1.0,
+        temperature=config.mcts.temperature,
     )
-    
-    traj_writer = make_traj_writer
+    policy = sequential([frame_stacker, planner])
+    policy.apply = chex.assert_max_traces(n=1)(policy.apply)
+    policy.apply = jax.jit(policy.apply, backend="gpu")
 
-    terminator = link(make_terminator(num_envs).apply)
+    traj_writer = make_traj_writer(num_envs)
+    terminator = make_terminator(num_envs)
 
-    @partial(jax.jit, backend="cpu")
-    @chex.assert_max_traces(n=1)
-    def policy(tape):
-        tape = frame_stacker(tape)
-        tape = planner(tape)
-        return tape
+    final_law = sequential(
+        [
+            vec_env,
+            gif_recorder,
+            policy,
+            traj_writer,
+            terminator,
+        ]
+    )
+    tape = make_tape(seed=config.seed)
+    tape.update(final_law.malloc())
+    return Universe(tape, final_law)
 
-    def law(tape):
-        tape = vec_env(tape)
-        with include(
-            tape,
-            {
-                "obs",
-                "stacked_frames",
-                "params",
-                "state",
-                "random_key",
-                "is_first",
-                "is_last",
-            },
-        ) as tape_slice:
-            updates = policy(tape_slice)
-        tape.update(updates)
-        tape = traj_writer(tape)
-        tape = gifer(tape)
-        tape = terminator(tape)
-        return tape
 
-    return Universe(tape, law)
+def make_test_worker_universe(config):
+    vec_env = make_vec_env(config.env.name, 1)
+    frame_stacker = make_batch_frame_stacker(
+        1,
+        config.env.num_rows,
+        config.env.num_cols,
+        config.env.num_channels,
+        config.num_stacked_frames,
+    )
+    planner = make_planner(
+        num_envs=1,
+        dim_actions=config.dim_actions,
+        model=model,
+        **config.train.test_worker.planner
+    )
+    policy = sequential([frame_stacker, planner])
+    policy.apply = chex.assert_max_traces(n=1)(policy.apply)
+    policy.apply = jax.jit(policy.apply, backend="gpu")
+
+    traj_writer = make_traj_writer(1)
+    terminator = make_terminator(size=10)
+
+    final_law = sequential(
+        [
+            vec_env,
+            gif_recorder,
+            policy,
+            traj_writer,
+            terminator,
+        ]
+    )
+    tape = make_tape(seed=config.seed)
+    tape.update(final_law.malloc())
+    return Universe(tape, final_law)
 
 
 # %%
 def training_suite_factory(config):
-    scalar_transform = make_scalar_transform(**config.scalar_transform)
-    nn_arch_cls = eval(config.nn.arch_cls)
-    nn_spec_cls = eval(config.nn.spec_cls)(
-        **config.nn.spec_kwargs, scalar_transform=scalar_transform
-    )
-
     return partial(
         make_training_suite,
         seed=config.seed,
         nn_arch_cls=nn_arch_cls,
-        nn_spec=nn_spec_cls,
+        nn_spec=nn_spec,
         weight_decay=config.train.weight_decay,
         lr=config.train.lr,
         num_unroll_steps=config.num_unroll_steps,
@@ -317,29 +246,87 @@ def training_suite_factory(config):
 
 
 # %%
-parameter_server = ParameterServer(
-    training_suite_factory=training_suite_factory(config),
+ps = ray.remote(num_gpus=config.param_opt.num_gpus)(ParameterServer).remote(
+    training_suite_factory=training_suite_factory(config), use_remote=True
 )
 
 # %%
-worker = RolloutWorker(partial(make_universe_v2, config), name="rollout_worker")
+train_workers = [
+    ray.remote(num_gpus=config.train.env_workers.num_gpus)(RolloutWorker).remote(
+        partial(make_env_worker_universe, config), name=f"rollout_worker_{i}"
+    )
+    for i in range(config.train.env_workers.num_workers)
+]
 
 # %%
-worker.set_universe_property("params", parameter_server.get_params())
-worker.set_universe_property("state", parameter_server.get_state())
+for w in train_workers:
+    w.set.remote("params", ps.get_params.remote())
+    w.set.remote("state", ps.get_state.remote())
 
 # %%
-replay_buffer = ReplayBuffer(**config.replay)
+rb = ray.remote(ReplayBuffer).remote(**config.replay)
 
 # %%
-print(parameter_server.get_properties())
-for _ in range(1000):
-    result = worker.universe.run()
-    replay_buffer.add_trajs(result)
+ps.get_properties.remote()
+for _ in range(config.train.num_epochs):
+    train_targets = []
+    for w in train_workers:
+        sample = w.run.remote()
+        train_targets.append(rb.add_trajs.remote(sample))
 
-    batch = replay_buffer.get_train_targets_batch(128)
-    print(replay_buffer.get_stats())
-    print(parameter_server.update(batch, batch_size=128))
-    worker.set_universe_property("params", parameter_server.get_params())
-    worker.set_universe_property("state", parameter_server.get_state())
-    parameter_server.log_tensorboard()
+    # sync
+    ray.get(train_targets)
+
+    batch = rb.get_train_targets_batch.remote(batch_size=config.train.batch_size)
+    # rb.get_stats.remote()
+    ps.update.remote(batch, batch_size=config.train.batch_size)
+    for w in train_workers:
+        w.set.remote("params", ps.get_params.remote())
+        w.set.remote("state", ps.get_state.remote())
+    ray.get(ps.log_tensorboard.remote())
+
+# with WallTimer():
+#     for epoch in range(config.num_epochs):
+#         for w in workers_env + workers_test + workers_reanalyze:
+#             w.set_params_and_state.remote(param_opt.get_params_and_state.remote())
+#         logger.debug(f"Get params and state scheduled, {len(traj_futures)=}")
+
+#         while traj_futures:
+#             traj, traj_futures = ray.wait(traj_futures)
+#             traj = traj[0]
+#             replay_buffer.add_trajs.remote(traj)
+
+#         if epoch >= config.epoch_train_start:
+#             logger.debug(f"Add trajs scheduled, {len(traj_futures)=}")
+#             train_batch = replay_buffer.get_train_targets_batch.remote(
+#                 config.big_batch_size
+#             )
+#             logger.debug(f"Get train targets batch scheduled, {len(traj_futures)=}")
+#             update_done = param_opt.update.remote(train_batch, config.batch_size)
+#             logger.debug(f"Update scheduled")
+
+#         jaxboard_logger.write.remote(replay_buffer.get_stats.remote())
+#         env_trajs = [w.run.remote(config.num_ticks_per_epoch) for w in workers_env]
+#         reanalyze_trajs = [w.run.remote(None) for w in workers_reanalyze]
+#         traj_futures = env_trajs + reanalyze_trajs
+
+#         if epoch % config.test_interval == 0:
+#             test_result = workers_test[0].run.remote(6 * 20)
+#             test_result_datum = convert_test_result_record.remote(test_result)
+#         logger.debug(f"test result scheduled.")
+
+#         for w in workers_reanalyze:
+#             reanalyze_input = replay_buffer.get_train_targets_batch.remote(
+#                 config.num_trajs_per_reanalyze_universe
+#                 * config.num_universes_per_reanalyze_worker
+#             )
+#             w.set_inputs.remote(reanalyze_input)
+#         logger.debug(f"reanalyze scheduled.")
+#         test_done = jaxboard_logger.write.remote(test_result_datum)
+
+#         param_opt.log.remote()
+#         logger.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
+
+# logger.debug(ray.get(test_done))
+# ray.get(jaxboard_logger.close.remote())
+# ray.get(param_opt.close.remote())

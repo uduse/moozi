@@ -15,6 +15,7 @@ from loguru import logger
 from moozi.core import BASE_PLAYER, PolicyFeed, StepSample
 from moozi.core.env import make_env
 from moozi.core.link import link
+from moozi.core.tape import include
 from moozi.core.types import TrainTarget
 
 # TODO: make __call__ not a method but a static method or a function
@@ -401,7 +402,9 @@ def sequential(laws: List[Law]) -> Law:
 
     def apply(tape):
         for l in laws:
-            tape = l.apply(tape)
+            with include(tape, l.read) as tape_slice:
+                updates = l.apply(tape_slice)
+            tape.update(updates)
         return tape
 
     read: Set[str] = set(sum([list(l.read) for l in laws], []))
@@ -447,6 +450,7 @@ def make_env_law(env_name) -> Law:
     return Law(
         name="dm_env",
         malloc=malloc,
+        # this is not linked yet
         apply=apply,
         read=get_keys(apply),
     )
@@ -458,6 +462,7 @@ def make_vec_env(env_name: str, num_envs: int) -> Law:
         raw_envs: List[dm_env.Environment] = [env.malloc()["env"] for env in env_laws]
         dim_actions = raw_envs[0].action_spec().num_values
         obs_shape = raw_envs[0].observation_spec().shape
+        # make these allocations stacked from single env setting?
         action = np.full(num_envs, fill_value=0, dtype=jnp.int32)
         action_probs = jnp.full(
             (num_envs, dim_actions), fill_value=0, dtype=jnp.float32
@@ -492,7 +497,7 @@ def make_vec_env(env_name: str, num_envs: int) -> Law:
     return Law(
         name=f"vec_env({env_name} * {num_envs})",
         malloc=malloc,
-        apply=apply,
+        apply=link(apply),
         read=get_keys(apply),
     )
 
@@ -507,10 +512,7 @@ def make_batch_frame_stacker(
     def malloc():
         return {
             "stacked_frames": jnp.zeros(
-                num_envs,
-                num_rows,
-                num_cols,
-                num_stacked_frames * num_channels,
+                (num_envs, num_rows, num_cols, num_stacked_frames * num_channels),
                 dtype=jnp.float32,
             )
         }
@@ -523,7 +525,7 @@ def make_batch_frame_stacker(
     return Law(
         name=f"batch_frame_stacker({num_envs=}, {num_rows=}, {num_cols=}, {num_channels=}, {num_stacked_frames=})",
         malloc=malloc,
-        apply=apply,
+        apply=link(apply),
         read=get_keys(apply),
     )
 
@@ -532,7 +534,7 @@ def make_traj_writer(
     num_envs: int,
 ):
     def malloc():
-        return {{"step_samples": [[] for _ in range(num_envs)]}}
+        return {"step_samples": [[] for _ in range(num_envs)]}
 
     def apply(
         obs,
@@ -572,7 +574,7 @@ def make_traj_writer(
     return Law(
         name=f"traj_writer({num_envs=})",
         malloc=malloc,
-        apply=apply,
+        apply=link(apply),
         read=get_keys(apply),
     )
 
@@ -590,6 +592,6 @@ def make_terminator(size: int):
     return Law(
         name=f"terminator({size=})",
         malloc=malloc,
-        apply=apply,
+        apply=link(apply),
         read=get_keys(apply),
     )

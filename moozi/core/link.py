@@ -30,6 +30,8 @@ def link(fn):
             new_tape.update(updates)
         return new_tape
 
+    _wrapper.__orig_fn = fn
+
     return _wrapper
 
 

@@ -34,10 +34,11 @@
       output-scalars: off
       flags-dest: config:examples/minatar_space_invaders/config.yml
       flags-import: all
+      requires:
+        - file: courier.ttf
       sourcecode:
         - "*.py"
         - "*.yml"
-        - "*.ttf"
         - exclude:
             dir: local_deps
 

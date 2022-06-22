@@ -1,7 +1,7 @@
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Union
+from typing import Any, Dict, List, NamedTuple, Optional, Union
 
 import haiku as hk
 import jax.numpy as jnp
@@ -100,13 +100,15 @@ class JAXBoardLoggerV2(Logger):
         self._writer = mz.jaxboard.SummaryWriter(name, log_dir=self._log_dir)
         logger.info(f"{self._name} is logging to {(self._log_dir)}")
 
-    def write(self, data: Union[List[LogDatum], LogDatum, dict]):
+    def write(
+        self, data: Union[List[LogDatum], LogDatum, dict], step: Optional[int] = None
+    ):
         data_ready = LogDatum.from_any(data)
 
         now = time.time()
         if (now - self._time) > self._time_delta:
             for datum in data_ready:
-                self._write_now_datum(datum)
+                self._write_now_datum(datum, step)
             self._time = now
 
         self._steps += 1
@@ -114,21 +116,24 @@ class JAXBoardLoggerV2(Logger):
     def set_steps(self, steps):
         self._steps = steps
 
-    def _write_now_datum(self, datum: LogDatum):
+    def _write_now_datum(self, datum: LogDatum, step: Optional[int] = None):
         prefixed_key = self._name + ":" + datum.tag
+        if step is None:
+            step = self._steps
+
         if isinstance(datum, LogText):
-            self._writer.text(tag=prefixed_key, textdata=datum.text, step=self._steps)
+            self._writer.text(tag=prefixed_key, textdata=datum.text, step=step)
         elif isinstance(datum, LogImage):
-            self._writer.image(tag=prefixed_key, image=datum.image, step=self._steps)
+            self._writer.image(tag=prefixed_key, image=datum.image, step=step)
         elif isinstance(datum, LogScalar):
-            self._writer.scalar(tag=prefixed_key, value=datum.scalar, step=self._steps)
+            self._writer.scalar(tag=prefixed_key, value=datum.scalar, step=step)
         elif isinstance(datum, LogHistogram):
             num_bins = 50
             self._writer.histogram(
                 tag=prefixed_key,
                 values=datum.values,
                 bins=num_bins,
-                step=self._steps,
+                step=step,
             )
         else:
             raise ValueError(f"Unsupported datum type: {type(datum)}")

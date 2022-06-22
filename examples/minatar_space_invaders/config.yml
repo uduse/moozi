@@ -69,7 +69,7 @@ train:
 
   env_workers:
     num_workers: 6
-    num_envs: 50
+    num_envs: 6
     num_cpus: 1
     num_gpus: 1
 

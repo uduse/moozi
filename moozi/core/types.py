@@ -96,6 +96,7 @@ class TrainTarget(NamedTuple):
         )
 
 
+# TODO: maybe make statistics a part of training state?
 class TrainingState(typing.NamedTuple):
     params: hk.Params
     target_params: hk.Params

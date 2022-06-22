@@ -108,14 +108,21 @@ class NNArchitecture(hk.Module):
     def root_inference(self, root_feats: RootFeatures, is_training: bool):
         """Uses the representation function and the prediction function."""
         hidden_state = self._repr_net(root_feats.obs, is_training)
-        value, policy_logits = self._pred_net(hidden_state, is_training)
-        reward = jnp.zeros_like(value)
+        value_logits, policy_logits = self._pred_net(hidden_state, is_training)
+        reward_logits = jnp.zeros_like(value_logits)
 
-        chex.assert_rank([value, reward, policy_logits, hidden_state], [2, 2, 2, 4])
+        chex.assert_rank(
+            [value_logits, reward_logits, policy_logits, hidden_state], [2, 2, 2, 4]
+        )
 
         if is_training:
-            value = self.spec.scalar_transform.transform(value)
-            reward = self.spec.scalar_transform.transform(reward)
+            value = value_logits
+            reward = reward_logits
+        else:
+            value_probs = jax.nn.softmax(value_logits)
+            reward_probs = jax.nn.softmax(reward_logits)
+            value = self.spec.scalar_transform.inverse_transform(value_probs)
+            reward = self.spec.scalar_transform.inverse_transform(reward_probs)
 
         return NNOutput(
             value=value,
@@ -126,19 +133,25 @@ class NNArchitecture(hk.Module):
 
     def trans_inference(self, trans_feats: TransitionFeatures, is_training: bool):
         """Uses the dynamics function and the prediction function."""
-        next_hidden_state, reward = self._dyna_net(
+        next_hidden_state, reward_logits = self._dyna_net(
             trans_feats.hidden_state,
             trans_feats.action,
             is_training,
         )
-        value, policy_logits = self._pred_net(next_hidden_state, is_training)
+        value_logits, policy_logits = self._pred_net(next_hidden_state, is_training)
         chex.assert_rank(
-            [value, reward, policy_logits, next_hidden_state], [2, 2, 2, 4]
+            [value_logits, reward_logits, policy_logits, next_hidden_state],
+            [2, 2, 2, 4],
         )
 
         if is_training:
-            value = self.spec.scalar_transform.transform(value)
-            reward = self.spec.scalar_transform.transform(reward)
+            value = value_logits
+            reward = reward_logits
+        else:
+            value_probs = jax.nn.softmax(value_logits)
+            reward_probs = jax.nn.softmax(reward_logits)
+            value = self.spec.scalar_transform.inverse_transform(value_probs)
+            reward = self.spec.scalar_transform.inverse_transform(reward_probs)
 
         return NNOutput(
             value=value,
@@ -190,14 +203,10 @@ class NNModel:
         # NOTE: is static_argnum really should be used?
         return NNModel(
             init_params_and_state=self.init_params_and_state,
-            root_inference=jax.jit(self.root_inference, static_argnums=3),
-            trans_inference=jax.jit(self.trans_inference, static_argnums=3),
-            root_inference_unbatched=jax.jit(
-                self.root_inference_unbatched, static_argnums=3
-            ),
-            trans_inference_unbatched=jax.jit(
-                self.trans_inference_unbatched, static_argnums=3
-            ),
+            root_inference=jax.jit(self.root_inference),
+            trans_inference=jax.jit(self.trans_inference),
+            root_inference_unbatched=jax.jit(self.root_inference_unbatched),
+            trans_inference_unbatched=jax.jit(self.trans_inference_unbatched),
             hk_transformed=self.hk_transformed,
         )
 

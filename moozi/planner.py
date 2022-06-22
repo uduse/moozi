@@ -5,6 +5,7 @@ import numpy as np
 import haiku as hk
 
 from moozi.nn import NNModel, RootFeatures, TransitionFeatures
+from moozi.laws import Law, get_keys
 
 
 def make_paritial_recurr_fn(model, state):
@@ -13,10 +14,10 @@ def make_paritial_recurr_fn(model, state):
         is_training = False
         nn_output, _ = model.trans_inference(params, state, trans_feats, is_training)
         rnn_output = mctx.RecurrentFnOutput(
-            reward=nn_output.reward.squeeze(-1),
-            discount=jnp.ones_like(nn_output.reward.squeeze(-1)),
+            reward=nn_output.reward,
+            discount=jnp.ones_like(nn_output.reward),
             prior_logits=nn_output.policy_logits,
-            value=nn_output.value.squeeze(-1),
+            value=nn_output.value,
         )
         return rnn_output, nn_output.hidden_state
 
@@ -31,7 +32,7 @@ def make_planner(
     dirichlet_fraction: float = 0.25,
     dirichlet_alpha: float = 0.3,
     temperature: float = 1.0,
-):
+) -> Law:
     def malloc():
         return {
             "root_value": jnp.zeros(num_envs, dtype=jnp.float32),
@@ -41,7 +42,7 @@ def make_planner(
             ),
         }
 
-    def planner(params: hk.Params, state: hk.State, stacked_frames, random_key):
+    def apply(params: hk.Params, state: hk.State, stacked_frames, random_key):
         is_training = False
         random_key, new_key = jax.random.split(random_key, 2)
         root_feats = RootFeatures(
@@ -51,7 +52,7 @@ def make_planner(
         nn_output, _ = model.root_inference(params, state, root_feats, is_training)
         root = mctx.RootFnOutput(
             prior_logits=nn_output.policy_logits,
-            value=nn_output.value.squeeze(-1),
+            value=nn_output.value,
             embedding=nn_output.hidden_state,
         )
         nn_output, _ = model.root_inference(params, state, root_feats, is_training)
@@ -73,4 +74,4 @@ def make_planner(
             "random_key": random_key,
         }
 
-    return malloc, planner
+    return Law(name="planner", malloc=malloc, apply=apply, read=get_keys(apply))

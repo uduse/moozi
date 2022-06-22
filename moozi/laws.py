@@ -1,8 +1,9 @@
 import collections
+import inspect
 import jax.numpy as jnp
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Deque, List, Optional, Union
+from typing import Any, Callable, Deque, Dict, List, Optional, Set, Union
 
 import dm_env
 import numpy as np
@@ -12,61 +13,11 @@ from gym.wrappers.monitoring.video_recorder import VideoRecorder
 from loguru import logger
 
 from moozi.core import BASE_PLAYER, PolicyFeed, StepSample
+from moozi.core.env import make_env
 from moozi.core.link import link
 from moozi.core.types import TrainTarget
 
 # TODO: make __call__ not a method but a static method or a function
-
-# @link
-# @dataclass
-# class FrameStacker:
-#     num_frames: int = 1
-#     player: int = 0
-
-#     padding: Optional[np.ndarray] = None
-#     deque: Deque = field(init=False)
-
-#     def __post_init__(self):
-#         self.deque = collections.deque(maxlen=self.num_frames)
-
-#     def __call__(self, obs: Union[np.ndarray, List[np.ndarray]], is_last) -> Any:
-#         if is_last:
-#             self.reset()
-#         else:
-#             self.add(obs)
-#             return dict(stacked_frames=self.get())
-
-#     def add(self, obs: Union[np.ndarray, List[np.ndarray]]):
-#         assert isinstance(obs, (np.ndarray, list))
-#         player_obs = self._get_player_obs(obs)
-
-#         if self.padding is None:
-#             self.padding = np.zeros_like(player_obs)
-
-#         self.deque.append(player_obs)
-
-#     def reset(self):
-#         self.deque.clear()
-
-#     def get(self):
-#         stacked_frames = np.concatenate(list(self.deque), axis=-1)
-#         num_frames_to_pad = self.num_frames - len(self.deque)
-#         if num_frames_to_pad > 0:
-#             paddings = self.padding.repeat(num_frames_to_pad, axis=-1)
-#             stacked_frames = np.concatenate([paddings, stacked_frames], axis=-1)
-#         return stacked_frames
-
-#     def _get_player_obs(self, obs: Union[np.ndarray, List[np.ndarray]]) -> np.ndarray:
-#         if isinstance(obs, np.ndarray):
-#             return obs
-#         elif isinstance(obs, list):
-#             return obs[self.player]
-#         else:
-#             raise ValueError(
-#                 f"obs must be np.ndarray or list of np.ndarray, got {type(obs)}"
-#             )
-
-
 @link
 def update_episode_stats(
     is_last, reward, sum_episodic_reward, num_episodes, universe_id
@@ -429,3 +380,216 @@ class BatchFrameStacker:
         ret = jnp.append(stacked_frames, obs, axis=-1)
         ret = ret[..., np.array(obs.shape[-1]) :]
         return {"stacked_frames": ret}
+
+
+@dataclass
+class Law:
+    name: str
+    malloc: Callable[[], Dict[str, Any]]
+    apply: Callable[..., Dict[str, Any]]
+    read: Set[str]
+
+
+def sequential(laws: List[Law]) -> Law:
+    name = f"sequential({'+'.join(l.name for l in laws)})"
+
+    def malloc():
+        ret = {}
+        for l in laws:
+            ret.update(l.malloc())
+        return ret
+
+    def apply(tape):
+        for l in laws:
+            tape = l.apply(tape)
+        return tape
+
+    read: Set[str] = set(sum([list(l.read) for l in laws], []))
+
+    return Law(
+        name=name,
+        malloc=malloc,
+        apply=apply,
+        read=read,
+    )
+
+
+def get_keys(fn):
+    return inspect.signature(fn).parameters.keys()
+
+
+def make_env_law(env_name) -> Law:
+    def malloc():
+        return {"env": make_env(env_name)}
+
+    def apply(env: dm_env.Environment, is_last: bool, action: int):
+        if is_last:
+            timestep = env.reset()
+        else:
+            timestep = env.step(action)
+
+        if timestep.reward is None:
+            reward = 0.0
+        else:
+            reward = timestep.reward
+
+        legal_actions_mask = np.ones(env.action_space.n, dtype=np.float32)
+
+        return dict(
+            obs=np.array(timestep.observation, dtype=float),
+            is_first=timestep.first(),
+            is_last=timestep.last(),
+            to_play=0,
+            reward=reward,
+            legal_actions_mask=legal_actions_mask,
+        )
+
+    return Law(
+        name="dm_env",
+        malloc=malloc,
+        apply=apply,
+        read=get_keys(apply),
+    )
+
+
+def make_vec_env(env_name: str, num_envs: int) -> Law:
+    def malloc():
+        env_laws = [make_env_law(env_name) for _ in range(num_envs)]
+        raw_envs: List[dm_env.Environment] = [env.malloc()["env"] for env in env_laws]
+        dim_actions = raw_envs[0].action_spec().num_values
+        obs_shape = raw_envs[0].observation_spec().shape
+        action = np.full(num_envs, fill_value=0, dtype=jnp.int32)
+        action_probs = jnp.full(
+            (num_envs, dim_actions), fill_value=0, dtype=jnp.float32
+        )
+        obs = jnp.zeros((num_envs, *obs_shape), dtype=jnp.float32)
+        is_first = jnp.full(num_envs, fill_value=False, dtype=bool)
+        is_last = jnp.full(num_envs, fill_value=True, dtype=bool)
+        to_play = jnp.zeros(num_envs, dtype=jnp.int32)
+        reward = jnp.zeros(num_envs, dtype=jnp.float32)
+        legal_actions_mask = jnp.ones((num_envs, dim_actions), dtype=jnp.int32)
+        return {
+            "envs": raw_envs,
+            "obs": obs,
+            "action": action,
+            "action_probs": action_probs,
+            "is_first": is_first,
+            "is_last": is_last,
+            "to_play": to_play,
+            "reward": reward,
+            "legal_actions_mask": legal_actions_mask,
+        }
+
+    env_apply = make_env_law(env_name).apply
+
+    def apply(envs: List[dm_env.Environment], is_last: List[bool], action: List[int]):
+        updates_list = []
+        for env, is_last_, action_ in zip(envs, is_last, action):
+            updates = env_apply(env=env, is_last=is_last_, action=action_)
+            updates_list.append(updates)
+        return stack_sequence_fields(updates_list)
+
+    return Law(
+        name=f"vec_env({env_name} * {num_envs})",
+        malloc=malloc,
+        apply=apply,
+        read=get_keys(apply),
+    )
+
+
+def make_batch_frame_stacker(
+    num_envs: int,
+    num_rows: int,
+    num_cols: int,
+    num_channels: int,
+    num_stacked_frames: int,
+):
+    def malloc():
+        return {
+            "stacked_frames": jnp.zeros(
+                num_envs,
+                num_rows,
+                num_cols,
+                num_stacked_frames * num_channels,
+                dtype=jnp.float32,
+            )
+        }
+
+    def apply(stacked_frames, obs):
+        ret = jnp.append(stacked_frames, obs, axis=-1)
+        ret = ret[..., np.array(obs.shape[-1]) :]
+        return {"stacked_frames": ret}
+
+    return Law(
+        name=f"batch_frame_stacker({num_envs=}, {num_rows=}, {num_cols=}, {num_channels=}, {num_stacked_frames=})",
+        malloc=malloc,
+        apply=apply,
+        read=get_keys(apply),
+    )
+
+
+def make_traj_writer(
+    num_envs: int,
+):
+    def malloc():
+        return {{"step_samples": [[] for _ in range(num_envs)]}}
+
+    def apply(
+        obs,
+        to_play,
+        action,
+        reward,
+        root_value,
+        is_first,
+        is_last,
+        action_probs,
+        legal_actions_mask,
+        step_samples,
+        output_buffer,
+    ):
+        for i in range(len(step_samples)):
+            step_sample = StepSample(
+                frame=obs[i],
+                last_reward=reward[i],
+                is_first=is_first[i],
+                is_last=is_last[i],
+                to_play=to_play[i],
+                legal_actions_mask=legal_actions_mask[i],
+                root_value=root_value[i],
+                action_probs=action_probs[i],
+                action=action[i],
+                weight=1.0,
+            )
+
+            step_samples[i].append(step_sample)
+            if is_last[i]:
+                traj = stack_sequence_fields(step_samples[i])
+                step_samples[i].clear()
+                output_buffer = output_buffer + (traj,)
+
+        return dict(output_buffer=output_buffer)
+
+    return Law(
+        name=f"traj_writer({num_envs=})",
+        malloc=malloc,
+        apply=apply,
+        read=get_keys(apply),
+    )
+
+
+def make_terminator(size: int):
+    def malloc():
+        return {"quit": False}
+
+    def apply(output_buffer):
+        if len(output_buffer) >= size:
+            return {"quit": True}
+        else:
+            return {"quit": False}
+
+    return Law(
+        name=f"terminator({size=})",
+        malloc=malloc,
+        apply=apply,
+        read=get_keys(apply),
+    )

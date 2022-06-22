@@ -18,7 +18,7 @@ from loguru import logger
 import moozi as mz
 from moozi.core import TrainingState, TrainTarget
 from moozi.logging import LogDatum
-from moozi.nn.nn import NNArchitecture, NNSpec
+from moozi.nn.nn import NNArchitecture, NNModel, NNSpec
 from moozi.nn.training import make_training_suite
 
 
@@ -136,8 +136,15 @@ class ParameterOptimizer:
 
 class ParameterServer:
     def __init__(self, training_suite_factory, use_remote=False):
+        self.model: NNModel
+        self.training_state: TrainingState
+        self.sgd_step_fn: Callable
         self.model, self.training_state, self.sgd_step_fn = training_suite_factory()
-        self.use_remote = use_remote
+        self.use_remote: bool = use_remote
+        self._tb_logger = mz.logging.JAXBoardLoggerV2(
+            name="param_server", time_delta=30
+        )
+        self._last_step_data = []
 
     def update(self, big_batch: TrainTarget, batch_size: int):
         if len(big_batch) == 0:
@@ -163,8 +170,13 @@ class ParameterServer:
                 break
             batch = stack_sequence_fields(batch_slice)
             self.training_state, extra = self.sgd_step_fn(self.training_state, batch)
+            self._last_step_data = extra
             ret = extra["loss"]
         return ret
+
+    def log_tensorboard(self):
+        log_datum = LogDatum.from_any(self._last_step_data)
+        self._tb_logger.write(log_datum, self.training_state.steps)
 
     def get_params(self):
         logger.debug("getting params")

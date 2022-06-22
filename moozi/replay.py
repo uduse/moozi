@@ -39,11 +39,13 @@ class ReplayBuffer:
     _trajs: Deque[ReplayEntry] = field(init=False)
     _train_targets: Deque[ReplayEntry] = field(init=False)
     _value_diffs: Deque[float] = field(init=False)
+    _episode_return: Deque[float] = field(init=False)
 
     def __post_init__(self):
         self._trajs = collections.deque(maxlen=self.max_size)
         self._train_targets = collections.deque(maxlen=self.max_size)
         self._value_diffs = collections.deque(maxlen=256)
+        self._episode_return = collections.deque(maxlen=256)
         logger.remove()
         logger.add("logs/replay.log", level="DEBUG")
         logger.info(f"Replay buffer created, {vars(self)}")
@@ -69,6 +71,7 @@ class ReplayBuffer:
                 value_diff = np.abs(target.n_step_return[0] - target.root_value[0])
                 self._value_diffs.append(value_diff)
                 self._train_targets.append(ReplayEntry(target, priority=value_diff))
+            self._episode_return.append(np.sum(traj.last_reward))
 
     def get_train_targets_batch(self, batch_size: int) -> TrainTarget:
         if len(self._train_targets) == 0:
@@ -93,6 +96,8 @@ class ReplayBuffer:
         if self._value_diffs:
             mean_value_diff = np.mean(self._value_diffs)
             ret["mean_value_diff"] = mean_value_diff
+        if self._episode_return:
+            ret["episode_return"] = np.mean(self._episode_return)
         return ret
 
     def sample_targets(self, batch_size: int) -> List[ReplayEntry]:

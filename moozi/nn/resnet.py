@@ -123,7 +123,9 @@ class ResNetArchitecture(NNArchitecture):
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
 
-        hidden_state = jax.nn.sigmoid(hidden_state)
+        batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)
+        batch_max = jnp.max(hidden_state, axis=(1, 2, 3), keepdims=True)
+        hidden_state = (hidden_state - batch_min) / (batch_max - batch_min)
 
         return hidden_state
 
@@ -150,24 +152,28 @@ class ResNetArchitecture(NNArchitecture):
             [None, self.spec.repr_rows * self.spec.repr_cols * trunk_tower_dim],
         )
 
-        # pred value head
-        # TODO: sigmoid only for reward range [-1, 1]
-        # TODO: this 64 should be a hyperparameter
-        # value = hk.nets.MLP(output_sizes=[128, 1])(pred_trunk_flat)
-        value = hk.Linear(output_size=1)(pred_trunk_flat)
-        value = jax.nn.sigmoid(value)
-        chex.assert_shape(value, (None, 1))
+        # value head
+        value_logits = hk.nets.MLP(
+            [
+                32,
+                64,
+                self.spec.scalar_transform.dim,
+            ]
+        )(pred_trunk_flat)
+        chex.assert_shape(value_logits, (None, self.spec.scalar_transform.dim))
 
-        # pred policy head
-        # policy_logits = hk.nets.MLP(
-        #     output_sizes=[128, self.spec.dim_action],
-        #     name="policy_head",
-        # )(pred_trunk_flat)
+        # policy head
+        policy_logits = hk.nets.MLP(
+            [
+                32,
+                64,
+                self.spec.dim_action,
+            ]
+        )(pred_trunk_flat)
         policy_logits = hk.Linear(output_size=self.spec.dim_action)(pred_trunk_flat)
-        policy_logits = jax.nn.relu(policy_logits)
         chex.assert_shape(policy_logits, (None, self.spec.dim_action))
 
-        return value, policy_logits
+        return value_logits, policy_logits
 
     def _dyna_net(self, hidden_state, action, is_training):
         chex.assert_shape(
@@ -202,12 +208,13 @@ class ResNetArchitecture(NNArchitecture):
         dyna_trunk = ResTower(num_blocks=self.spec.dyna_tower_blocks)(
             dyna_trunk, is_training
         )
+        dyna_trunk_flat = dyna_trunk.reshape((dyna_trunk.shape[0], -1))
         chex.assert_shape(
             dyna_trunk,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.dyna_tower_dim),
         )
 
-        # dyna hidden state head
+        # hidden state head
         next_hidden_state = ResTower(
             num_blocks=self.spec.dyna_state_blocks,
         )(dyna_trunk, is_training)
@@ -222,11 +229,19 @@ class ResNetArchitecture(NNArchitecture):
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
 
-        # dyna reward head
-        dyna_trunk_flat = dyna_trunk.reshape((dyna_trunk.shape[0], -1))
-        reward = hk.Linear(output_size=1, name="dyna_reward")(dyna_trunk_flat)
-        chex.assert_shape(reward, (None, 1))
+        # reward head
+        reward_logits = hk.nets.MLP(
+            [
+                32,
+                64,
+                self.spec.scalar_transform.dim,
+            ]
+        )(dyna_trunk_flat)
 
-        # TODO: scaling hidden to [0, 1] is not done this way
-        next_hidden_state = jax.nn.sigmoid(next_hidden_state)
-        return next_hidden_state, reward
+        chex.assert_shape(reward_logits, (None, self.spec.scalar_transform.dim))
+
+        # TODO: check correctness of scaling
+        batch_min = jnp.min(next_hidden_state, axis=(1, 2, 3), keepdims=True)
+        batch_max = jnp.max(next_hidden_state, axis=(1, 2, 3), keepdims=True)
+        next_hidden_state = (next_hidden_state - batch_min) / (batch_max - batch_min)
+        return next_hidden_state, reward_logits

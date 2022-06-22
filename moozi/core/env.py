@@ -23,8 +23,6 @@ from acme.specs import make_environment_spec
 import open_spiel
 from absl import logging
 
-from moozi.laws import MinAtarEnvLaw
-
 
 class TransformObservationWrapper(EnvironmentWrapper):
     """Wrapper which converts environments from double- to single-precision."""
@@ -179,41 +177,41 @@ def make_spec(env_name):
     return make_env_and_spec(env_name)[1]
 
 
-@dataclass
-class VecEnv:
-    env_name: str
-    num_envs: int
+# @dataclass
+# class VecEnv:
+#     env_name: str
+#     num_envs: int
 
-    def malloc(self):
-        envs = [make_env(self.env_name) for _ in range(self.num_envs)]
-        dim_actions = envs[0].action_spec().num_values
-        obs_shape = envs[0].observation_spec().shape
-        envs = [MinAtarEnvLaw(env) for env in envs]
-        action = np.full(self.num_envs, fill_value=0, dtype=jnp.int32)
-        action_probs = jnp.full(
-            (self.num_envs, dim_actions), fill_value=0, dtype=jnp.float32
-        )
-        obs = jnp.zeros((self.num_envs, *obs_shape), dtype=jnp.float32)
-        is_first = jnp.full(self.num_envs, fill_value=False, dtype=bool)
-        is_last = jnp.full(self.num_envs, fill_value=True, dtype=bool)
-        to_play = jnp.zeros(self.num_envs, dtype=jnp.int32)
-        reward = jnp.zeros(self.num_envs, dtype=jnp.float32)
-        legal_actions_mask = jnp.ones((self.num_envs, dim_actions), dtype=jnp.int32)
-        return {
-            "envs": envs,
-            "obs": obs,
-            "action": action,
-            "action_probs": action_probs,
-            "is_first": is_first,
-            "is_last": is_last,
-            "to_play": to_play,
-            "reward": reward,
-            "legal_actions_mask": legal_actions_mask,
-        }
+#     def malloc(self):
+#         envs = [make_env(self.env_name) for _ in range(self.num_envs)]
+#         dim_actions = envs[0].action_spec().num_values
+#         obs_shape = envs[0].observation_spec().shape
+#         envs = [MinAtarEnvLaw(env) for env in envs]
+#         action = np.full(self.num_envs, fill_value=0, dtype=jnp.int32)
+#         action_probs = jnp.full(
+#             (self.num_envs, dim_actions), fill_value=0, dtype=jnp.float32
+#         )
+#         obs = jnp.zeros((self.num_envs, *obs_shape), dtype=jnp.float32)
+#         is_first = jnp.full(self.num_envs, fill_value=False, dtype=bool)
+#         is_last = jnp.full(self.num_envs, fill_value=True, dtype=bool)
+#         to_play = jnp.zeros(self.num_envs, dtype=jnp.int32)
+#         reward = jnp.zeros(self.num_envs, dtype=jnp.float32)
+#         legal_actions_mask = jnp.ones((self.num_envs, dim_actions), dtype=jnp.int32)
+#         return {
+#             "envs": envs,
+#             "obs": obs,
+#             "action": action,
+#             "action_probs": action_probs,
+#             "is_first": is_first,
+#             "is_last": is_last,
+#             "to_play": to_play,
+#             "reward": reward,
+#             "legal_actions_mask": legal_actions_mask,
+#         }
 
-    def __call__(self, envs, is_last: List[bool], action: List[int]):
-        updates_list = []
-        for env, is_last_, action_ in zip(envs, is_last, action):
-            updates = env(is_last=is_last_, action=action_)
-            updates_list.append(updates)
-        return stack_sequence_fields(updates_list)
+#     def __call__(self, envs, is_last: List[bool], action: List[int]):
+#         updates_list = []
+#         for env, is_last_, action_ in zip(envs, is_last, action):
+#             updates = env(is_last=is_last_, action=action_)
+#             updates_list.append(updates)
+#         return stack_sequence_fields(updates_list)

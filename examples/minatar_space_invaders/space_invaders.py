@@ -1,4 +1,7 @@
 # %%
+import uuid
+from PIL import Image, ImageDraw, ImageFont
+import seaborn as sns
 import tree
 import contextlib
 from functools import partial
@@ -20,7 +23,7 @@ import moozi as mz
 from moozi.core import scalar_transform
 from moozi.core.env import make_env, VecEnv
 from moozi.core.scalar_transform import ScalarTransform, make_scalar_transform
-from moozi.core.tape import make_tape
+from moozi.core.tape import make_tape, include, exclude
 from moozi.nn.nn import NNModel, make_model
 from moozi.nn.training import make_training_suite
 from moozi.parameter_optimizer import ParameterOptimizer, ParameterServer
@@ -41,20 +44,6 @@ logger.add(sys.stderr, level="INFO")
 config = OmegaConf.load(Path(__file__).parent / "config.yml")
 OmegaConf.resolve(config)
 print(OmegaConf.to_yaml(config))
-
-# %%
-@contextlib.contextmanager
-def exclude(tape: dict, to_exclude: set):
-    masked = {k: v for k, v in tape.items() if k not in to_exclude}
-    yield masked
-
-
-@contextlib.contextmanager
-def include(tape: dict, to_include: set):
-    if not all(k in tape for k in to_include):
-        raise ValueError(f"{tape.keys()} does not contain key {to_include}")
-    masked = {k: v for k, v in tape.items() if k in to_include}
-    yield masked
 
 
 class Universe:
@@ -78,6 +67,52 @@ class Universe:
         logger.debug(f"flushing {len(ret)} trajectories")
         self.tape["output_buffer"] = tuple()
         return ret
+
+
+# %%
+def make_min_atar_gif_recorder(n_channels=6):
+    cmap = sns.color_palette("cubehelix", n_channels)
+    cmap.insert(0, (0, 0, 0))
+    cs = np.array([cmap[i] for i in range(n_channels + 1)])
+
+    def malloc():
+        Path("gifs").mkdir(parents=True, exist_ok=True)
+        return {"images": []}
+
+    def forward(is_last, obs, images: List[Image.Image], root_value):
+        numerical_state = np.array(
+            np.amax(obs[0] * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2)
+            + 0.5,
+            dtype=int,
+        )
+        rgbs = np.array(cs[numerical_state - 1] * 255, dtype=np.uint8)
+        img = Image.fromarray(rgbs)
+        img = img.resize((img.width * 40, img.height * 40), Image.NEAREST)
+        draw = ImageDraw.Draw(img)
+        content = f"v = {float(root_value[0]):.2f}"
+        font = ImageFont.truetype("courier.ttf", 14)
+        draw.text((0, 0), content, fill="black", font=font)
+        images = images + [img]
+        if is_last[0] and images:
+            counter = 0
+            while gif_fpath := (Path("gifs") / f"{counter}.gif"):
+                if gif_fpath.exists():
+                    counter += 1
+                else:
+                    break
+
+            images[0].save(
+                str(gif_fpath),
+                save_all=True,
+                append_images=images[1:],
+                optimize=False,
+                duration=40,
+            )
+            logger.info("gif saved to ", str(gif_fpath))
+            images = []
+        return {"images": images}
+
+    return malloc, forward
 
 
 # %%
@@ -109,22 +144,9 @@ class RolloutWorker:
 @dataclass
 class L:
     name: str
-    forward: Callable
+    apply: Callable
     keys: Set[str]
 
-
-def make_output_buffer_size_termination(size: int):
-    def forward(output_buffer):
-        if len(output_buffer) >= size:
-            return {"quit": True}
-        else:
-            return {"quit": False}
-
-    return L(
-        name="episode_termination",
-        forward=forward,
-        keys={"output_buffer"},
-    )
 
 
 def make_universe(config):
@@ -144,6 +166,10 @@ def make_universe(config):
     vec_env = VecEnv(config.env.name, num_envs)
     tape.update(vec_env.malloc())
     vec_env = link(vec_env)
+
+    m, gifer = make_min_atar_gif_recorder()
+    tape.update(m())
+    gifer = link(gifer)
 
     frame_stacker = BatchFrameStacker(
         num_envs,
@@ -171,7 +197,7 @@ def make_universe(config):
     tape.update(traj_writer.malloc())
     traj_writer = link(traj_writer)
 
-    terminator = link(make_output_buffer_size_termination(num_envs).forward)
+    terminator = link(make_terminator(num_envs).apply)
 
     @partial(jax.jit, backend="cpu")
     @chex.assert_max_traces(n=1)
@@ -197,6 +223,74 @@ def make_universe(config):
             updates = policy(tape_slice)
         tape.update(updates)
         tape = traj_writer(tape)
+        tape = gifer(tape)
+        tape = terminator(tape)
+        return tape
+
+    return Universe(tape, law)
+
+
+# %%
+def make_universe_v2(config):
+    scalar_transform = make_scalar_transform(**config.scalar_transform)
+    nn_arch_cls = eval(config.nn.arch_cls)
+    nn_spec = eval(config.nn.spec_cls)(
+        **config.nn.spec_kwargs, scalar_transform=scalar_transform
+    )
+
+    model = make_model(nn_arch_cls, nn_spec)
+
+    tape = make_tape(seed=config.seed)
+
+    num_envs = config.train.env_workers.num_envs
+    vec_env = make_vec_env(config.env.name, num_envs)
+    gif_recorder = make_min_atar_gif_recorder()
+    frame_stacker = make_batch_frame_stacker(
+        num_envs,
+        config.env.num_rows,
+        config.env.num_cols,
+        config.env.num_channels,
+        config.num_stacked_frames,
+    )
+    planner = make_planner(
+        num_envs=num_envs,
+        dim_actions=config.dim_actions,
+        model=model,
+        num_simulations=10,
+        dirichlet_fraction=config.mcts.dirichlet_fraction,
+        dirichlet_alpha=config.mcts.dirichlet_alpha,
+        temperature=1.0,
+    )
+    
+    traj_writer = make_traj_writer
+
+    terminator = link(make_terminator(num_envs).apply)
+
+    @partial(jax.jit, backend="cpu")
+    @chex.assert_max_traces(n=1)
+    def policy(tape):
+        tape = frame_stacker(tape)
+        tape = planner(tape)
+        return tape
+
+    def law(tape):
+        tape = vec_env(tape)
+        with include(
+            tape,
+            {
+                "obs",
+                "stacked_frames",
+                "params",
+                "state",
+                "random_key",
+                "is_first",
+                "is_last",
+            },
+        ) as tape_slice:
+            updates = policy(tape_slice)
+        tape.update(updates)
+        tape = traj_writer(tape)
+        tape = gifer(tape)
         tape = terminator(tape)
         return tape
 
@@ -228,7 +322,7 @@ parameter_server = ParameterServer(
 )
 
 # %%
-worker = RolloutWorker(partial(make_universe, config), name="rollout_worker")
+worker = RolloutWorker(partial(make_universe_v2, config), name="rollout_worker")
 
 # %%
 worker.set_universe_property("params", parameter_server.get_params())
@@ -248,6 +342,4 @@ for _ in range(1000):
     print(parameter_server.update(batch, batch_size=128))
     worker.set_universe_property("params", parameter_server.get_params())
     worker.set_universe_property("state", parameter_server.get_state())
-
-# %%
-replay_buffer.get_train_targets_batch(10).last_reward
+    parameter_server.log_tensorboard()

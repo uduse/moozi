@@ -7,7 +7,7 @@ from acme.wrappers.open_spiel_wrapper import OLT
 import dm_env
 
 from moozi import TrainTarget
-from moozi.nn.loss import MuZeroLoss
+# from moozi.nn.loss import MuZeroLoss
 
 
 @pytest.fixture
@@ -38,6 +38,6 @@ def train_target(env: dm_env.Environment, num_unroll_steps, num_stacked_frames):
     return add_batch_dim(target)
 
 
-def test_mcts_loss(model, params, state, train_target):
-    loss = MuZeroLoss(num_unroll_steps=2)
-    assert loss(model, params, state, train_target)
+# def test_mcts_loss(model, params, state, train_target):
+#     loss = MuZeroLoss(num_unroll_steps=2)
+#     assert loss(model, params, state, train_target)

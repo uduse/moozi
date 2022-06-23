@@ -27,7 +27,6 @@ class ReplayEntry:
 @dataclass(repr=False)
 class ReplayBuffer:
     max_size: int = 1_000_000
-    min_size: int = 1_000
     sampling_strategy: str = "uniform"
     use_remote: bool = False
 

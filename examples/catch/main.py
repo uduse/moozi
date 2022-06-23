@@ -23,10 +23,10 @@ from moozi.laws import (
     make_policy_feed,
 )
 from moozi.logging import (
-    JAXBoardLoggerActor,
+    JAXBoardLoggerRemote,
     LogScalar,
     LogText,
-    TerminalLoggerActor,
+    TerminalLoggerRemote,
 )
 from moozi.mcts import ActionSamplerLaw, Planner
 from moozi.parameter_optimizer import ParameterOptimizer
@@ -274,8 +274,8 @@ workers_reanalyze = make_rollout_workers(
 )
 
 
-jaxboard_logger = JAXBoardLoggerActor.remote("jaxboard_logger")
-terminal_logger = TerminalLoggerActor.remote("terminal_logger")
+jaxboard_logger = JAXBoardLoggerRemote.remote("jaxboard_logger")
+terminal_logger = TerminalLoggerRemote.remote("terminal_logger")
 terminal_logger.write.remote(param_opt.get_properties.remote())
 
 # # %%

@@ -26,11 +26,11 @@ from moozi.laws import (
     update_episode_stats,
 )
 from moozi.logging import (
-    JAXBoardLoggerActor,
+    JAXBoardLoggerRemote,
     JAXBoardLoggerV2,
     LogScalar,
     TerminalLogger,
-    TerminalLoggerActor,
+    TerminalLoggerRemote,
 )
 from moozi.nn.loss import MuZeroLoss
 from moozi.nn.nn import RootFeatures, make_model
@@ -170,8 +170,8 @@ param_opt = make_parameter_optimizer(config)
 replay_buffer = ray.remote(ReplayBuffer).remote(config)
 workers_train = make_workers_train(config, param_opt)
 worker_eval = make_worker_eval(config, param_opt)
-jaxboard_logger = JAXBoardLoggerActor.remote("jaxboard_logger")
-terminal_logger = TerminalLoggerActor.remote("terminal_logger")
+jaxboard_logger = JAXBoardLoggerRemote.remote("jaxboard_logger")
+terminal_logger = TerminalLoggerRemote.remote("terminal_logger")
 terminal_logger.write.remote(param_opt.get_properties.remote())
 
 # %%

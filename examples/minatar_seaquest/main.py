@@ -24,7 +24,7 @@ from moozi.laws import (
     increment_tick,
     make_policy_feed,
 )
-from moozi.logging import JAXBoardLoggerActor, LogScalar, LogText, TerminalLoggerActor
+from moozi.logging import JAXBoardLoggerRemote, LogScalar, LogText, TerminalLoggerRemote
 from moozi.mcts import ActionSamplerLaw, Planner
 from moozi.parameter_optimizer import ParameterOptimizer
 from moozi.replay import ReplayBuffer

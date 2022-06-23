@@ -60,6 +60,8 @@ class LogDatum:
             return [data]
         elif isinstance(data, dict):
             return LogDatum.from_dict(data)
+        elif isinstance(data, (list, tuple)):
+            return sum([LogDatum.from_any(d) for d in data], [])
         else:
             return data
 
@@ -146,9 +148,6 @@ class JAXBoardLoggerV2(Logger):
         return self._writer.close()
 
 
-JAXBoardLoggerActor = ray.remote(num_cpus=0)(JAXBoardLoggerV2)
-
-
 # TODO: deprecated the use of terminal logger, just log to files
 class TerminalLogger(Logger):
     def __init__(self, name="logger", time_delta: float = 0.0):
@@ -177,4 +176,5 @@ class TerminalLogger(Logger):
             print(f"{prefixed_key} = {datum.scalar}")
 
 
-TerminalLoggerActor = ray.remote(num_cpus=0)(TerminalLogger)
+JAXBoardLoggerRemote = ray.remote(num_cpus=0)(JAXBoardLoggerV2)
+TerminalLoggerRemote = ray.remote(num_cpus=0)(TerminalLogger)

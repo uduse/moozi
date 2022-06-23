@@ -1,3 +1,4 @@
+from pathlib import Path
 import random
 from dataclasses import dataclass, field
 import sys
@@ -135,12 +136,16 @@ class ParameterOptimizer:
 
 
 class ParameterServer:
-    def __init__(self, training_suite_factory, use_remote=False):
+    def __init__(
+        self, training_suite_factory, use_remote=False, save_dir: str = "checkpoints/"
+    ):
         self.model: NNModel
         self.training_state: TrainingState
         self.sgd_step_fn: Callable
         self.model, self.training_state, self.sgd_step_fn = training_suite_factory()
         self.use_remote: bool = use_remote
+        self.save_dir: Path = Path(save_dir)
+        self.save_dir.mkdir(parents=True, exist_ok=True)
         self._tb_logger = mz.logging.JAXBoardLoggerV2(
             name="param_server", time_delta=30
         )
@@ -217,3 +222,9 @@ class ParameterServer:
             jax_devices=str(jax_devices),
             model_size=model_size_human,
         )
+
+    def save(self):
+        path = self.save_dir / f"{self.training_state.steps}.pkl"
+        logger.debug(f"saving model to {path}")
+        with open(path, "wb") as f:
+            cloudpickle.dump((self.model, self.training_state, self.sgd_step_fn), f)

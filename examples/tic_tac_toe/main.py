@@ -16,7 +16,7 @@ from moozi.laws import (
     TrajectoryOutputWriter,
     make_policy_feed,
 )
-from moozi.logging import JAXBoardLoggerActor, JAXBoardLoggerV2
+from moozi.logging import JAXBoardLoggerRemote, JAXBoardLoggerV2
 from moozi.parameter_optimizer import ParameterOptimizer
 from moozi.policy.mcts import ActionSampler, planner_law
 from moozi.policy.mcts_core import (
@@ -213,7 +213,7 @@ def train(config: Config):
     param_opt = make_parameter_optimizer(config)
     replay_buffer = ray.remote(ReplayBuffer).remote(config)
     workers_train = make_workers_train(config, param_opt)
-    jaxboard_logger = JAXBoardLoggerActor.remote("jaxboard_logger")
+    jaxboard_logger = JAXBoardLoggerRemote.remote("jaxboard_logger")
     Path(config.save_dir).mkdir(parents=True, exist_ok=True)
 
     with WallTimer():

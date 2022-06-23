@@ -534,6 +534,7 @@ def make_traj_writer(
     num_envs: int,
 ):
     def malloc():
+        # NOTE: mutable state dangerous?
         return {"step_samples": [[] for _ in range(num_envs)]}
 
     def apply(
@@ -549,7 +550,7 @@ def make_traj_writer(
         step_samples,
         output_buffer,
     ):
-        for i in range(len(step_samples)):
+        for i in range(num_envs):
             step_sample = StepSample(
                 frame=obs[i],
                 last_reward=reward[i],
@@ -591,6 +592,52 @@ def make_terminator(size: int):
 
     return Law(
         name=f"terminator({size=})",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )
+
+
+def make_reward_terminator(size: int):
+    def malloc():
+        return {
+            "quit": False,
+            "reward_records": tuple(),
+            "reward_traj_count": 0,
+        }
+
+    def apply(
+        reward,
+        reward_records,
+        reward_traj_count,
+        is_last,
+    ):
+        assert len(is_last) == 1
+        reward_records = reward_records + (reward[0],)
+        if is_last[0]:
+            reward_traj_count += 1
+
+        if reward_traj_count >= size:
+            stats = {
+                "avr_episode_length": len(reward_records) / reward_traj_count,
+                "avr_reward_per_episode": sum(reward_records) / reward_traj_count,
+                "avr_reward_per_step": sum(reward_records) / len(reward_records),
+            }
+            return {
+                "quit": True,
+                "reward_records": tuple(),
+                "reward_traj_count": 0,
+                "output_buffer": (stats,),
+            }
+        else:
+            return {
+                "quit": False,
+                "reward_records": reward_records,
+                "reward_traj_count": reward_traj_count,
+            }
+
+    return Law(
+        name=f"reward_terminator{size=})",
         malloc=malloc,
         apply=link(apply),
         read=get_keys(apply),

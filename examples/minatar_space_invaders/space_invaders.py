@@ -24,6 +24,7 @@ from moozi.core import scalar_transform
 from moozi.core.env import make_env
 from moozi.core.scalar_transform import ScalarTransform, make_scalar_transform
 from moozi.core.tape import make_tape, include, exclude
+from moozi.logging import JAXBoardLoggerRemote, TerminalLoggerRemote
 from moozi.nn.nn import NNModel, make_model
 from moozi.nn.training import make_training_suite
 from moozi.parameter_optimizer import ParameterOptimizer, ParameterServer
@@ -43,7 +44,7 @@ logger.add(sys.stderr, level="INFO")
 
 config = OmegaConf.load(Path(__file__).parent / "config.yml")
 OmegaConf.resolve(config)
-print(OmegaConf.to_yaml(config))
+print(OmegaConf.to_yaml(config, resolve=True))
 
 
 class Universe:
@@ -79,7 +80,15 @@ def make_min_atar_gif_recorder(n_channels=6):
         Path("gifs").mkdir(parents=True, exist_ok=True)
         return {"images": []}
 
-    def apply(is_last, obs, images: List[Image.Image], root_value):
+    def apply(
+        is_last,
+        obs,
+        images: List[Image.Image],
+        root_value,
+        q_values,
+        action_probs,
+        action,
+    ):
         numerical_state = np.array(
             np.amax(obs[0] * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2)
             + 0.5,
@@ -89,7 +98,12 @@ def make_min_atar_gif_recorder(n_channels=6):
         img = Image.fromarray(rgbs)
         img = img.resize((img.width * 40, img.height * 40), Image.NEAREST)
         draw = ImageDraw.Draw(img)
-        content = f"v = {float(root_value[0]):.2f}"
+        content = (
+            f"A {str(action)}\n"
+            f"V {str(np.round(root_value[0], 2))}\n"
+            f"π {str(np.round(action_probs[0], 2))}\n"
+            f"Q {str(np.round(q_values[0], 2))}\n"
+        )
         font = ImageFont.truetype("courier.ttf", 14)
         draw.text((0, 0), content, fill="black", font=font)
         images = images + [img]
@@ -152,12 +166,11 @@ nn_arch_cls = eval(config.nn.arch_cls)
 nn_spec = eval(config.nn.spec_cls)(
     **config.nn.spec_kwargs, scalar_transform=scalar_transform
 )
-gif_recorder = make_min_atar_gif_recorder(n_channels=6)
 model = make_model(nn_arch_cls, nn_spec)
 
 # %%
 def make_env_worker_universe(config):
-    num_envs = config.train.env_workers.num_envs
+    num_envs = config.train.env_worker.num_envs
     vec_env = make_vec_env(config.env.name, num_envs)
     frame_stacker = make_batch_frame_stacker(
         num_envs,
@@ -166,15 +179,7 @@ def make_env_worker_universe(config):
         config.env.num_channels,
         config.num_stacked_frames,
     )
-    planner = make_planner(
-        num_envs=num_envs,
-        dim_actions=config.dim_actions,
-        model=model,
-        num_simulations=10,
-        dirichlet_fraction=config.mcts.dirichlet_fraction,
-        dirichlet_alpha=config.mcts.dirichlet_alpha,
-        temperature=config.mcts.temperature,
-    )
+    planner = make_planner(model=model, **config.train.env_worker.planner)
     policy = sequential([frame_stacker, planner])
     policy.apply = chex.assert_max_traces(n=1)(policy.apply)
     policy.apply = jax.jit(policy.apply, backend="gpu")
@@ -185,7 +190,6 @@ def make_env_worker_universe(config):
     final_law = sequential(
         [
             vec_env,
-            gif_recorder,
             policy,
             traj_writer,
             terminator,
@@ -196,6 +200,7 @@ def make_env_worker_universe(config):
     return Universe(tape, final_law)
 
 
+# %%
 def make_test_worker_universe(config):
     vec_env = make_vec_env(config.env.name, 1)
     frame_stacker = make_batch_frame_stacker(
@@ -205,26 +210,19 @@ def make_test_worker_universe(config):
         config.env.num_channels,
         config.num_stacked_frames,
     )
-    planner = make_planner(
-        num_envs=1,
-        dim_actions=config.dim_actions,
-        model=model,
-        **config.train.test_worker.planner
-    )
+    planner = make_planner(model=model, **config.train.test_worker.planner)
     policy = sequential([frame_stacker, planner])
     policy.apply = chex.assert_max_traces(n=1)(policy.apply)
     policy.apply = jax.jit(policy.apply, backend="gpu")
-
-    traj_writer = make_traj_writer(1)
-    terminator = make_terminator(size=10)
+    gif_recorder = make_min_atar_gif_recorder(n_channels=6)
 
     final_law = sequential(
         [
             vec_env,
-            gif_recorder,
             policy,
-            traj_writer,
-            terminator,
+            gif_recorder,
+            make_traj_writer(1),
+            make_reward_terminator(5),
         ]
     )
     tape = make_tape(seed=config.seed)
@@ -252,23 +250,38 @@ ps = ray.remote(num_gpus=config.param_opt.num_gpus)(ParameterServer).remote(
 
 # %%
 train_workers = [
-    ray.remote(num_gpus=config.train.env_workers.num_gpus)(RolloutWorker).remote(
+    ray.remote(num_gpus=config.train.env_worker.num_gpus)(RolloutWorker).remote(
         partial(make_env_worker_universe, config), name=f"rollout_worker_{i}"
     )
-    for i in range(config.train.env_workers.num_workers)
+    for i in range(config.train.env_worker.num_workers)
 ]
 
 # %%
-for w in train_workers:
-    w.set.remote("params", ps.get_params.remote())
-    w.set.remote("state", ps.get_state.remote())
+test_worker = ray.remote(num_gpus=config.train.test_worker.num_gpus)(
+    RolloutWorker
+).remote(partial(make_test_worker_universe, config), name="test_worker")
 
-# %%
 rb = ray.remote(ReplayBuffer).remote(**config.replay)
 
-# %%
-ps.get_properties.remote()
-for _ in range(config.train.num_epochs):
+jb_logger = JAXBoardLoggerRemote.remote()
+terminal_logger = TerminalLoggerRemote.remote()
+
+for epoch in range(config.train.num_epochs):
+
+    for w in train_workers:
+        w.set.remote("params", ps.get_params.remote())
+        w.set.remote("state", ps.get_state.remote())
+
+    if epoch % config.train.test_worker.interval == 0:
+        test_worker.set.remote("params", ps.get_params.remote())
+        test_worker.set.remote("state", ps.get_state.remote())
+
+    # launch test
+    test_result = test_worker.run.remote()
+    terminal_logger.write.remote(test_result)
+    jb_logger.write.remote(test_result)
+
+    # generate train targets
     train_targets = []
     for w in train_workers:
         sample = w.run.remote()
@@ -278,55 +291,7 @@ for _ in range(config.train.num_epochs):
     ray.get(train_targets)
 
     batch = rb.get_train_targets_batch.remote(batch_size=config.train.batch_size)
-    # rb.get_stats.remote()
     ps.update.remote(batch, batch_size=config.train.batch_size)
-    for w in train_workers:
-        w.set.remote("params", ps.get_params.remote())
-        w.set.remote("state", ps.get_state.remote())
+    if epoch % config.param_opt.save_interval == 0:
+        ps.save.remote()
     ray.get(ps.log_tensorboard.remote())
-
-# with WallTimer():
-#     for epoch in range(config.num_epochs):
-#         for w in workers_env + workers_test + workers_reanalyze:
-#             w.set_params_and_state.remote(param_opt.get_params_and_state.remote())
-#         logger.debug(f"Get params and state scheduled, {len(traj_futures)=}")
-
-#         while traj_futures:
-#             traj, traj_futures = ray.wait(traj_futures)
-#             traj = traj[0]
-#             replay_buffer.add_trajs.remote(traj)
-
-#         if epoch >= config.epoch_train_start:
-#             logger.debug(f"Add trajs scheduled, {len(traj_futures)=}")
-#             train_batch = replay_buffer.get_train_targets_batch.remote(
-#                 config.big_batch_size
-#             )
-#             logger.debug(f"Get train targets batch scheduled, {len(traj_futures)=}")
-#             update_done = param_opt.update.remote(train_batch, config.batch_size)
-#             logger.debug(f"Update scheduled")
-
-#         jaxboard_logger.write.remote(replay_buffer.get_stats.remote())
-#         env_trajs = [w.run.remote(config.num_ticks_per_epoch) for w in workers_env]
-#         reanalyze_trajs = [w.run.remote(None) for w in workers_reanalyze]
-#         traj_futures = env_trajs + reanalyze_trajs
-
-#         if epoch % config.test_interval == 0:
-#             test_result = workers_test[0].run.remote(6 * 20)
-#             test_result_datum = convert_test_result_record.remote(test_result)
-#         logger.debug(f"test result scheduled.")
-
-#         for w in workers_reanalyze:
-#             reanalyze_input = replay_buffer.get_train_targets_batch.remote(
-#                 config.num_trajs_per_reanalyze_universe
-#                 * config.num_universes_per_reanalyze_worker
-#             )
-#             w.set_inputs.remote(reanalyze_input)
-#         logger.debug(f"reanalyze scheduled.")
-#         test_done = jaxboard_logger.write.remote(test_result_datum)
-
-#         param_opt.log.remote()
-#         logger.info(f"Epochs: {epoch + 1} / {config.num_epochs}")
-
-# logger.debug(ray.get(test_done))
-# ray.get(jaxboard_logger.close.remote())
-# ray.get(param_opt.close.remote())

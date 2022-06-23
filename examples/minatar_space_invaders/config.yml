@@ -3,7 +3,7 @@ discount: 0.997
 num_unroll_steps: 5
 num_td_steps: 100
 num_stacked_frames: 4
-dim_actions: 4
+dim_action: 4
 
 env:
   name: MinAtar:SpaceInvaders-v1
@@ -39,11 +39,11 @@ nn:
   spec_kwargs:
     obs_rows: ${env.num_rows}
     obs_cols: ${env.num_cols}
-    obs_channels: 24
+    obs_channels: 40
     repr_rows: 10
     repr_cols: 10
     repr_channels: 6
-    dim_action: ${dim_actions}
+    dim_action: ${dim_action}
     repr_tower_blocks: 8
     repr_tower_dim: 6
     pred_tower_blocks: 8
@@ -67,7 +67,7 @@ train:
     num_gpus: 0.2
     planner:
       num_envs: ${train.env_worker.num_envs}
-      dim_actions: ${dim_actions}
+      dim_action: ${dim_action}
       num_simulations: 20
       dirichlet_alpha: 0.2
       dirichlet_fraction: 0.2
@@ -84,7 +84,7 @@ train:
     num_gpus: 0.2
     planner:
       num_envs: 1
-      dim_actions: ${dim_actions}
+      dim_action: ${dim_action}
       num_simulations: 50
       dirichlet_fraction: 0.2
       dirichlet_alpha: 0.2

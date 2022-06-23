@@ -10,6 +10,7 @@ def make_tape(seed: int = 0):
     return tape
 
 
+# TODO: don't use context manager
 @contextlib.contextmanager
 def exclude(tape: dict, to_exclude: Set[str]):
     masked = {k: v for k, v in tape.items() if k not in to_exclude}

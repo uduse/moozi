@@ -1,5 +1,6 @@
 import collections
 import inspect
+import jax
 import jax.numpy as jnp
 import uuid
 from dataclasses import dataclass, field
@@ -460,19 +461,19 @@ def make_vec_env(env_name: str, num_envs: int) -> Law:
     def malloc():
         env_laws = [make_env_law(env_name) for _ in range(num_envs)]
         raw_envs: List[dm_env.Environment] = [env.malloc()["env"] for env in env_laws]
-        dim_actions = raw_envs[0].action_spec().num_values
+        dim_action = raw_envs[0].action_spec().num_values
         obs_shape = raw_envs[0].observation_spec().shape
         # make these allocations stacked from single env setting?
         action = np.full(num_envs, fill_value=0, dtype=jnp.int32)
         action_probs = jnp.full(
-            (num_envs, dim_actions), fill_value=0, dtype=jnp.float32
+            (num_envs, dim_action), fill_value=0, dtype=jnp.float32
         )
         obs = jnp.zeros((num_envs, *obs_shape), dtype=jnp.float32)
         is_first = jnp.full(num_envs, fill_value=False, dtype=bool)
         is_last = jnp.full(num_envs, fill_value=True, dtype=bool)
         to_play = jnp.zeros(num_envs, dtype=jnp.int32)
         reward = jnp.zeros(num_envs, dtype=jnp.float32)
-        legal_actions_mask = jnp.ones((num_envs, dim_actions), dtype=jnp.int32)
+        legal_actions_mask = jnp.ones((num_envs, dim_action), dtype=jnp.int32)
         return {
             "envs": raw_envs,
             "obs": obs,
@@ -502,25 +503,40 @@ def make_vec_env(env_name: str, num_envs: int) -> Law:
     )
 
 
-def make_batch_frame_stacker(
+def make_batch_stacker(
     num_envs: int,
     num_rows: int,
     num_cols: int,
     num_channels: int,
     num_stacked_frames: int,
+    dim_action: int,
 ):
     def malloc():
         return {
             "stacked_frames": jnp.zeros(
                 (num_envs, num_rows, num_cols, num_stacked_frames * num_channels),
                 dtype=jnp.float32,
-            )
+            ),
+            "stacked_actions": jnp.zeros(
+                (num_envs, num_rows, num_cols, num_stacked_frames * dim_action),
+                dtype=jnp.float32,
+            ),
         }
 
-    def apply(stacked_frames, obs):
-        ret = jnp.append(stacked_frames, obs, axis=-1)
-        ret = ret[..., np.array(obs.shape[-1]) :]
-        return {"stacked_frames": ret}
+    def apply(stacked_frames, stacked_actions, obs, action):
+        stacked_frames = jnp.append(stacked_frames, obs, axis=-1)
+        stacked_frames = stacked_frames[..., np.array(obs.shape[-1]) :]
+
+        action_bias_plane = jnp.expand_dims(
+            jax.nn.one_hot(action, dim_action) / dim_action, axis=[1, 2]
+        )
+        action_bias_plane = jnp.tile(
+            action_bias_plane, (1, obs.shape[1], obs.shape[2], 1)
+        )
+        stacked_actions = jnp.append(stacked_actions, action_bias_plane, axis=-1)
+        stacked_actions = stacked_actions[..., np.array(action_bias_plane.shape[-1]) :]
+
+        return {"stacked_frames": stacked_frames, "stacked_actions": stacked_actions}
 
     return Law(
         name=f"batch_frame_stacker({num_envs=}, {num_rows=}, {num_cols=}, {num_channels=}, {num_stacked_frames=})",

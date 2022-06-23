@@ -172,12 +172,13 @@ model = make_model(nn_arch_cls, nn_spec)
 def make_env_worker_universe(config):
     num_envs = config.train.env_worker.num_envs
     vec_env = make_vec_env(config.env.name, num_envs)
-    frame_stacker = make_batch_frame_stacker(
+    frame_stacker = make_batch_stacker(
         num_envs,
         config.env.num_rows,
         config.env.num_cols,
         config.env.num_channels,
         config.num_stacked_frames,
+        config.dim_action,
     )
     planner = make_planner(model=model, **config.train.env_worker.planner)
     policy = sequential([frame_stacker, planner])
@@ -203,7 +204,7 @@ def make_env_worker_universe(config):
 # %%
 def make_test_worker_universe(config):
     vec_env = make_vec_env(config.env.name, 1)
-    frame_stacker = make_batch_frame_stacker(
+    frame_stacker = make_batch_stacker(
         1,
         config.env.num_rows,
         config.env.num_cols,

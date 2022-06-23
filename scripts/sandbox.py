@@ -1,118 +1,81 @@
 # %%
-from PIL import Image
-import seaborn as sns
-from IPython.display import display
-import cv2
-import random
-from dataclasses import dataclass
+import jax
+from moozi.core.link import link
+from moozi.core.tape import include
+from moozi.laws import Law, get_keys, make_vec_env
+import jax.numpy as jnp
 import numpy as np
-import moozi as mz
-import dm_env
 
 
-@dataclass
-class MinAtarEnvLaw:
-    env: dm_env.Environment
-
-    def __call__(self, is_last, action: int):
-        if is_last:
-            timestep = self.env.reset()
-        else:
-            timestep = self.env.step(action)
-
-        if timestep.reward is None:
-            reward = 0.0
-        else:
-            reward = timestep.reward
-
-        legal_actions_mask = np.ones(self.env.action_space.n, dtype=np.float32)
-
-        return dict(
-            obs=np.array(timestep.observation, dtype=float),
-            is_first=timestep.first(),
-            is_last=timestep.last(),
-            to_play=0,
-            reward=reward,
-            legal_actions_mask=legal_actions_mask,
-        )
-
-
-def make_min_atar_gif_recorder(n_channels=6):
-    cmap = sns.color_palette("cubehelix", n_channels)
-    cmap.insert(0, (0, 0, 0))
-    cs = np.array([cmap[i] for i in range(n_channels + 1)])
-
+def make_batch_stacker(
+    num_envs: int,
+    num_rows: int,
+    num_cols: int,
+    num_channels: int,
+    num_stacked_frames: int,
+    dim_actions: int,
+):
     def malloc():
-        return {"images": []}
+        return {
+            "stacked_frames": jnp.zeros(
+                (num_envs, num_rows, num_cols, num_stacked_frames * num_channels),
+                dtype=jnp.float32,
+            ),
+            "stacked_actions": jnp.zeros(
+                (num_envs, num_rows, num_cols, num_stacked_frames * dim_actions),
+                dtype=jnp.float32,
+            ),
+        }
 
-    def forward(is_last, obs, images):
-        numerical_state = np.array(
-            np.amax(obs * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2) + 0.5,
-            dtype=int,
+    def apply(stacked_frames, stacked_actions, obs, action):
+        stacked_frames = jnp.append(stacked_frames, obs, axis=-1)
+        stacked_frames = stacked_frames[..., np.array(obs.shape[-1]) :]
+
+        action_bias_plane = jnp.expand_dims(
+            jax.nn.one_hot(action, dim_actions) / dim_actions, axis=[1, 2]
         )
-        rgbs = np.array(cs[numerical_state - 1] * 255, dtype=np.uint8)
-        img = Image.fromarray(rgbs)
-        img = img.resize((img.width * 10, img.height * 10), Image.BOX)
-        images = images + [img]
-        if is_last and images:
-            images[0].save(
-                "ani.gif",
-                save_all=True,
-                append_images=images[1:],
-                optimize=False,
-                duration=40,
-                # loop=0,
-            )
-            images = []
-        return {"images": images}
+        action_bias_plane = jnp.tile(
+            action_bias_plane, (1, obs.shape[1], obs.shape[2], 1)
+        )
+        stacked_actions = jnp.append(stacked_actions, action_bias_plane, axis=-1)
+        stacked_actions = stacked_actions[..., np.array(action_bias_plane.shape[-1]) :]
 
-    return malloc, forward
+        return {"stacked_frames": stacked_frames, "stacked_actions": stacked_actions}
 
-
-# %%
-env = mz.make_env("MinAtar:SpaceInvaders-v1")
-env_law = MinAtarEnvLaw(env, record_video=True)
-is_last = True
-
-env = mz.make_env("MinAtar:SpaceInvaders-v1")
-env_law = MinAtarEnvLaw(env, record_video=True)
-is_last = True
-images = []
-for _ in range(100):
-    action = random.choice(list(range(4)))
-    # Image.new("RGB", size=(200, 200))
-    obs, is_fisrt, is_last, to_play, reward, legal = env_law(is_last, action).values()
-    numerical_state = np.array(
-        np.amax(obs * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2) + 0.5,
-        dtype=int,
+    return Law(
+        name=f"batch_frame_stacker({num_envs=}, {num_rows=}, {num_cols=}, {num_channels=}, {num_stacked_frames=})",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
     )
-    rgbs = np.array(cs[numerical_state - 1] * 255, dtype=np.uint8)
-    img = Image.fromarray(rgbs)
-    img = img.resize((img.width * 10, img.height * 10), Image.BOX)
-    images.append(img)
 
-images[0].save(
-    "ani.gif",
-    save_all=True,
-    append_images=images[1:],
-    optimize=False,
-    duration=40,
-    # loop=0,
-)
+
 # %%
+stacker = make_batch_stacker(2, 10, 10, 6, 3, 4)
+vec_env = make_vec_env("MinAtar:SpaceInvaders-v1", 2)
+tape = {}
+tape.update(vec_env.malloc())
+tape.update(stacker.malloc())
 
-width = 200
-center = width // 2
-color_1 = (0, 0, 0)
-color_2 = (255, 255, 255)
-max_radius = int(center * 1.5)
-step = 8
+# %%
+import tree
 
-images[0].save(
-    "ani.gif",
-    save_all=True,
-    append_images=images[1:],
-    optimize=False,
-    duration=40,
-    loop=0,
-)
+tree.map_structure(lambda x: x.shape if hasattr(x, "shape") else None, tape)
+
+# %%
+for _ in range(10):
+    tape = vec_env.apply(tape)
+    tape = stacker.apply(tape)
+
+    with include(tape, {"stacked_actions"}) as tape_slice:
+        print(tree.map_structure(lambda x: x.shape, tape_slice))
+
+# %%
+sa = tape["stacked_actions"]
+sf = tape["stacked_frames"]
+print(sa.shape)
+print(sf.shape)
+
+# %%
+jnp.concatenate((sa, sf), axis=-1).shape
+# %%

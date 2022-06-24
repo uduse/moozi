@@ -50,13 +50,13 @@ def make_planner(
         params: hk.Params,
         state: hk.State,
         stacked_frames,
-        stacked_ations,
+        stacked_actions,
         random_key,
     ):
         is_training = False
         random_key, new_key = jax.random.split(random_key, 2)
         root_feats = RootFeatures(
-            obs=jnp.concatenate([stacked_frames, stacked_ations], axis=-1),
+            obs=jnp.concatenate([stacked_frames, stacked_actions], axis=-1),
             player=np.zeros((stacked_frames.shape[0]), dtype=np.int32),
         )
         nn_output, _ = model.root_inference(params, state, root_feats, is_training)
@@ -66,6 +66,7 @@ def make_planner(
             embedding=nn_output.hidden_state,
         )
         nn_output, _ = model.root_inference(params, state, root_feats, is_training)
+        # TODO: add legal actions mask
         policy_output = mctx.muzero_policy(
             params=params,
             rng_key=new_key,

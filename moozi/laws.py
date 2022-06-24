@@ -1,23 +1,28 @@
 import collections
 import inspect
-import jax
-import jax.numpy as jnp
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Set, Union
 
 import dm_env
+import jax
+import jax.numpy as jnp
 import numpy as np
+import seaborn as sns
+import tree
 from absl import logging
 from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from gym.wrappers.monitoring.video_recorder import VideoRecorder
 from loguru import logger
+from PIL import Image, ImageDraw, ImageFont
 
 from moozi.core import BASE_PLAYER, PolicyFeed, StepSample
 from moozi.core.env import make_env
-from moozi.core.link import link
+from moozi.core.link import link, unlink
 from moozi.core.tape import include
 from moozi.core.types import TrainTarget
+
 
 # TODO: make __call__ not a method but a static method or a function
 @link
@@ -54,8 +59,8 @@ class OpenSpielEnvLaw:
 
     _legal_actions_mask_padding: Optional[np.ndarray] = None
 
-    def __call__(self, obs, is_last, action: int):
-        if (obs is None) or is_last:
+    def __call__(self, frame, is_last, action: int):
+        if (frame is None) or is_last:
             timestep = self.env.reset()
         else:
             timestep = self.env.step([action])
@@ -83,7 +88,7 @@ class OpenSpielEnvLaw:
             self._legal_actions_mask_padding = np.ones_like(legal_actions_curr_player)
 
         return dict(
-            obs=self._get_observation(timestep),
+            frame=self._get_observation(timestep),
             is_first=timestep.first(),
             is_last=timestep.last(),
             to_play=to_play,
@@ -155,7 +160,7 @@ class AtariEnvLaw:
             self._video_recorder.capture_frame()
 
         return dict(
-            obs=timestep.observation,
+            frame=timestep.observation,
             is_first=timestep.first(),
             is_last=timestep.last(),
             to_play=0,
@@ -213,7 +218,7 @@ class ReanalyzeEnvLaw:
             input_buffer_update = tuple(input_buffer[1:])
 
         return dict(
-            obs=self._curr_traj.frame[self._curr_step],
+            frame=self._curr_traj.frame[self._curr_step],
             is_first=self._curr_traj.is_first[self._curr_step],
             is_last=self._curr_traj.is_last[self._curr_step],
             to_play=self._curr_traj.to_play[self._curr_step],
@@ -258,138 +263,16 @@ def exit_if_no_input(input_buffer):
 #     return dict(action=action)
 
 
-# @link
-# @dataclass
-# class TrajectoryOutputWriter:
-#     traj_buffer: list = field(default_factory=list)
-
-#     def __call__(
-#         self,
-#         obs,
-#         to_play,
-#         action,
-#         reward,
-#         root_value,
-#         is_first,
-#         is_last,
-#         action_probs,
-#         legal_actions_mask,
-#         output_buffer,
-#     ):
-#         if isinstance(obs, list):
-#             # assume perfect information (same obs for both players)
-#             obs = obs[BASE_PLAYER]
-
-#         step_record = StepSample(
-#             frame=obs,
-#             last_reward=reward,
-#             is_first=is_first,
-#             is_last=is_last,
-#             to_play=to_play,
-#             legal_actions_mask=legal_actions_mask,
-#             root_value=root_value,
-#             action_probs=action_probs,
-#             action=action,
-#             weight=1.0,
-#         ).cast()
-
-#         self.traj_buffer.append(step_record)
-
-#         if is_last:
-#             traj = stack_sequence_fields(self.traj_buffer)
-#             self.traj_buffer.clear()
-#             return dict(output_buffer=output_buffer + (traj,))
-
-
-# @link
-# def make_policy_feed(is_last, stacked_frames, legal_actions_mask, to_play):
-#     if not is_last:
-#         feed = PolicyFeed(
-#             stacked_frames=stacked_frames,
-#             to_play=to_play,
-#             legal_actions_mask=legal_actions_mask,
-#             random_key=None,
-#         )
-#         return dict(policy_feed=feed)
-
-
-@dataclass
-class TrajWriter:
-    num_envs: int
-
-    def malloc(self):
-        return {"step_samples": [[] for _ in range(self.num_envs)]}
-
-    def __call__(
-        self,
-        obs,
-        to_play,
-        action,
-        reward,
-        root_value,
-        is_first,
-        is_last,
-        action_probs,
-        legal_actions_mask,
-        step_samples,
-        output_buffer,
-    ):
-        for i in range(len(step_samples)):
-            step_sample = StepSample(
-                frame=obs[i],
-                last_reward=reward[i],
-                is_first=is_first[i],
-                is_last=is_last[i],
-                to_play=to_play[i],
-                legal_actions_mask=legal_actions_mask[i],
-                root_value=root_value[i],
-                action_probs=action_probs[i],
-                action=action[i],
-                weight=1.0,
-            )
-
-            step_samples[i].append(step_sample)
-            if is_last[i]:
-                traj = stack_sequence_fields(step_samples[i])
-                step_samples[i].clear()
-                output_buffer = output_buffer + (traj,)
-
-        return dict(output_buffer=output_buffer)
-
-
-@dataclass
-class BatchFrameStacker:
-    num_envs: int
-    num_rows: int
-    num_cols: int
-    num_channels: int
-    num_stacked_frames: int
-
-    def malloc(self):
-        return {
-            "stacked_frames": jnp.zeros(
-                (
-                    self.num_envs,
-                    self.num_rows,
-                    self.num_cols,
-                    self.num_stacked_frames * self.num_channels,
-                ),
-                dtype=jnp.float32,
-            )
-        }
-
-    def __call__(self, stacked_frames, obs):
-        ret = jnp.append(stacked_frames, obs, axis=-1)
-        ret = ret[..., np.array(obs.shape[-1]) :]
-        return {"stacked_frames": ret}
-
-
 @dataclass
 class Law:
     name: str
     malloc: Callable[[], Dict[str, Any]]
     apply: Callable[..., Dict[str, Any]]
     read: Set[str]
+
+    @staticmethod
+    def from_fn(fn):
+        return Law(fn.__name__, lambda: {}, link(fn), get_keys(fn))
 
 
 def sequential(laws: List[Law]) -> Law:
@@ -422,6 +305,7 @@ def get_keys(fn):
     return inspect.signature(fn).parameters.keys()
 
 
+# TODO: sort this out
 def make_env_law(env_name) -> Law:
     def malloc():
         return {"env": make_env(env_name)}
@@ -462,13 +346,11 @@ def make_vec_env(env_name: str, num_envs: int) -> Law:
         env_laws = [make_env_law(env_name) for _ in range(num_envs)]
         raw_envs: List[dm_env.Environment] = [env.malloc()["env"] for env in env_laws]
         dim_action = raw_envs[0].action_spec().num_values
-        obs_shape = raw_envs[0].observation_spec().shape
+        frame_shape = raw_envs[0].observation_spec().shape
         # make these allocations stacked from single env setting?
         action = np.full(num_envs, fill_value=0, dtype=jnp.int32)
-        action_probs = jnp.full(
-            (num_envs, dim_action), fill_value=0, dtype=jnp.float32
-        )
-        obs = jnp.zeros((num_envs, *obs_shape), dtype=jnp.float32)
+        action_probs = jnp.full((num_envs, dim_action), fill_value=0, dtype=jnp.float32)
+        frame = jnp.zeros((num_envs, *frame_shape), dtype=jnp.float32)
         is_first = jnp.full(num_envs, fill_value=False, dtype=bool)
         is_last = jnp.full(num_envs, fill_value=True, dtype=bool)
         to_play = jnp.zeros(num_envs, dtype=jnp.int32)
@@ -476,7 +358,7 @@ def make_vec_env(env_name: str, num_envs: int) -> Law:
         legal_actions_mask = jnp.ones((num_envs, dim_action), dtype=jnp.int32)
         return {
             "envs": raw_envs,
-            "obs": obs,
+            "frame": frame,
             "action": action,
             "action_probs": action_probs,
             "is_first": is_first,
@@ -503,8 +385,7 @@ def make_vec_env(env_name: str, num_envs: int) -> Law:
     )
 
 
-def make_batch_stacker(
-    num_envs: int,
+def make_stacker(
     num_rows: int,
     num_cols: int,
     num_channels: int,
@@ -514,32 +395,57 @@ def make_batch_stacker(
     def malloc():
         return {
             "stacked_frames": jnp.zeros(
-                (num_envs, num_rows, num_cols, num_stacked_frames * num_channels),
+                (num_rows, num_cols, num_stacked_frames * num_channels),
                 dtype=jnp.float32,
             ),
             "stacked_actions": jnp.zeros(
-                (num_envs, num_rows, num_cols, num_stacked_frames * dim_action),
+                (num_rows, num_cols, num_stacked_frames * dim_action),
                 dtype=jnp.float32,
             ),
         }
 
-    def apply(stacked_frames, stacked_actions, obs, action):
-        stacked_frames = jnp.append(stacked_frames, obs, axis=-1)
-        stacked_frames = stacked_frames[..., np.array(obs.shape[-1]) :]
+    def apply(stacked_frames, stacked_actions, frame, action):
+        stacked_frames = jnp.append(stacked_frames, frame, axis=-1)
+        stacked_frames = stacked_frames[..., np.array(frame.shape[-1]) :]
 
-        action_bias_plane = jnp.expand_dims(
-            jax.nn.one_hot(action, dim_action) / dim_action, axis=[1, 2]
-        )
-        action_bias_plane = jnp.tile(
-            action_bias_plane, (1, obs.shape[1], obs.shape[2], 1)
-        )
-        stacked_actions = jnp.append(stacked_actions, action_bias_plane, axis=-1)
-        stacked_actions = stacked_actions[..., np.array(action_bias_plane.shape[-1]) :]
+        action_plane = jax.nn.one_hot(action, dim_action)
+        action_plane = jnp.expand_dims(action_plane / dim_action, axis=[0, 1])
+        action_plane = jnp.tile(action_plane, (frame.shape[0], frame.shape[1], 1))
+        stacked_actions = jnp.append(stacked_actions, action_plane, axis=-1)
+        stacked_actions = stacked_actions[..., np.array(action_plane.shape[-1]) :]
 
         return {"stacked_frames": stacked_frames, "stacked_actions": stacked_actions}
 
     return Law(
-        name=f"batch_frame_stacker({num_envs=}, {num_rows=}, {num_cols=}, {num_channels=}, {num_stacked_frames=})",
+        name=f"batch_frame_stacker({num_rows=}, {num_cols=}, {num_channels=}, {num_stacked_frames=})",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )
+
+
+def make_batch_stacker(
+    batch_size: int,
+    num_rows: int,
+    num_cols: int,
+    num_channels: int,
+    num_stacked_frames: int,
+    dim_action: int,
+):
+    stacker = make_stacker(
+        num_rows, num_cols, num_channels, num_stacked_frames, dim_action
+    )
+
+    def malloc():
+        return tree.map_structure(
+            lambda x: jnp.repeat(x[None, ...], batch_size, axis=0),
+            stacker.malloc(),
+        )
+
+    apply = jax.vmap(unlink(stacker.apply))
+
+    return Law(
+        name="h",
         malloc=malloc,
         apply=link(apply),
         read=get_keys(apply),
@@ -554,7 +460,7 @@ def make_traj_writer(
         return {"step_samples": [[] for _ in range(num_envs)]}
 
     def apply(
-        obs,
+        frame,
         to_play,
         action,
         reward,
@@ -568,7 +474,7 @@ def make_traj_writer(
     ):
         for i in range(num_envs):
             step_sample = StepSample(
-                frame=obs[i],
+                frame=frame[i],
                 last_reward=reward[i],
                 is_first=is_first[i],
                 is_last=is_last[i],
@@ -654,6 +560,70 @@ def make_reward_terminator(size: int):
 
     return Law(
         name=f"reward_terminator{size=})",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )
+
+
+def make_min_atar_gif_recorder(n_channels=6):
+    cmap = sns.color_palette("cubehelix", n_channels)
+    cmap.insert(0, (0, 0, 0))
+    cs = np.array([cmap[i] for i in range(n_channels + 1)])
+
+    def malloc():
+        Path("gifs").mkdir(parents=True, exist_ok=True)
+        return {"images": []}
+
+    def apply(
+        is_last,
+        obs,
+        images: List[Image.Image],
+        root_value,
+        q_values,
+        action_probs,
+        action,
+    ):
+        numerical_state = np.array(
+            np.amax(obs[0] * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2)
+            + 0.5,
+            dtype=int,
+        )
+        rgbs = np.array(cs[numerical_state - 1] * 255, dtype=np.uint8)
+        img = Image.fromarray(rgbs)
+        img = img.resize((img.width * 40, img.height * 40), Image.NEAREST)
+        draw = ImageDraw.Draw(img)
+        with np.printoptions(precision=2, suppress=True):
+            content = (
+                f"A {action}\n"
+                f"V {root_value[0]}\n"
+                f"π {action_probs[0]}\n"
+                f"Q {q_values[0]}\n"
+            )
+        font = ImageFont.truetype("courier.ttf", 14)
+        draw.text((0, 0), content, fill="black", font=font)
+        images = images + [img]
+        if is_last[0] and images:
+            counter = 0
+            while gif_fpath := (Path("gifs") / f"{counter}.gif"):
+                if gif_fpath.exists():
+                    counter += 1
+                else:
+                    break
+
+            images[0].save(
+                str(gif_fpath),
+                save_all=True,
+                append_images=images[1:],
+                optimize=False,
+                duration=40,
+            )
+            logger.info("gif saved to " + str(gif_fpath))
+            images = []
+        return {"images": images}
+
+    return Law(
+        name=f"min_atar_gif_recorder({n_channels=})",
         malloc=malloc,
         apply=link(apply),
         read=get_keys(apply),

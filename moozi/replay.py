@@ -8,6 +8,7 @@ from typing import Any, Deque, List, Optional, Sequence, TypeVar, Union
 from queue import Queue, Empty
 
 import chex
+import jax
 import numpy as np
 import ray
 from acme.utils import tree_utils
@@ -15,6 +16,7 @@ from loguru import logger
 
 import moozi as mz
 from moozi.core import TrajectorySample, TrainTarget
+from moozi.laws import make_batch_stacker, make_stacker
 
 
 @dataclass
@@ -58,6 +60,7 @@ class ReplayBuffer:
 
     def process_trajs(self, trajs: List[TrajectorySample]):
         for traj in trajs:
+            chex.assert_rank(traj.last_reward, 1)
             for i in range(len(traj.last_reward) - 1):
                 target = make_target_from_traj(
                     traj,
@@ -97,30 +100,49 @@ class ReplayBuffer:
             ret["mean_value_diff"] = mean_value_diff
         if self._episode_return:
             ret["episode_return"] = np.mean(self._episode_return)
+        ret["sampled_count"] = [item.num_sampled for item in self._train_targets]
         return ret
 
     def sample_targets(self, batch_size: int) -> List[ReplayEntry]:
         if self.sampling_strategy == "uniform":
-            batch = np.random.choice(list(self._train_targets), size=20).tolist()
+            weights = np.ones(len(self._train_targets))
         elif self.sampling_strategy == "ranking":
-            priorities = np.array([item.priority for item in self._train_targets])
-            ranks = np.argsort(-priorities)
-            weights = 1 / (ranks + 1)
-            weights_sum = np.sum(weights)
-            weights /= weights_sum
-            indices = np.arange(priorities.size)
-            batch_indices = np.random.choice(indices, size=batch_size, p=weights)
-            importance_sampling_ratio = (1 / weights[batch_indices]) / weights.size
-            batch = [self._train_targets[i] for i in batch_indices]
-            for i, target in enumerate(batch):
-                target.payload = target.payload._replace(
-                    importance_sampling_ratio=importance_sampling_ratio[i]
-                )
+            weights = self._compute_ranking_weights()
+        elif self.sampling_strategy == "hybrid":
+            ranking_weights = self._compute_ranking_weights()
+            freq_weights = self._compute_freq_weights()
+            weights = ranking_weights * freq_weights
+            weights /= np.sum(weights)
+        else:
+            raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")
+
+        indices = np.arange(len(self._train_targets))
+        batch_indices = np.random.choice(indices, size=batch_size, p=weights)
+        batch = [self._train_targets[i] for i in batch_indices]
+        is_ratio = (1 / weights[batch_indices]) / weights.size
+        for i, target in enumerate(batch):
+            target.payload = target.payload._replace(
+                importance_sampling_ratio=is_ratio[i]
+            )
         for item in batch:
             item.num_sampled += 1
         return batch
 
+    def _compute_freq_weights(self):
+        counts = np.array([item.num_sampled for item in self._train_targets])
+        weights = 1 / (counts + 1)
+        weights /= np.sum(weights)
+        return weights
 
+    def _compute_ranking_weights(self):
+        priorities = np.array([item.priority for item in self._train_targets])
+        ranks = np.argsort(-priorities)
+        weights = 1 / (ranks + 1)
+        weights /= np.sum(weights)
+        return weights
+
+
+# TODO: maybe make this a class?
 def make_target_from_traj(
     sample: TrajectorySample,
     start_idx,
@@ -134,7 +156,28 @@ def make_target_from_traj(
 
     last_step_idx = sample.is_last.argmax()
 
-    stacked_frames = _get_stacked_frames(sample, start_idx, num_stacked_frames)
+    _, num_rows, num_cols, num_channels = sample.frame.shape
+    dim_action = sample.action_probs.shape[-1]
+    stacker = make_stacker(
+        num_rows=num_rows,
+        num_cols=num_cols,
+        num_channels=num_channels,
+        num_stacked_frames=num_stacked_frames,
+        dim_action=dim_action,
+    )
+
+    frame_idx_lower = max(start_idx - num_stacked_frames + 1, 0)
+    frame_idx_upper = start_idx + 1
+
+    tape = stacker.malloc()
+    for i in range(frame_idx_lower, frame_idx_upper):
+        tape["frame"] = sample.frame[i]
+        tape["action"] = sample.action[i]
+        tape = stacker.apply(tape)
+    stacked_frames = tape["stacked_frames"]
+    stacked_actions = tape["stacked_actions"]
+    obs = np.concatenate([stacked_frames, stacked_actions], axis=-1)
+
     action = _get_action(sample, start_idx, num_unroll_steps)
 
     unrolled_data = []
@@ -150,7 +193,7 @@ def make_target_from_traj(
     unrolled_data_stacked = tree_utils.stack_sequence_fields(unrolled_data)
 
     return TrainTarget(
-        stacked_frames=stacked_frames,
+        obs=obs,
         action=action,
         n_step_return=unrolled_data_stacked[0],
         last_reward=unrolled_data_stacked[1],
@@ -166,21 +209,6 @@ def _get_action(sample: TrajectorySample, start_idx, num_unroll_steps):
     if num_actions_to_pad > 0:
         action = np.concatenate((action, np.full(num_actions_to_pad, -1)))
     return action
-
-
-def _get_stacked_frames(sample: TrajectorySample, start_idx, num_stacked_frames):
-    _, height, width, num_channels = sample.frame.shape
-    frame_idx_lower = max(start_idx - num_stacked_frames + 1, 0)
-    stacked_frames = sample.frame[frame_idx_lower : start_idx + 1]
-    num_frames_to_pad = num_stacked_frames - stacked_frames.shape[0]
-    stacked_frames = stacked_frames.reshape((height, width, -1))
-    if num_frames_to_pad > 0:
-        padding = np.zeros((height, width, num_frames_to_pad * num_channels))
-        stacked_frames = np.concatenate([padding, stacked_frames], axis=-1)
-    chex.assert_shape(
-        stacked_frames, (height, width, num_stacked_frames * num_channels)
-    )
-    return stacked_frames
 
 
 def _get_n_step_return(

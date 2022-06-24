@@ -54,14 +54,14 @@ def _compute_prior_kl(
     orig_out, _ = model.root_inference(
         orig_params,
         state,
-        RootFeatures(obs=batch.stacked_frames, player=jnp.array(0)),
+        RootFeatures(obs=batch.obs, player=jnp.array(0)),
         is_training,
     )
     orig_logits = orig_out.policy_logits
     new_out, _ = model.root_inference(
         new_params,
         state,
-        RootFeatures(obs=batch.stacked_frames, player=jnp.array(0)),
+        RootFeatures(obs=batch.obs, player=jnp.array(0)),
         is_training,
     )
     new_logits = new_out.policy_logits
@@ -186,7 +186,7 @@ class MuZeroLossWithScalarTransform(LossFn):
     ) -> Tuple[chex.ArrayDevice, Any]:
         chex.assert_rank(
             [
-                batch.stacked_frames,
+                batch.obs,
                 batch.action,
                 batch.n_step_return,
                 batch.last_reward,
@@ -196,7 +196,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         )
         chex.assert_equal_shape_prefix(
             [
-                batch.stacked_frames,
+                batch.obs,
                 batch.action,
                 batch.n_step_return,
                 batch.last_reward,
@@ -204,12 +204,12 @@ class MuZeroLossWithScalarTransform(LossFn):
             ],
             prefix_len=1,
         )  # assert same batch dim
-        batch_size = batch.stacked_frames.shape[0]
+        batch_size = batch.obs.shape[0]
 
         init_inf_features = RootFeatures(
-            obs=batch.stacked_frames,
+            obs=batch.obs,
             # TODO: actually pass player
-            player=jnp.ones((batch.stacked_frames.shape[0], 1)),
+            player=jnp.ones((batch_size, 1)),
         )
         is_training = True
         network_output, state = model.root_inference(

@@ -151,6 +151,9 @@ class ParameterServer:
         )
         self._last_step_data = []
 
+        logger.remove()
+        logger.add(sys.stderr, level="SUCCESS")
+
     def update(self, big_batch: TrainTarget, batch_size: int):
         if len(big_batch) == 0:
             logger.error("Batch is empty, update() skipped.")

@@ -93,7 +93,7 @@ class NNArchitecture(hk.Module):
         super().__init__()
         self.spec = spec
 
-    def _repr_net(self, stacked_frames: jnp.ndarray, is_training: bool):
+    def _repr_net(self, obs: jnp.ndarray, is_training: bool):
         # TODO: add player info
         raise NotImplementedError
 

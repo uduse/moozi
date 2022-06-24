@@ -20,6 +20,6 @@ def exclude(tape: dict, to_exclude: Set[str]):
 @contextlib.contextmanager
 def include(tape: dict, to_include: Set[str]):
     if not all(k in tape for k in to_include):
-        raise ValueError(f"{tape.keys()} does not contain key {to_include}")
+        raise ValueError(f"{tape.keys()} does not contain key {to_include - set(tape.keys())}")
     masked = {k: v for k, v in tape.items() if k in to_include}
     yield masked

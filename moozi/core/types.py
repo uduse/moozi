@@ -58,7 +58,7 @@ class TrajectorySample(StepSample):
 class TrainTarget(NamedTuple):
     # right now we only support perfect information games
     # so stacked_frames is a history of symmetric observations
-    stacked_frames: np.ndarray
+    obs: np.ndarray
 
     # action taken in in each step, -1 means no action taken (terminal state)
     action: np.ndarray
@@ -84,7 +84,7 @@ class TrainTarget(NamedTuple):
 
     def cast(self) -> "TrainTarget":
         return TrainTarget(
-            stacked_frames=np.asarray(self.stacked_frames, dtype=np.float32),
+            obs=np.asarray(self.obs, dtype=np.float32),
             action=np.asarray(self.action, dtype=np.int32),
             n_step_return=np.asarray(self.n_step_return, dtype=np.float32),
             last_reward=np.asarray(self.last_reward, dtype=np.float32),

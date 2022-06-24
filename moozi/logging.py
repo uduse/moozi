@@ -169,7 +169,7 @@ class TerminalLogger(Logger):
         self._steps += 1
 
     def _write_now_datum(self, datum: LogDatum):
-        prefixed_key = self._name + ":" + datum.tag
+        prefixed_key = self._name + "/" + datum.tag
         if isinstance(datum, LogText):
             print(f"{prefixed_key} = {datum.text}")
         elif isinstance(datum, LogScalar):

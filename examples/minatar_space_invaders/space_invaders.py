@@ -71,70 +71,6 @@ class Universe:
 
 
 # %%
-def make_min_atar_gif_recorder(n_channels=6):
-    cmap = sns.color_palette("cubehelix", n_channels)
-    cmap.insert(0, (0, 0, 0))
-    cs = np.array([cmap[i] for i in range(n_channels + 1)])
-
-    def malloc():
-        Path("gifs").mkdir(parents=True, exist_ok=True)
-        return {"images": []}
-
-    def apply(
-        is_last,
-        obs,
-        images: List[Image.Image],
-        root_value,
-        q_values,
-        action_probs,
-        action,
-    ):
-        numerical_state = np.array(
-            np.amax(obs[0] * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2)
-            + 0.5,
-            dtype=int,
-        )
-        rgbs = np.array(cs[numerical_state - 1] * 255, dtype=np.uint8)
-        img = Image.fromarray(rgbs)
-        img = img.resize((img.width * 40, img.height * 40), Image.NEAREST)
-        draw = ImageDraw.Draw(img)
-        content = (
-            f"A {str(action)}\n"
-            f"V {str(np.round(root_value[0], 2))}\n"
-            f"π {str(np.round(action_probs[0], 2))}\n"
-            f"Q {str(np.round(q_values[0], 2))}\n"
-        )
-        font = ImageFont.truetype("courier.ttf", 14)
-        draw.text((0, 0), content, fill="black", font=font)
-        images = images + [img]
-        if is_last[0] and images:
-            counter = 0
-            while gif_fpath := (Path("gifs") / f"{counter}.gif"):
-                if gif_fpath.exists():
-                    counter += 1
-                else:
-                    break
-
-            images[0].save(
-                str(gif_fpath),
-                save_all=True,
-                append_images=images[1:],
-                optimize=False,
-                duration=40,
-            )
-            logger.info("gif saved to " + str(gif_fpath))
-            images = []
-        return {"images": images}
-
-    return Law(
-        name=f"min_atar_gif_recorder({n_channels=})",
-        malloc=malloc,
-        apply=link(apply),
-        read=get_keys(apply),
-    )
-
-
-# %%
 class RolloutWorker:
     def __init__(
         self, universe_factory: Callable, name: str = "rollout_worker"
@@ -188,9 +124,21 @@ def make_env_worker_universe(config):
     traj_writer = make_traj_writer(num_envs)
     terminator = make_terminator(num_envs)
 
+    def _termination_penalty(is_last, reward):
+        reward_overwrite = jax.lax.cond(
+            is_last,
+            lambda: reward - 1,
+            lambda: reward,
+        )
+        return {"reward": reward_overwrite}
+
+    penalty = Law.from_fn(_termination_penalty)
+    penalty.apply = link(jax.vmap(unlink(penalty.apply)))
+
     final_law = sequential(
         [
             vec_env,
+            penalty,
             policy,
             traj_writer,
             terminator,
@@ -210,6 +158,7 @@ def make_test_worker_universe(config):
         config.env.num_cols,
         config.env.num_channels,
         config.num_stacked_frames,
+        config.dim_action,
     )
     planner = make_planner(model=model, **config.train.test_worker.planner)
     policy = sequential([frame_stacker, planner])
@@ -231,7 +180,10 @@ def make_test_worker_universe(config):
     return Universe(tape, final_law)
 
 
-# %%
+def make_reanalyze_universe(config):
+    pass
+
+
 def training_suite_factory(config):
     return partial(
         make_training_suite,
@@ -288,11 +240,13 @@ for epoch in range(config.train.num_epochs):
         sample = w.run.remote()
         train_targets.append(rb.add_trajs.remote(sample))
 
-    # sync
-    ray.get(train_targets)
-
     batch = rb.get_train_targets_batch.remote(batch_size=config.train.batch_size)
-    ps.update.remote(batch, batch_size=config.train.batch_size)
+    ps_update_result = ps.update.remote(batch, batch_size=config.train.batch_size)
     if epoch % config.param_opt.save_interval == 0:
         ps.save.remote()
+
+    # sync
     ray.get(ps.log_tensorboard.remote())
+    ray.get(terminal_logger.write.remote(ps_update_result))
+    ray.get(jb_logger.write.remote(rb.get_stats.remote()))
+    ray.get(train_targets)

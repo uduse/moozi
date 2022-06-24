@@ -16,7 +16,7 @@ env:
 replay:
   use_remote: true
   max_size: 1_000_000
-  sampling_strategy: ranking
+  sampling_strategy: hybrid
   num_unroll_steps: ${num_unroll_steps}
   num_td_steps: ${num_td_steps}
   num_stacked_frames: ${num_stacked_frames}
@@ -52,25 +52,45 @@ nn:
     dyna_tower_dim: 6
     dyna_state_blocks: 8
 
+# debugging
+# nn:
+#   arch_cls: moozi.nn.ResNetArchitecture
+#   spec_cls: moozi.nn.ResNetSpec
+#   spec_kwargs:
+#     obs_rows: ${env.num_rows}
+#     obs_cols: ${env.num_cols}
+#     obs_channels: 40
+#     repr_rows: 10
+#     repr_cols: 10
+#     repr_channels: 2
+#     dim_action: ${dim_action}
+#     repr_tower_blocks: 2
+#     repr_tower_dim: 1
+#     pred_tower_blocks: 2
+#     pred_tower_dim: 1
+#     dyna_tower_blocks: 2
+#     dyna_tower_dim: 1
+#     dyna_state_blocks: 2
+
 train:
   enabled: true
   num_epochs: 2000
   sample_update_ratio: 1.0
   batch_size: 256
   lr: 5.0e-3
-  weight_decay: 5.0e-2
+  weight_decay: 5.0e-3
 
   env_worker:
-    num_workers: 2
-    num_envs: 6
+    num_workers: 6
+    num_envs: 5
     num_cpus: 1
     num_gpus: 0.2
     planner:
       num_envs: ${train.env_worker.num_envs}
       dim_action: ${dim_action}
-      num_simulations: 20
-      dirichlet_alpha: 0.2
-      dirichlet_fraction: 0.2
+      num_simulations: 10
+      dirichlet_alpha: 0.5
+      dirichlet_fraction: 0.5
       temperature: 1.0
 
   reanalyze_worker:
@@ -85,7 +105,7 @@ train:
     planner:
       num_envs: 1
       dim_action: ${dim_action}
-      num_simulations: 50
+      num_simulations: 20
       dirichlet_fraction: 0.2
       dirichlet_alpha: 0.2
       temperature: 0.5

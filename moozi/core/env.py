@@ -24,7 +24,7 @@ import open_spiel
 from absl import logging
 
 
-class TransformObservationWrapper(EnvironmentWrapper):
+class TransformFrameWrapper(EnvironmentWrapper):
     """Wrapper which converts environments from double- to single-precision."""
 
     def __init__(self, environment: dm_env.Environment, transform_fn):
@@ -75,27 +75,27 @@ def make_openspiel_env_and_spec(env_name):
         game_params = raw_env.game.get_parameters()
         num_rows, num_cols = game_params["rows"], game_params["columns"]
 
-        def transform_obs(obs):
-            return obs.reshape((num_rows, num_cols, 1))
+        def transform_frame(frame):
+            return frame.reshape((num_rows, num_cols, 1))
 
     elif raw_env.name == "tic_tac_toe":
 
-        def transform_obs(obs):
-            return obs.reshape((3, 3, 3)).swapaxes(0, 2)
+        def transform_frame(frame):
+            return frame.reshape((3, 3, 3)).swapaxes(0, 2)
 
     elif raw_env.name == "go":
 
         board_size = raw_env.game.get_parameters()["board_size"]
 
-        def transform_obs(obs):
-            return obs.reshape((board_size, board_size, 4))
+        def transform_frame(frame):
+            return frame.reshape((board_size, board_size, 4))
 
     else:
         raise ValueError(f"Unknown OpenSpiel environment: {raw_env.name}")
 
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
-    env = TransformObservationWrapper(env, transform_obs)
+    env = TransformFrameWrapper(env, transform_frame)
     env_spec = make_environment_spec(env)
 
     logging.set_verbosity(prev_verbosity)

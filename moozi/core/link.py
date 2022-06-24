@@ -35,6 +35,11 @@ def link(fn):
     return _wrapper
 
 
+def unlink(fn):
+    assert hasattr(fn, "__orig_fn"), "fn must be a linked function"
+    return fn.__orig_fn
+
+
 def _link_class(cls):
     @dataclass
     class _LinkClassWrapper:

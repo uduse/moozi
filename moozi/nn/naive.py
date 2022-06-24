@@ -31,8 +31,8 @@ class NaiveArchitecture(NNArchitecture):
 
         # broadcast to self.spec.repr_rows and self.spec.repr_cols dim
         action_one_hot = jnp.expand_dims(action_one_hot, axis=[1, 2])
-        action_one_hot = action_one_hot.tile(
-            (1, self.spec.repr_rows, self.spec.repr_cols, 1)
+        action_one_hot = jnp.tile(
+            action_one_hot, (1, self.spec.repr_rows, self.spec.repr_cols, 1)
         )
 
         state_action_repr = jnp.concatenate((hidden_state, action_one_hot), axis=-1)

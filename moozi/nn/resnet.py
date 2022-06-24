@@ -64,7 +64,7 @@ class ResNetArchitecture(NNArchitecture):
         assert isinstance(self.spec, ResNetSpec), "spec must be of type ResNetSpec"
         self.spec: ResNetSpec
 
-    def _repr_net(self, stacked_frames: jnp.ndarray, is_training: bool):
+    def _repr_net(self, obs: jnp.ndarray, is_training: bool):
         """
 
         Downsampling described in the paper:
@@ -86,11 +86,11 @@ class ResNetArchitecture(NNArchitecture):
         """
         tower_dim = self.spec.repr_tower_dim
         chex.assert_shape(
-            stacked_frames,
+            obs,
             (None, self.spec.obs_rows, self.spec.obs_cols, self.spec.obs_channels),
         )
 
-        x = stacked_frames
+        x = obs
 
         # Downsample
         obs_resolution = (self.spec.obs_rows, self.spec.obs_cols)
@@ -187,8 +187,8 @@ class ResNetArchitecture(NNArchitecture):
         action_one_hot = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
         # broadcast to self.spec.repr_rows and self.spec.repr_cols dim
         action_one_hot = jnp.expand_dims(action_one_hot, axis=[1, 2])
-        action_one_hot = action_one_hot.tile(
-            (1, self.spec.repr_rows, self.spec.repr_cols, 1)
+        action_one_hot = jnp.tile(
+            action_one_hot, (1, self.spec.repr_rows, self.spec.repr_cols, 1)
         )
         chex.assert_equal_shape_prefix([hidden_state, action_one_hot], prefix_len=3)
 

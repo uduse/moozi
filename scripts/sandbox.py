@@ -4,6 +4,7 @@ import tree
 import jax
 import moozi as mz
 from moozi.core.link import link, unlink
+from moozi.core.scalar_transform import make_scalar_transform
 from moozi.core.tape import include
 from moozi.laws import (
     Law,
@@ -15,21 +16,13 @@ from moozi.laws import (
 import jax.numpy as jnp
 import numpy as np
 
-# %%
-def _termination_penalty(is_last, reward):
-    reward_overwrite = jax.lax.cond(
-        is_last,
-        lambda: reward - 1,
-        lambda: reward,
-    )
-    return {"reward": reward_overwrite}
-
-
-penalty = Law.from_fn(_termination_penalty)
-f = jax.vmap(unlink(penalty.apply))
 
 # %%
-f(jnp.array([True, False]))
-
+st = make_scalar_transform(-10, 10)
+logits = np.zeros(21)
+logits[-1] = 1
+print(logits)
+probs = jax.nn.softmax(logits.reshape(1, -1))
+st.inverse_transform(probs)
 
 # %%

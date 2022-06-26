@@ -16,7 +16,8 @@ def make_paritial_recurr_fn(model, state):
         nn_output, _ = model.trans_inference(params, state, trans_feats, is_training)
         rnn_output = mctx.RecurrentFnOutput(
             reward=nn_output.reward,
-            discount=jnp.ones_like(nn_output.reward),
+            # TODO: set discount here
+            discount=jnp.full_like(nn_output.reward, fill_value=0.99),
             prior_logits=nn_output.policy_logits,
             value=nn_output.value,
         )
@@ -65,7 +66,6 @@ def make_planner(
             value=nn_output.value,
             embedding=nn_output.hidden_state,
         )
-        nn_output, _ = model.root_inference(params, state, root_feats, is_training)
         # TODO: add legal actions mask
         policy_output = mctx.muzero_policy(
             params=params,

@@ -124,22 +124,11 @@ def make_env_worker_universe(config):
     traj_writer = make_traj_writer(num_envs)
     terminator = make_terminator(num_envs)
 
-    def _termination_penalty(is_last, reward):
-        reward_overwrite = jax.lax.cond(
-            is_last,
-            lambda: reward - 1,
-            lambda: reward,
-        )
-        return {"reward": reward_overwrite}
-
-    penalty = Law.from_fn(_termination_penalty)
-    penalty.apply = link(jax.vmap(unlink(penalty.apply)))
-
     final_law = sequential(
         [
             vec_env,
-            penalty,
             policy,
+            make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
             traj_writer,
             terminator,
         ]
@@ -151,26 +140,27 @@ def make_env_worker_universe(config):
 
 # %%
 def make_test_worker_universe(config):
-    vec_env = make_vec_env(config.env.name, 1)
-    frame_stacker = make_batch_stacker(
-        1,
-        config.env.num_rows,
-        config.env.num_cols,
-        config.env.num_channels,
-        config.num_stacked_frames,
-        config.dim_action,
+    policy = sequential(
+        [
+            make_batch_stacker(
+                1,
+                config.env.num_rows,
+                config.env.num_cols,
+                config.env.num_channels,
+                config.num_stacked_frames,
+                config.dim_action,
+            ),
+            make_planner(model=model, **config.train.test_worker.planner),
+        ]
     )
-    planner = make_planner(model=model, **config.train.test_worker.planner)
-    policy = sequential([frame_stacker, planner])
     policy.apply = chex.assert_max_traces(n=1)(policy.apply)
     policy.apply = jax.jit(policy.apply, backend="gpu")
-    gif_recorder = make_min_atar_gif_recorder(n_channels=6)
 
     final_law = sequential(
         [
-            vec_env,
+            make_vec_env(config.env.name, 1),
             policy,
-            gif_recorder,
+            make_min_atar_gif_recorder(n_channels=6, root_dir="test_worker_gifs"),
             make_traj_writer(1),
             make_reward_terminator(5),
         ]
@@ -218,21 +208,21 @@ rb = ray.remote(ReplayBuffer).remote(**config.replay)
 
 jb_logger = JAXBoardLoggerRemote.remote()
 terminal_logger = TerminalLoggerRemote.remote()
-
-for epoch in range(config.train.num_epochs):
+start_training = False
+for epoch in range(1, config.train.num_epochs + 1):
+    logger.info(f"Epoch {epoch}")
 
     for w in train_workers:
         w.set.remote("params", ps.get_params.remote())
         w.set.remote("state", ps.get_state.remote())
 
     if epoch % config.train.test_worker.interval == 0:
+        # launch test
         test_worker.set.remote("params", ps.get_params.remote())
         test_worker.set.remote("state", ps.get_state.remote())
-
-    # launch test
-    test_result = test_worker.run.remote()
-    terminal_logger.write.remote(test_result)
-    jb_logger.write.remote(test_result)
+        test_result = test_worker.run.remote()
+        terminal_logger.write.remote(test_result)
+        jb_logger.write.remote(test_result)
 
     # generate train targets
     train_targets = []
@@ -240,13 +230,34 @@ for epoch in range(config.train.num_epochs):
         sample = w.run.remote()
         train_targets.append(rb.add_trajs.remote(sample))
 
-    batch = rb.get_train_targets_batch.remote(batch_size=config.train.batch_size)
-    ps_update_result = ps.update.remote(batch, batch_size=config.train.batch_size)
+    if not start_training:
+        rb_size = ray.get(rb.get_targets_size.remote())
+        start_training = (rb_size >= config.replay.min_size)
+        if start_training:
+            logger.info(f"Start training ...")
+
+    if start_training:
+        desired_num_updates = (
+            config.train.sample_update_ratio
+            * ray.get(rb.get_targets_size.remote())
+            / config.train.batch_size
+        )
+        num_updates = int(desired_num_updates - ray.get(ps.get_training_steps.remote()))
+        if num_updates > 0:
+            logger.info(f"Updating {num_updates} times")
+            for i in range(num_updates):
+                batch = rb.get_train_targets_batch.remote(
+                    batch_size=config.train.batch_size
+                )
+                ps_update_result = ps.update.remote(
+                    batch, batch_size=config.train.batch_size
+                )
+                terminal_logger.write.remote(ps_update_result)
+
     if epoch % config.param_opt.save_interval == 0:
         ps.save.remote()
 
     # sync
     ray.get(ps.log_tensorboard.remote())
-    ray.get(terminal_logger.write.remote(ps_update_result))
     ray.get(jb_logger.write.remote(rb.get_stats.remote()))
     ray.get(train_targets)

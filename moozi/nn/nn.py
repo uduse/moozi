@@ -224,7 +224,9 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
 
         def module_walk(root_feats, trans_feats):
             root_out = module.root_inference(root_feats, is_training=True)
+            root_out = module.root_inference(root_feats, is_training=False)
             trans_out = module.trans_inference(trans_feats, is_training=True)
+            trans_out = module.trans_inference(trans_feats, is_training=False)
             return (trans_out, root_out)
 
         return module_walk, (module.root_inference, module.trans_inference)
@@ -235,13 +237,13 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
         batch = 1
         obs_shape = (batch, spec.obs_rows, spec.obs_cols, spec.obs_channels)
         root_feats = RootFeatures(
-            obs=jnp.ones(obs_shape),
-            player=jnp.ones((batch,)),
+            obs=jnp.zeros(obs_shape),
+            player=jnp.zeros((batch,)),
         )
         hidden_state_shape = (batch, spec.repr_rows, spec.repr_cols, spec.repr_channels)
         trans_feats = TransitionFeatures(
-            hidden_state=jnp.ones(hidden_state_shape),
-            action=jnp.ones((batch,)),
+            hidden_state=jnp.zeros(hidden_state_shape),
+            action=jnp.zeros((batch,)),
         )
 
         return hk_transformed.init(rng, root_feats, trans_feats)

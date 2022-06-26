@@ -29,7 +29,11 @@ class ConvBlock(hk.Module):
     num_channels: int
 
     def __call__(self, x, is_training):
-        x = hk.Conv2D(self.num_channels, (3, 3), padding="same")(x)
+        x = hk.Conv2D(
+            self.num_channels,
+            (3, 3),
+            padding="same",
+        )(x)
         x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(
             x, is_training=is_training
         )
@@ -40,10 +44,10 @@ class ConvBlock(hk.Module):
 @dataclass
 class ResBlock(hk.Module):
     def __call__(self, x, is_training):
-        orig_x = x
+        identity = x
         num_channels = x.shape[-1]
         x = ConvBlock(num_channels)(x, is_training=is_training)
-        x = x + orig_x
+        x = x + identity
         x = jax.nn.relu(x)
         return x
 
@@ -123,9 +127,9 @@ class ResNetArchitecture(NNArchitecture):
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
 
-        batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)
-        batch_max = jnp.max(hidden_state, axis=(1, 2, 3), keepdims=True)
-        hidden_state = (hidden_state - batch_min) / (batch_max - batch_min)
+        # batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)
+        # batch_max = jnp.max(hidden_state, axis=(1, 2, 3), keepdims=True)
+        # hidden_state = (hidden_state - batch_min) / (batch_max - batch_min)
 
         return hidden_state
 
@@ -153,24 +157,16 @@ class ResNetArchitecture(NNArchitecture):
         )
 
         # value head
-        value_logits = hk.nets.MLP(
-            [
-                32,
-                64,
-                self.spec.scalar_transform.dim,
-            ]
+        value_logits = hk.Linear(
+            output_size=self.spec.scalar_transform.dim,
+            w_init=hk.initializers.Constant(0),
         )(pred_trunk_flat)
         chex.assert_shape(value_logits, (None, self.spec.scalar_transform.dim))
 
         # policy head
-        policy_logits = hk.nets.MLP(
-            [
-                32,
-                64,
-                self.spec.dim_action,
-            ]
+        policy_logits = hk.Linear(
+            output_size=self.spec.dim_action, w_init=hk.initializers.Constant(0)
         )(pred_trunk_flat)
-        policy_logits = hk.Linear(output_size=self.spec.dim_action)(pred_trunk_flat)
         chex.assert_shape(policy_logits, (None, self.spec.dim_action))
 
         return value_logits, policy_logits
@@ -187,8 +183,9 @@ class ResNetArchitecture(NNArchitecture):
         action_one_hot = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
         # broadcast to self.spec.repr_rows and self.spec.repr_cols dim
         action_one_hot = jnp.expand_dims(action_one_hot, axis=[1, 2])
-        action_one_hot = jnp.tile(
-            action_one_hot, (1, self.spec.repr_rows, self.spec.repr_cols, 1)
+        action_one_hot = (
+            jnp.tile(action_one_hot, (1, self.spec.repr_rows, self.spec.repr_cols, 1))
+            / self.spec.dim_action
         )
         chex.assert_equal_shape_prefix([hidden_state, action_one_hot], prefix_len=3)
 
@@ -230,18 +227,15 @@ class ResNetArchitecture(NNArchitecture):
         )
 
         # reward head
-        reward_logits = hk.nets.MLP(
-            [
-                32,
-                64,
-                self.spec.scalar_transform.dim,
-            ]
+        reward_logits = hk.Linear(
+            output_size=self.spec.scalar_transform.dim,
+            w_init=hk.initializers.Constant(0),
         )(dyna_trunk_flat)
 
         chex.assert_shape(reward_logits, (None, self.spec.scalar_transform.dim))
 
         # TODO: check correctness of scaling
-        batch_min = jnp.min(next_hidden_state, axis=(1, 2, 3), keepdims=True)
-        batch_max = jnp.max(next_hidden_state, axis=(1, 2, 3), keepdims=True)
-        next_hidden_state = (next_hidden_state - batch_min) / (batch_max - batch_min)
+        # batch_min = jnp.min(next_hidden_state, axis=(1, 2, 3), keepdims=True)
+        # batch_max = jnp.max(next_hidden_state, axis=(1, 2, 3), keepdims=True)
+        # next_hidden_state = (next_hidden_state - batch_min) / (batch_max - batch_min)
         return next_hidden_state, reward_logits

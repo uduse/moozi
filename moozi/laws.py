@@ -566,23 +566,26 @@ def make_reward_terminator(size: int):
     )
 
 
-def make_min_atar_gif_recorder(n_channels=6):
+def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
     cmap = sns.color_palette("cubehelix", n_channels)
     cmap.insert(0, (0, 0, 0))
     cs = np.array([cmap[i] for i in range(n_channels + 1)])
+    font = ImageFont.truetype("courier.ttf", 14)
+    root_dir = Path(root_dir)
+    root_dir.mkdir(parents=True, exist_ok=True)
 
     def malloc():
-        Path("gifs").mkdir(parents=True, exist_ok=True)
         return {"images": []}
 
     def apply(
         is_last,
         obs,
-        images: List[Image.Image],
         root_value,
         q_values,
         action_probs,
         action,
+        reward,
+        images: List[Image.Image],
     ):
         numerical_state = np.array(
             np.amax(obs[0] * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2)
@@ -593,19 +596,25 @@ def make_min_atar_gif_recorder(n_channels=6):
         img = Image.fromarray(rgbs)
         img = img.resize((img.width * 40, img.height * 40), Image.NEAREST)
         draw = ImageDraw.Draw(img)
-        with np.printoptions(precision=2, suppress=True):
+        action_map = {
+            0: "Stay",
+            1: "Left",
+            2: "Right",
+            3: "Fire",
+        }
+        with np.printoptions(precision=3, suppress=True, floatmode="fixed"):
             content = (
-                f"A {action}\n"
+                f"R {reward[0]}\n"
                 f"V {root_value[0]}\n"
                 f"π {action_probs[0]}\n"
                 f"Q {q_values[0]}\n"
+                f"A {action_map[int(action[0])]}\n"
             )
-        font = ImageFont.truetype("courier.ttf", 14)
         draw.text((0, 0), content, fill="black", font=font)
         images = images + [img]
         if is_last[0] and images:
             counter = 0
-            while gif_fpath := (Path("gifs") / f"{counter}.gif"):
+            while gif_fpath := (root_dir / f"{counter}.gif"):
                 if gif_fpath.exists():
                     counter += 1
                 else:
@@ -628,3 +637,15 @@ def make_min_atar_gif_recorder(n_channels=6):
         apply=link(apply),
         read=get_keys(apply),
     )
+
+
+# def _termination_penalty(is_last, reward):
+#     reward_overwrite = jax.lax.cond(
+#         is_last,
+#         lambda: reward - 1,
+#         lambda: reward,
+#     )
+#     return {"reward": reward_overwrite}
+
+# penalty = Law.from_fn(_termination_penalty)
+# penalty.apply = link(jax.vmap(unlink(penalty.apply)))

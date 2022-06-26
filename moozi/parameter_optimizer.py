@@ -151,6 +151,7 @@ class ParameterServer:
         )
         self._last_step_data = []
 
+        jax.config.update('jax_debug_nans', True)
         logger.remove()
         logger.add(sys.stderr, level="SUCCESS")
 
@@ -171,7 +172,7 @@ class ParameterServer:
             f"updating with {len(train_targets)} samples, batch size {batch_size}"
         )
 
-        ret = None
+        ret = {}
         for i in range(0, len(train_targets), batch_size):
             batch_slice = train_targets[i : i + batch_size]
             if len(batch_slice) != batch_size:
@@ -179,12 +180,15 @@ class ParameterServer:
             batch = stack_sequence_fields(batch_slice)
             self.training_state, extra = self.sgd_step_fn(self.training_state, batch)
             self._last_step_data = extra
-            ret = extra["loss"]
+            ret = {"loss": extra["loss"]}
         return ret
 
     def log_tensorboard(self):
         log_datum = LogDatum.from_any(self._last_step_data)
         self._tb_logger.write(log_datum, self.training_state.steps)
+        
+    def get_training_steps(self):
+        return self.training_state.steps
 
     def get_params(self):
         logger.debug("getting params")
@@ -206,7 +210,7 @@ class ParameterServer:
         logger.debug("getting model")
         return self.model
 
-    def get_properties(self) -> dict:
+    def get_device_properties(self) -> dict:
         import os
         import jax
 

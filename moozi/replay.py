@@ -29,6 +29,7 @@ class ReplayEntry:
 @dataclass(repr=False)
 class ReplayBuffer:
     max_size: int = 1_000_000
+    min_size: int = 1_000
     sampling_strategy: str = "uniform"
     use_remote: bool = False
 
@@ -76,6 +77,8 @@ class ReplayBuffer:
             self._episode_return.append(np.sum(traj.last_reward))
 
     def get_train_targets_batch(self, batch_size: int) -> TrainTarget:
+        if self.get_targets_size() < self.min_size:
+            return None
         if len(self._train_targets) == 0:
             logger.error(f"No train targets available")
             raise ValueError("No train targets available")
@@ -97,9 +100,9 @@ class ReplayBuffer:
         )
         if self._value_diffs:
             mean_value_diff = np.mean(self._value_diffs)
-            ret["mean_value_diff"] = mean_value_diff
+            ret["replay/mean_value_diff"] = mean_value_diff
         if self._episode_return:
-            ret["episode_return"] = np.mean(self._episode_return)
+            ret["replay/episode_return"] = np.mean(self._episode_return)
         ret["sampled_count"] = [item.num_sampled for item in self._train_targets]
         return ret
 
@@ -111,13 +114,15 @@ class ReplayBuffer:
         elif self.sampling_strategy == "hybrid":
             ranking_weights = self._compute_ranking_weights()
             freq_weights = self._compute_freq_weights()
-            weights = ranking_weights * freq_weights
+            weights = np.log(ranking_weights) * freq_weights
             weights /= np.sum(weights)
         else:
             raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")
 
         indices = np.arange(len(self._train_targets))
-        batch_indices = np.random.choice(indices, size=batch_size, p=weights)
+        batch_indices = np.random.choice(
+            indices, size=batch_size, p=weights, replace=False
+        )
         batch = [self._train_targets[i] for i in batch_indices]
         is_ratio = (1 / weights[batch_indices]) / weights.size
         for i, target in enumerate(batch):

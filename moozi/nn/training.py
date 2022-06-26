@@ -114,10 +114,10 @@ def _compute_prior_kl(
 
 #         losses = {}
 
-#         losses["loss:value_0"] = vmap(mse)(
+#         losses["loss/value_0"] = vmap(mse)(
 #             batch.n_step_return.take(0, axis=1), network_output.value
 #         )
-#         losses["loss:action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
+#         losses["loss/action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
 #             batch.action_probs.take(0, axis=1), network_output.policy_logits
 #         )
 
@@ -132,15 +132,15 @@ def _compute_prior_kl(
 #                 params, state, recurr_inf_features, is_training
 #             )
 
-#             losses[f"loss:reward_{str(i + 1)}"] = (
+#             losses[f"loss/reward_{str(i + 1)}"] = (
 #                 vmap(mse)(batch.last_reward.take(i + 1, axis=1), network_output.reward)
 #                 * transition_loss_scale
 #             )
-#             losses[f"loss:value_{str(i + 1)}"] = (
+#             losses[f"loss/value_{str(i + 1)}"] = (
 #                 vmap(mse)(batch.n_step_return.take(i + 1, axis=1), network_output.value)
 #                 * transition_loss_scale
 #             )
-#             losses[f"loss:action_probs_{str(i + 1)}"] = (
+#             losses[f"loss/action_probs_{str(i + 1)}"] = (
 #                 vmap(rlax.categorical_cross_entropy)(
 #                     batch.action_probs.take(i + 1, axis=1), network_output.policy_logits
 #                 )
@@ -150,7 +150,7 @@ def _compute_prior_kl(
 #         # all batched losses should be the shape of (batch_size,)
 #         tree.map_structure(lambda x: chex.assert_shape(x, (batch_size,)), losses)
 
-#         losses["loss:l2"] = jnp.reshape(
+#         losses["loss/l2"] = jnp.reshape(
 #             params_l2_loss(params) * self.weight_decay, (1,)
 #         )
 
@@ -209,7 +209,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         init_inf_features = RootFeatures(
             obs=batch.obs,
             # TODO: actually pass player
-            player=jnp.ones((batch_size, 1)),
+            player=jnp.zeros((batch_size, 1)),
         )
         is_training = True
         network_output, state = model.root_inference(
@@ -217,15 +217,26 @@ class MuZeroLossWithScalarTransform(LossFn):
         )
 
         losses = {}
+        info = {}
+
+        reward = batch.last_reward.take(0, axis=1)
+        reward_transformed = self.scalar_transform.transform(reward)
+        losses["loss/reward_0"] = vmap(rlax.categorical_cross_entropy)(
+            reward_transformed, network_output.reward
+        )
+        info["sample_reward_logits"] = reward_transformed[0]
+        info["network_reward_logits"] = network_output.reward[0]
 
         n_step_return = batch.n_step_return.take(0, axis=1)
         n_step_return_transformed = self.scalar_transform.transform(n_step_return)
-        losses["loss:value_0"] = vmap(rlax.categorical_cross_entropy)(
-            n_step_return_transformed, network_output.value
+        losses["loss/value_0"] = vmap(rlax.categorical_cross_entropy)(
+            labels=n_step_return_transformed,
+            logits=network_output.value,
         )
 
-        losses["loss:action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
-            batch.action_probs.take(0, axis=1), network_output.policy_logits
+        losses["loss/action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
+            labels=batch.action_probs.take(0, axis=1),
+            logits=network_output.policy_logits,
         )
 
         transition_loss_scale = 1 / self.num_unroll_steps
@@ -233,34 +244,49 @@ class MuZeroLossWithScalarTransform(LossFn):
             hidden_state = scale_gradient(network_output.hidden_state, 0.5)
             recurr_inf_features = TransitionFeatures(
                 hidden_state=hidden_state,
-                action=batch.action.take(0, axis=1),
+                action=batch.action.take(i, axis=1),
             )
             network_output, state = model.trans_inference(
                 params, state, recurr_inf_features, is_training
             )
 
+            # reward loss
             reward_transformed = self.scalar_transform.transform(
                 batch.last_reward.take(i + 1, axis=1)
             )
-            losses[f"loss:reward_{str(i + 1)}"] = (
-                vmap(rlax.categorical_cross_entropy)(
-                    reward_transformed, network_output.reward
-                )
-                * transition_loss_scale
+            chex.assert_shape(
+                reward_transformed,
+                (batch_size, self.scalar_transform.dim),
             )
-            n_step_return_transformed = self.scalar_transform.transform(
-                batch.n_step_return.take(i + 1, axis=1)
-            )
-            losses[f"loss:value_{str(i + 1)}"] = (
+            losses[f"loss/reward_{str(i + 1)}"] = (
                 vmap(rlax.categorical_cross_entropy)(
-                    n_step_return_transformed, network_output.value
+                    labels=reward_transformed,
+                    logits=network_output.reward,
                 )
                 * transition_loss_scale
             )
 
-            losses[f"loss:action_probs_{str(i + 1)}"] = (
+            # value loss
+            n_step_return_transformed = self.scalar_transform.transform(
+                batch.n_step_return.take(i + 1, axis=1)
+            )
+            chex.assert_shape(
+                n_step_return_transformed,
+                (batch_size, self.scalar_transform.dim),
+            )
+            losses[f"loss/value_{str(i + 1)}"] = (
                 vmap(rlax.categorical_cross_entropy)(
-                    batch.action_probs.take(i + 1, axis=1), network_output.policy_logits
+                    labels=n_step_return_transformed,
+                    logits=network_output.value,
+                )
+                * transition_loss_scale
+            )
+
+            # action probs loss
+            losses[f"loss/action_probs_{str(i + 1)}"] = (
+                vmap(rlax.categorical_cross_entropy)(
+                    batch.action_probs.take(i + 1, axis=1),
+                    network_output.policy_logits,
                 )
                 * transition_loss_scale
             )
@@ -268,7 +294,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         # all batched losses should be the shape of (batch_size,)
         tree.map_structure(lambda x: chex.assert_shape(x, (batch_size,)), losses)
 
-        losses["loss:l2"] = jnp.reshape(
+        losses["loss/l2"] = jnp.reshape(
             params_l2_loss(params) * self.weight_decay, (1,)
         )
 
@@ -276,6 +302,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         losses = tree.map_structure(
             lambda x: x * batch.importance_sampling_ratio, losses
         )
+        info['importance_sampling_ratio'] = batch.importance_sampling_ratio
 
         # sum all losses
         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
@@ -285,6 +312,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         step_data = {}
         for key, value in tree.map_structure(jnp.mean, losses).items():
             step_data[key] = value
+        step_data['info'] = info
 
         return loss, dict(state=state, step_data=step_data)
 
@@ -369,5 +397,6 @@ def make_training_suite(
         steps=0,
         rng_key=jax.random.PRNGKey(seed),
     )
-    sgd_step_fn = make_sgd_step_fn(model, loss_fn, optimizer)
+    # TODO: set target update period
+    sgd_step_fn = make_sgd_step_fn(model, loss_fn, optimizer, target_update_period=20)
     return model.with_jit(), training_state, sgd_step_fn

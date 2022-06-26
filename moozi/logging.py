@@ -119,7 +119,7 @@ class JAXBoardLoggerV2(Logger):
         self._steps = steps
 
     def _write_now_datum(self, datum: LogDatum, step: Optional[int] = None):
-        prefixed_key = self._name + ":" + datum.tag
+        prefixed_key = self._name + "/" + datum.tag
         if step is None:
             step = self._steps
 

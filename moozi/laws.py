@@ -324,7 +324,7 @@ def make_env_law(env_name) -> Law:
         legal_actions_mask = np.ones(env.action_space.n, dtype=np.float32)
 
         return dict(
-            obs=np.array(timestep.observation, dtype=float),
+            frame=np.array(timestep.observation, dtype=float),
             is_first=timestep.first(),
             is_last=timestep.last(),
             to_play=0,
@@ -579,7 +579,7 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
 
     def apply(
         is_last,
-        obs,
+        frame,
         root_value,
         q_values,
         action_probs,
@@ -588,7 +588,7 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
         images: List[Image.Image],
     ):
         numerical_state = np.array(
-            np.amax(obs[0] * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2)
+            np.amax(frame[0] * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2)
             + 0.5,
             dtype=int,
         )
@@ -639,13 +639,13 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
     )
 
 
-# def _termination_penalty(is_last, reward):
-#     reward_overwrite = jax.lax.cond(
-#         is_last,
-#         lambda: reward - 1,
-#         lambda: reward,
-#     )
-#     return {"reward": reward_overwrite}
+def _termination_penalty(is_last, reward):
+    reward_overwrite = jax.lax.cond(
+        is_last,
+        lambda: reward - 1,
+        lambda: reward,
+    )
+    return {"reward": reward_overwrite}
 
-# penalty = Law.from_fn(_termination_penalty)
-# penalty.apply = link(jax.vmap(unlink(penalty.apply)))
+penalty = Law.from_fn(_termination_penalty)
+penalty.apply = link(jax.vmap(unlink(penalty.apply)))

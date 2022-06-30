@@ -219,14 +219,6 @@ class MuZeroLossWithScalarTransform(LossFn):
         losses = {}
         info = {}
 
-        reward = batch.last_reward.take(0, axis=1)
-        reward_transformed = self.scalar_transform.transform(reward)
-        losses["loss/reward_0"] = vmap(rlax.categorical_cross_entropy)(
-            reward_transformed, network_output.reward
-        )
-        info["sample_reward_logits"] = reward_transformed[0]
-        info["network_reward_logits"] = network_output.reward[0]
-
         n_step_return = batch.n_step_return.take(0, axis=1)
         n_step_return_transformed = self.scalar_transform.transform(n_step_return)
         losses["loss/value_0"] = vmap(rlax.categorical_cross_entropy)(
@@ -242,12 +234,14 @@ class MuZeroLossWithScalarTransform(LossFn):
         transition_loss_scale = 1 / self.num_unroll_steps
         for i in range(self.num_unroll_steps):
             hidden_state = scale_gradient(network_output.hidden_state, 0.5)
-            recurr_inf_features = TransitionFeatures(
+            if "hidden_state" not in info:
+                info["hidden_state"] = hidden_state
+            trans_feats = TransitionFeatures(
                 hidden_state=hidden_state,
                 action=batch.action.take(i, axis=1),
             )
             network_output, state = model.trans_inference(
-                params, state, recurr_inf_features, is_training
+                params, state, trans_feats, is_training
             )
 
             # reward loss
@@ -302,7 +296,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         losses = tree.map_structure(
             lambda x: x * batch.importance_sampling_ratio, losses
         )
-        info['importance_sampling_ratio'] = batch.importance_sampling_ratio
+        info["importance_sampling_ratio"] = batch.importance_sampling_ratio
 
         # sum all losses
         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
@@ -312,7 +306,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         step_data = {}
         for key, value in tree.map_structure(jnp.mean, losses).items():
             step_data[key] = value
-        step_data['info'] = info
+        step_data["info"] = info
 
         return loss, dict(state=state, step_data=step_data)
 

@@ -78,7 +78,7 @@ class ReplayBuffer:
 
     def get_train_targets_batch(self, batch_size: int) -> TrainTarget:
         if self.get_targets_size() < self.min_size:
-            return None
+            raise ValueError("Not enough samples in replay buffer.")
         if len(self._train_targets) == 0:
             logger.error(f"No train targets available")
             raise ValueError("No train targets available")
@@ -114,7 +114,7 @@ class ReplayBuffer:
         elif self.sampling_strategy == "hybrid":
             ranking_weights = self._compute_ranking_weights()
             freq_weights = self._compute_freq_weights()
-            weights = np.log(ranking_weights) * freq_weights
+            weights = np.log(ranking_weights) * np.log(freq_weights)
             weights /= np.sum(weights)
         else:
             raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")

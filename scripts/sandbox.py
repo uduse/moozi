@@ -19,10 +19,7 @@ import numpy as np
 
 # %%
 st = make_scalar_transform(-10, 10)
-logits = np.zeros(21)
-logits[-1] = 1
-print(logits)
-probs = jax.nn.softmax(logits.reshape(1, -1))
-st.inverse_transform(probs)
-
+vals = np.arange(10)
+print(vals.shape)
+st.transform(vals).shape
 # %%

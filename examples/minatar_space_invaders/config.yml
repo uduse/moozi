@@ -1,8 +1,8 @@
 seed: 0
 discount: 0.99
-num_unroll_steps: 2
+num_unroll_steps: 5
 num_td_steps: 5
-num_stacked_frames: 2
+num_stacked_frames: 4
 dim_action: 4
 
 env:
@@ -15,8 +15,8 @@ env:
 
 replay:
   use_remote: true
-  min_size: 2_000
-  max_size: 60_000
+  min_size: 10_000
+  max_size: 500_000
   sampling_strategy: ranking
   num_unroll_steps: ${num_unroll_steps}
   num_td_steps: ${num_td_steps}
@@ -40,24 +40,24 @@ nn:
   spec_kwargs:
     obs_rows: ${env.num_rows}
     obs_cols: ${env.num_cols}
-    obs_channels: 20
+    obs_channels: 40
     repr_rows: 10
     repr_cols: 10
-    repr_channels: 64
+    repr_channels: 32
     dim_action: ${dim_action}
     repr_tower_blocks: 4
-    repr_tower_dim: 64
+    repr_tower_dim: 32
     pred_tower_blocks: 4
-    pred_tower_dim: 64
-    dyna_tower_blocks: 4
-    dyna_tower_dim: 64
-    dyna_state_blocks: 4
+    pred_tower_dim: 32
+    dyna_tower_blocks: 2
+    dyna_tower_dim: 32
+    dyna_state_blocks: 2
 
 train:
   enabled: true
   num_epochs: 2000
-  sample_update_ratio: 1
-  batch_size: 256
+  sample_update_ratio: 10
+  batch_size: 512
   lr: 5.0e-2
   weight_decay: 1.0e-4
 
@@ -69,7 +69,7 @@ train:
     planner:
       num_envs: ${train.env_worker.num_envs}
       dim_action: ${dim_action}
-      num_simulations: 20
+      num_simulations: 50
       dirichlet_alpha: 0.2
       dirichlet_fraction: 0.2
       temperature: 1.0

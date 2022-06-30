@@ -127,11 +127,7 @@ class ResNetArchitecture(NNArchitecture):
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
 
-        # batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)
-        # batch_max = jnp.max(hidden_state, axis=(1, 2, 3), keepdims=True)
-        # hidden_state = (hidden_state - batch_min) / (batch_max - batch_min)
-
-        return hidden_state
+        return normalize_hidden_state(hidden_state)
 
     def _pred_net(self, hidden_state, is_training):
         chex.assert_shape(
@@ -235,7 +231,12 @@ class ResNetArchitecture(NNArchitecture):
         chex.assert_shape(reward_logits, (None, self.spec.scalar_transform.dim))
 
         # TODO: check correctness of scaling
-        # batch_min = jnp.min(next_hidden_state, axis=(1, 2, 3), keepdims=True)
-        # batch_max = jnp.max(next_hidden_state, axis=(1, 2, 3), keepdims=True)
-        # next_hidden_state = (next_hidden_state - batch_min) / (batch_max - batch_min)
+        next_hidden_state = normalize_hidden_state(next_hidden_state)
         return next_hidden_state, reward_logits
+
+
+def normalize_hidden_state(hidden_state):
+    batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)
+    batch_max = jnp.max(hidden_state, axis=(1, 2, 3), keepdims=True)
+    hidden_state = (hidden_state - batch_min) / (batch_max - batch_min + 1e-8)
+    return hidden_state

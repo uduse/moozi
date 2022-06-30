@@ -104,6 +104,19 @@ nn_spec = eval(config.nn.spec_cls)(
 )
 model = make_model(nn_arch_cls, nn_spec)
 
+
+# %% 
+def _termination_penalty(is_last, reward):
+    reward_overwrite = jax.lax.cond(
+        is_last,
+        lambda: reward - 1,
+        lambda: reward,
+    )
+    return {"reward": reward_overwrite}
+
+penalty = Law.from_fn(_termination_penalty)
+penalty.apply = link(jax.vmap(unlink(penalty.apply)))
+
 # %%
 def make_env_worker_universe(config):
     num_envs = config.train.env_worker.num_envs
@@ -127,6 +140,7 @@ def make_env_worker_universe(config):
     final_law = sequential(
         [
             vec_env,
+            penalty,
             policy,
             make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
             traj_writer,
@@ -232,7 +246,7 @@ for epoch in range(1, config.train.num_epochs + 1):
 
     if not start_training:
         rb_size = ray.get(rb.get_targets_size.remote())
-        start_training = (rb_size >= config.replay.min_size)
+        start_training = rb_size >= config.replay.min_size
         if start_training:
             logger.info(f"Start training ...")
 

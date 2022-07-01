@@ -151,7 +151,7 @@ class ParameterServer:
         )
         self._last_step_data = []
 
-        jax.config.update('jax_debug_nans', True)
+        jax.config.update("jax_debug_nans", True)
         logger.remove()
         logger.add(sys.stderr, level="SUCCESS")
 
@@ -186,7 +186,7 @@ class ParameterServer:
     def log_tensorboard(self):
         log_datum = LogDatum.from_any(self._last_step_data)
         self._tb_logger.write(log_datum, self.training_state.steps)
-        
+
     def get_training_steps(self):
         return self.training_state.steps
 
@@ -235,3 +235,8 @@ class ParameterServer:
         logger.debug(f"saving model to {path}")
         with open(path, "wb") as f:
             cloudpickle.dump((self.model, self.training_state, self.sgd_step_fn), f)
+
+    def restore(self, path):
+        logger.debug(f"restoring model from {path}")
+        with open(path, "rb") as f:
+            self.model, self.training_state, self.sgd_step_fn = cloudpickle.load(f)

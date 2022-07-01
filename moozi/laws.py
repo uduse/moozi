@@ -1,4 +1,5 @@
 import collections
+import chex
 import inspect
 import uuid
 from dataclasses import dataclass, field
@@ -271,8 +272,19 @@ class Law:
     read: Set[str]
 
     @staticmethod
-    def from_fn(fn):
-        return Law(fn.__name__, lambda: {}, link(fn), get_keys(fn))
+    def wrap(fn):
+        return Law(fn.__name__, malloc=lambda: {}, apply=link(fn), read=get_keys(fn))
+
+    def jit(self, max_trace: int = 1, **kwargs) -> "Law":
+        apply = chex.assert_max_traces(n=max_trace)(self.apply)
+        apply = jax.jit(apply, **kwargs)
+        return Law(self.name, self.malloc, apply, self.read)
+
+    def vmap(self, batch_size, **kwargs) -> "Law":
+        name = self.name + f"[vmap * {batch_size}]"
+        malloc = jax.vmap(self.malloc, axis_size=batch_size)
+        apply = link(jax.vmap(unlink(self.apply), **kwargs, axis_size=batch_size))
+        return Law(name, malloc, apply, self.read)
 
 
 def sequential(laws: List[Law]) -> Law:
@@ -324,12 +336,12 @@ def make_env_law(env_name) -> Law:
         legal_actions_mask = np.ones(env.action_space.n, dtype=np.float32)
 
         return dict(
-            frame=np.array(timestep.observation, dtype=float),
-            is_first=timestep.first(),
-            is_last=timestep.last(),
-            to_play=0,
-            reward=reward,
-            legal_actions_mask=legal_actions_mask,
+            frame=np.asarray(timestep.observation, dtype=float),
+            is_first=np.asarray(timestep.first(), dtype=bool),
+            is_last=np.asarray(timestep.last(), dtype=bool),
+            to_play=np.asarray(0, dtype=int),
+            reward=np.asarray(reward, dtype=float),
+            legal_actions_mask=np.asarray(legal_actions_mask, dtype=int),
         )
 
     return Law(
@@ -424,6 +436,20 @@ def make_stacker(
     )
 
 
+def make_batch_stacker_v2(
+    batch_size: int,
+    num_rows: int,
+    num_cols: int,
+    num_channels: int,
+    num_stacked_frames: int,
+    dim_action: int,
+):
+    stacker = make_stacker(
+        num_rows, num_cols, num_channels, num_stacked_frames, dim_action
+    )
+    return stacker.vmap(batch_size)
+
+
 def make_batch_stacker(
     batch_size: int,
     num_rows: int,
@@ -445,7 +471,7 @@ def make_batch_stacker(
     apply = jax.vmap(unlink(stacker.apply))
 
     return Law(
-        name="h",
+        name="batch_stacker",
         malloc=malloc,
         apply=link(apply),
         read=get_keys(apply),
@@ -483,7 +509,6 @@ def make_traj_writer(
                 root_value=root_value[i],
                 action_probs=action_probs[i],
                 action=action[i],
-                weight=1.0,
             )
 
             step_samples[i].append(step_sample)
@@ -570,7 +595,7 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
     cmap = sns.color_palette("cubehelix", n_channels)
     cmap.insert(0, (0, 0, 0))
     cs = np.array([cmap[i] for i in range(n_channels + 1)])
-    font = ImageFont.truetype("courier.ttf", 14)
+    font = ImageFont.truetype("courier.ttf", 10)
     root_dir = Path(root_dir)
     root_dir.mkdir(parents=True, exist_ok=True)
 
@@ -594,7 +619,7 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
         )
         rgbs = np.array(cs[numerical_state - 1] * 255, dtype=np.uint8)
         img = Image.fromarray(rgbs)
-        img = img.resize((img.width * 40, img.height * 40), Image.NEAREST)
+        img = img.resize((img.width * 20, img.height * 20), Image.NEAREST)
         draw = ImageDraw.Draw(img)
         action_map = {
             0: "Stay",
@@ -612,7 +637,7 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
             )
         draw.text((0, 0), content, fill="black", font=font)
         images = images + [img]
-        if is_last[0] and images:
+        if is_last[0]:
             counter = 0
             while gif_fpath := (root_dir / f"{counter}.gif"):
                 if gif_fpath.exists():
@@ -624,7 +649,8 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
                 str(gif_fpath),
                 save_all=True,
                 append_images=images[1:],
-                optimize=False,
+                optimize=True,
+                quality=20,
                 duration=40,
             )
             logger.info("gif saved to " + str(gif_fpath))
@@ -639,13 +665,33 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
     )
 
 
-def _termination_penalty(is_last, reward):
-    reward_overwrite = jax.lax.cond(
-        is_last,
-        lambda: reward - 1,
-        lambda: reward,
-    )
-    return {"reward": reward_overwrite}
+# def timestep_to_image(frame, reward, root_value, action_probs, action, q_values):
+#     numerical_state = np.array(
+#         np.amax(frame * np.reshape(np.arange(6) + 1, (1, 1, -1)), 2) + 0.5,
+#         dtype=int,
+#     )
+#     rgbs = np.array(cs[numerical_state - 1] * 255, dtype=np.uint8)
+#     img = Image.fromarray(rgbs)
+#     img = img.resize((img.width * 20, img.height * 20), Image.NEAREST)
+#     draw = ImageDraw.Draw(img)
+#     action_map = {
+#         0: "Stay",
+#         1: "Left",
+#         2: "Right",
+#         3: "Fire",
+#     }
+#     with np.printoptions(precision=3, suppress=True, floatmode="fixed"):
+#         content = (
+#             f"R {reward[0]}\n"
+#             f"V {root_value[0]}\n"
+#             f"π {action_probs[0]}\n"
+#             f"Q {q_values[0]}\n"
+#             f"A {action_map[int(action[0])]}\n"
+#         )
+#     draw.text((0, 0), content, fill="black", font=font)
+#     return img
 
-penalty = Law.from_fn(_termination_penalty)
-penalty.apply = link(jax.vmap(unlink(penalty.apply)))
+
+@Law.wrap
+def concat_stacked_to_obs(stacked_frames, stacked_actions):
+    return {"obs": jnp.concatenate([stacked_frames, stacked_actions], axis=-1)}

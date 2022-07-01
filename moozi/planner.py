@@ -27,7 +27,7 @@ def make_paritial_recurr_fn(model, state):
 
 
 def make_planner(
-    num_envs: int,
+    batch_size: int,
     dim_action: int,
     model: NNModel,
     num_simulations: int = 10,
@@ -37,28 +37,26 @@ def make_planner(
 ) -> Law:
     def malloc():
         return {
-            "root_value": jnp.zeros(num_envs, dtype=jnp.float32),
-            "action": jnp.full(num_envs, fill_value=0, dtype=jnp.int32),
+            "root_value": jnp.zeros(batch_size, dtype=jnp.float32),
+            "action": jnp.full(batch_size, fill_value=0, dtype=jnp.int32),
             "action_probs": jnp.full(
-                (num_envs, dim_action), fill_value=0, dtype=jnp.float32
+                (batch_size, dim_action), fill_value=0, dtype=jnp.float32
             ),
             "q_values": jnp.full(
-                (num_envs, dim_action), fill_value=0, dtype=jnp.float32
+                (batch_size, dim_action), fill_value=0, dtype=jnp.float32
             ),
         }
 
     def apply(
         params: hk.Params,
         state: hk.State,
-        stacked_frames,
-        stacked_actions,
+        obs,
         random_key,
     ):
         is_training = False
         random_key, new_key = jax.random.split(random_key, 2)
         root_feats = RootFeatures(
-            obs=jnp.concatenate([stacked_frames, stacked_actions], axis=-1),
-            player=np.zeros((stacked_frames.shape[0]), dtype=np.int32),
+            obs=obs, player=np.zeros((obs.shape[0]), dtype=np.int32)
         )
         nn_output, _ = model.root_inference(params, state, root_feats, is_training)
         root = mctx.RootFnOutput(

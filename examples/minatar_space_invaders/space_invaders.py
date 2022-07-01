@@ -105,7 +105,7 @@ nn_spec = eval(config.nn.spec_cls)(
 model = make_model(nn_arch_cls, nn_spec)
 
 
-# %% 
+# %%
 def _termination_penalty(is_last, reward):
     reward_overwrite = jax.lax.cond(
         is_last,
@@ -114,7 +114,8 @@ def _termination_penalty(is_last, reward):
     )
     return {"reward": reward_overwrite}
 
-penalty = Law.from_fn(_termination_penalty)
+
+penalty = Law.wrap(_termination_penalty)
 penalty.apply = link(jax.vmap(unlink(penalty.apply)))
 
 # %%
@@ -129,10 +130,12 @@ def make_env_worker_universe(config):
         config.num_stacked_frames,
         config.dim_action,
     )
+    cat_obs = Law.wrap(
+        lambda stacked_frames, stacked_actions: {
+            "obs": jnp.concatenate([stacked_frames, stacked_actions], axis=-1)
+        }
+    )
     planner = make_planner(model=model, **config.train.env_worker.planner)
-    policy = sequential([frame_stacker, planner])
-    policy.apply = chex.assert_max_traces(n=1)(policy.apply)
-    policy.apply = jax.jit(policy.apply, backend="gpu")
 
     traj_writer = make_traj_writer(num_envs)
     terminator = make_terminator(num_envs)
@@ -141,7 +144,7 @@ def make_env_worker_universe(config):
         [
             vec_env,
             penalty,
-            policy,
+            sequential([frame_stacker, cat_obs, planner]).jit(backend="gpu"),
             make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
             traj_writer,
             terminator,
@@ -184,8 +187,28 @@ def make_test_worker_universe(config):
     return Universe(tape, final_law)
 
 
+def prep_context(train_target: TrainTarget):
+    return {"obs": train_target.obs, "last_reward": train_target.last_reward}
+
+
+def output_updated_target(
+    train_target: TrainTarget, action_probs, root_value, output_buffer
+):
+    new_target = train_target._replace(action_probs=action_probs, root_value=root_value)
+    return {"output_buffer": output_buffer + (new_target,)}
+
+
 def make_reanalyze_universe(config):
-    pass
+    preper = Law.wrap(prep_context)
+    planner = make_planner(model=model, **config.train.env_worker.planner)
+    target_updater = Law.wrap(output_updated_target)
+    terminator = make_terminator(1)
+
+    final_law = sequential([preper, planner, target_updater, terminator])
+
+    tape = make_tape(seed=config.seed)
+    tape.update(final_law.malloc())
+    return Universe(tape, final_law)
 
 
 def training_suite_factory(config):
@@ -245,7 +268,7 @@ for epoch in range(1, config.train.num_epochs + 1):
         train_targets.append(rb.add_trajs.remote(sample))
 
     if not start_training:
-        rb_size = ray.get(rb.get_targets_size.remote())
+        rb_size = ray.get(rb.get_num_targets_created.remote())
         start_training = rb_size >= config.replay.min_size
         if start_training:
             logger.info(f"Start training ...")
@@ -253,7 +276,7 @@ for epoch in range(1, config.train.num_epochs + 1):
     if start_training:
         desired_num_updates = (
             config.train.sample_update_ratio
-            * ray.get(rb.get_targets_size.remote())
+            * ray.get(rb.get_num_targets_created.remote())
             / config.train.batch_size
         )
         num_updates = int(desired_num_updates - ray.get(ps.get_training_steps.remote()))

@@ -25,6 +25,7 @@ class ReplayEntry:
     payload: Any
     priority: float = 1.0
     num_sampled: int = 0
+    from_env: bool = True
 
 
 @dataclass(repr=False)
@@ -54,14 +55,14 @@ class ReplayBuffer:
         logger.add("logs/replay.log", level="DEBUG")
         logger.info(f"Replay buffer created, {vars(self)}")
 
-    def add_trajs(self, trajs: List[TrajectorySample]):
+    def add_trajs(self, trajs: List[TrajectorySample], from_env: bool = True):
         self._trajs.extend([ReplayEntry(traj) for traj in trajs])
-        self._process_trajs(trajs)
+        self._process_trajs(trajs, from_env=from_env)
         logger.debug(f"Added {len(trajs)} trajs to processing queue")
         logger.debug(f"Size after adding samples: {self.get_trajs_size()}")
         return self.get_trajs_size()
 
-    def _process_trajs(self, trajs: List[TrajectorySample]):
+    def _process_trajs(self, trajs: List[TrajectorySample], from_env: bool):
         for traj in trajs:
             chex.assert_rank(traj.last_reward, 1)
             for i in range(len(traj.last_reward) - 1):
@@ -75,7 +76,9 @@ class ReplayBuffer:
                 )
                 value_diff = np.abs(target.n_step_return[0] - target.root_value[0])
                 self._value_diffs.append(value_diff)
-                self._train_targets.append(ReplayEntry(target, priority=value_diff))
+                self._train_targets.append(
+                    ReplayEntry(target, priority=value_diff, from_env=from_env)
+                )
                 self._num_targets_created += 1
             self._episode_return.append(np.sum(traj.last_reward))
 
@@ -105,7 +108,7 @@ class ReplayBuffer:
         if len(self._trajs) == 0:
             logger.error(f"No trajs available")
             raise ValueError("No trajs available")
-        entries= np.random.choice(self._trajs, size=batch_size, replace=False)
+        entries = np.random.choice(self._trajs, size=batch_size)
         trajs = [entry.payload for entry in entries]
         logger.debug(f"Returning {len(trajs)} trajs")
         return trajs
@@ -130,6 +133,9 @@ class ReplayBuffer:
         if self._episode_return:
             ret["replay/episode_return"] = np.mean(self._episode_return)
         ret["sampled_count"] = [item.num_sampled for item in self._train_targets]
+        ret["reanalyze_ratio"] = sum(
+            [(not item.from_env) for item in self._train_targets]
+        ) / len(self._train_targets)
         return ret
 
     def _sample_targets(self, batch_size: int) -> List[ReplayEntry]:
@@ -146,9 +152,7 @@ class ReplayBuffer:
             raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")
 
         indices = np.arange(len(self._train_targets))
-        batch_indices = np.random.choice(
-            indices, size=batch_size, p=weights, replace=False
-        )
+        batch_indices = np.random.choice(indices, size=batch_size, p=weights)
         batch = [self._train_targets[i] for i in batch_indices]
         is_ratio = (1 / weights[batch_indices]) / weights.size
         for i, target in enumerate(batch):

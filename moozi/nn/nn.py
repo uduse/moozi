@@ -159,6 +159,11 @@ class NNArchitecture(hk.Module):
             policy_logits=policy_logits,
             hidden_state=next_hidden_state,
         )
+        
+    # def project(self, is_training):
+    #     projection = self._project_net(is_training)
+    #     return projection
+
 
 
 # TODO: also add action histories as bias planes
@@ -273,6 +278,10 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
     def trans_inference_unbatched(params, state, feats, is_training):
         out, state = trans_inference(params, state, add_batch_dim(feats), is_training)
         return squeeze_batch_dim(out), state
+        
+    # def project(params, state, is_training):
+    #     # TODO: project
+    #     return
 
     return NNModel(
         init_params_and_state,

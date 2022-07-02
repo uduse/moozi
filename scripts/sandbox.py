@@ -269,79 +269,61 @@ def to_step_sample(
         )
     }
 
-# %%
-stacker = make_stacker(
-    config.env.num_rows,
-    config.env.num_cols,
-    config.env.num_channels,
-    config.num_stacked_frames,
-    config.dim_action,
-).vmap(batch_size=1)
-
-planner = make_planner(
-    model=model, dim_action=config.dim_action, batch_size=1, num_simulations=10
-)
-
-traj = trajs_batch[0]
-
-tape = make_tape(seed=config.seed)
-tape.update(stacker.malloc())
-tape.update(planner.malloc())
-
-step_samples = []
-for i in range(traj.frame.shape[0]):
-    tape["frame"] = np.expand_dims(traj.frame[i], axis=0)
-    tape["action"] = np.expand_dims(traj.action[i], axis=0)
-    tape["reward"] = np.expand_dims(traj.last_reward[i], axis=0)
-    tape["legal_actions_mask"] = np.expand_dims(traj.legal_actions_mask[i], axis=0)
-    tape["to_play"] = np.expand_dims(traj.to_play[i], axis=0)
-    tape["is_first"] = np.expand_dims(traj.is_first[i], axis=0)
-    tape["is_last"] = np.expand_dims(traj.is_last[i], axis=0)
-    tape["params"] = ps.get_params()
-    tape["state"] = ps.get_state()
-    action_probs = tape["action_probs"]
-    tape = stacker.apply(tape)
-    tape = concat_stacked_to_obs.apply(tape)
-    tape = planner.apply(tape)
-    tape = to_step_sample.apply(tape)
-    new_action_probs = tape["action_probs"]
-    step_samples.append(tape["step_sample"])
-    p = action_probs
-    q = new_action_probs
-    policy_cross_entropy = jnp.mean(-jnp.sum(p * jnp.log(q + 1e-15), axis=-1))
-    print(f"{policy_cross_entropy=}")
 
 # %%
-from acme.utils.tree_utils import stack_sequence_fields
-from acme.jax.utils import squeeze_batch_dim
-new_traj = stack_sequence_fields([squeeze_batch_dim(step_sample) for step_sample in step_samples])
+
+# re_law = make_re()
+# tape = make_tape(seed=config.seed)
+# tape.update(re_law.malloc())
+# tape["params"] = ps.get_params()
+# tape["state"] = ps.get_state()
+# tape['traj'] = trajs_batch[0]
+
+# universe = Universe(tape, re_law)
+# result = universe.run()
 
 # %%
-from moozi.nn.training import make_target_from_traj
-make_target_from_traj(new_traj, start_idx=0, discount=0.99, num_unroll_steps=5, num_td_steps=1, num_stacked_frames=4)
-
+# jnp.mean(-jnp.sum(result[0].action_probs  * jnp.log(trajs_batch[0].action_probs + 1e-15), axis=-1))
 
 # %%
-traj.action_probs
+# from acme.utils.tree_utils import stack_sequence_fields
+# from acme.jax.utils import squeeze_batch_dim
+
+# new_traj = stack_sequence_fields(
+#     [squeeze_batch_dim(step_sample) for step_sample in step_samples]
+# )
+
+# %%
+# from moozi.nn.training import make_target_from_traj
+
+# make_target_from_traj(
+#     new_traj,
+#     start_idx=0,
+#     discount=0.99,
+#     num_unroll_steps=5,
+#     num_td_steps=1,
+#     num_stacked_frames=4,
+# )
 
 # %%
 # w_re = RolloutWorker(partial(make_reanalyze_universe, config))
 # w_re.set("params", ps.get_params())
 # w_re.set("state", ps.get_state())
 
-# # %%
+# %%
 # w_re.set("train_target", old)
 # result = w_re.run()
 
-# # %%
+# %%
 # tree.map_structure(lambda x: x.shape, old)
 
-# %%
-tape['policy_cross_entropy']
+# # %%
+# tape["policy_cross_entropy"]
 
-# %%
-def output_ones():
-    return jnp.ones((10, 2))
+# # %%
+# def output_ones():
+#     return jnp.ones((10, 2))
 
-jax.vmap(output_ones, axis_size=10)()
-# %%
+
+# jax.vmap(output_ones, axis_size=10)()
+# # %%

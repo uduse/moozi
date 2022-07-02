@@ -1,4 +1,5 @@
 # %%
+import operator
 import uuid
 from PIL import Image, ImageDraw, ImageFont
 import seaborn as sns
@@ -130,12 +131,10 @@ def make_env_worker_universe(config):
         config.num_stacked_frames,
         config.dim_action,
     )
-    cat_obs = Law.wrap(
-        lambda stacked_frames, stacked_actions: {
-            "obs": jnp.concatenate([stacked_frames, stacked_actions], axis=-1)
-        }
+
+    planner = make_planner(model=model, **config.train.env_worker.planner).jit(
+        backend="gpu"
     )
-    planner = make_planner(model=model, **config.train.env_worker.planner)
 
     traj_writer = make_traj_writer(num_envs)
     terminator = make_terminator(num_envs)
@@ -144,7 +143,9 @@ def make_env_worker_universe(config):
         [
             vec_env,
             penalty,
-            sequential([frame_stacker, cat_obs, planner]).jit(backend="gpu"),
+            frame_stacker,
+            concat_stacked_to_obs,
+            planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
             traj_writer,
             terminator,
@@ -157,26 +158,24 @@ def make_env_worker_universe(config):
 
 # %%
 def make_test_worker_universe(config):
-    policy = sequential(
-        [
-            make_batch_stacker(
-                1,
-                config.env.num_rows,
-                config.env.num_cols,
-                config.env.num_channels,
-                config.num_stacked_frames,
-                config.dim_action,
-            ),
-            make_planner(model=model, **config.train.test_worker.planner),
-        ]
+    stacker = make_batch_stacker(
+        1,
+        config.env.num_rows,
+        config.env.num_cols,
+        config.env.num_channels,
+        config.num_stacked_frames,
+        config.dim_action,
     )
-    policy.apply = chex.assert_max_traces(n=1)(policy.apply)
-    policy.apply = jax.jit(policy.apply, backend="gpu")
+    planner = make_planner(model=model, **config.train.test_worker.planner).jit(
+        backend="gpu"
+    )
 
     final_law = sequential(
         [
             make_vec_env(config.env.name, 1),
-            policy,
+            stacker,
+            concat_stacked_to_obs,
+            planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="test_worker_gifs"),
             make_traj_writer(1),
             make_reward_terminator(5),
@@ -187,25 +186,29 @@ def make_test_worker_universe(config):
     return Universe(tape, final_law)
 
 
-def prep_context(train_target: TrainTarget):
-    return {"obs": train_target.obs, "last_reward": train_target.last_reward}
-
-
-def output_updated_target(
-    train_target: TrainTarget, action_probs, root_value, output_buffer
-):
-    new_target = train_target._replace(action_probs=action_probs, root_value=root_value)
-    return {"output_buffer": output_buffer + (new_target,)}
-
-
-def make_reanalyze_universe(config):
-    preper = Law.wrap(prep_context)
-    planner = make_planner(model=model, **config.train.env_worker.planner)
-    target_updater = Law.wrap(output_updated_target)
-    terminator = make_terminator(1)
-
-    final_law = sequential([preper, planner, target_updater, terminator])
-
+def make_reanalyze_universe():
+    env_mocker = make_env_mocker()
+    stacker = make_stacker(
+        config.env.num_rows,
+        config.env.num_cols,
+        config.env.num_channels,
+        config.num_stacked_frames,
+        config.dim_action,
+    ).vmap(batch_size=1)
+    planner = make_planner(
+        model=model, dim_action=config.dim_action, batch_size=1, num_simulations=10
+    )
+    terminalor = make_terminator(size=1)
+    final_law = sequential(
+        [
+            env_mocker,
+            stacker,
+            concat_stacked_to_obs,
+            planner,
+            make_traj_writer(1),
+            terminalor,
+        ]
+    )
     tape = make_tape(seed=config.seed)
     tape.update(final_law.malloc())
     return Universe(tape, final_law)
@@ -227,6 +230,7 @@ def training_suite_factory(config):
 ps = ray.remote(num_gpus=config.param_opt.num_gpus)(ParameterServer).remote(
     training_suite_factory=training_suite_factory(config), use_remote=True
 )
+rb = ray.remote(ReplayBuffer).remote(**config.replay)
 
 # %%
 train_workers = [
@@ -241,15 +245,24 @@ test_worker = ray.remote(num_gpus=config.train.test_worker.num_gpus)(
     RolloutWorker
 ).remote(partial(make_test_worker_universe, config), name="test_worker")
 
-rb = ray.remote(ReplayBuffer).remote(**config.replay)
+# %%
+reanalyze_worker = ray.remote(num_gpus=0)(RolloutWorker).remote(
+    partial(make_reanalyze_universe), name="reanalyze_worker"
+)
 
+@ray.remote
+def get_item(val):
+    return val[0]
+
+
+# %%
 jb_logger = JAXBoardLoggerRemote.remote()
 terminal_logger = TerminalLoggerRemote.remote()
 start_training = False
 for epoch in range(1, config.train.num_epochs + 1):
     logger.info(f"Epoch {epoch}")
 
-    for w in train_workers:
+    for w in train_workers + [reanalyze_worker]:
         w.set.remote("params", ps.get_params.remote())
         w.set.remote("state", ps.get_state.remote())
 
@@ -265,7 +278,7 @@ for epoch in range(1, config.train.num_epochs + 1):
     train_targets = []
     for w in train_workers:
         sample = w.run.remote()
-        train_targets.append(rb.add_trajs.remote(sample))
+        train_targets.append(rb.add_trajs.remote(sample, from_env=True))
 
     if not start_training:
         rb_size = ray.get(rb.get_num_targets_created.remote())
@@ -291,6 +304,13 @@ for epoch in range(1, config.train.num_epochs + 1):
                 )
                 terminal_logger.write.remote(ps_update_result)
 
+        reanalyze_worker.set.remote(
+            "traj",
+            get_item.remote(rb.get_trajs_batch.remote(1)),
+        )
+        updated_traj = reanalyze_worker.run.remote()
+        rb.add_trajs.remote(updated_traj, from_env=False)
+
     if epoch % config.param_opt.save_interval == 0:
         ps.save.remote()
 
@@ -298,3 +318,5 @@ for epoch in range(1, config.train.num_epochs + 1):
     ray.get(ps.log_tensorboard.remote())
     ray.get(jb_logger.write.remote(rb.get_stats.remote()))
     ray.get(train_targets)
+
+# %%

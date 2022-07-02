@@ -695,3 +695,36 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
 @Law.wrap
 def concat_stacked_to_obs(stacked_frames, stacked_actions):
     return {"obs": jnp.concatenate([stacked_frames, stacked_actions], axis=-1)}
+
+
+def make_env_mocker():
+    def malloc():
+        return {"traj": None, "curr_traj_index": 0}
+
+    def apply(traj: StepSample, curr_traj_index: int):
+        chex.assert_rank(traj.frame, 4)
+        traj_len = traj.frame.shape[0]
+        last_step = curr_traj_index == (traj_len - 1)
+        ret = {
+            "curr_traj_index": curr_traj_index + 1,
+            "frame": np.expand_dims(traj.frame[curr_traj_index], axis=0),
+            "action": np.expand_dims(traj.action[curr_traj_index], axis=0),
+            "reward": np.expand_dims(traj.last_reward[curr_traj_index], axis=0),
+            "legal_actions_mask": np.expand_dims(
+                traj.legal_actions_mask[curr_traj_index], axis=0
+            ),
+            "to_play": np.expand_dims(traj.to_play[curr_traj_index], axis=0),
+            "is_first": np.expand_dims(traj.is_first[curr_traj_index], axis=0),
+            "is_last": np.expand_dims(traj.is_last[curr_traj_index], axis=0),
+        }
+        if last_step:
+            ret["traj"] = None
+            ret["curr_traj_index"] = 0
+        return ret
+
+    return Law(
+        name="env_mocker",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )

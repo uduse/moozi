@@ -15,7 +15,7 @@ env:
 
 replay:
   use_remote: true
-  min_size: 10_000
+  min_size: 100
   max_size: 500_000
   sampling_strategy: ranking
   num_unroll_steps: ${num_unroll_steps}
@@ -90,7 +90,7 @@ train:
     num_cpus: 1
     num_gpus: 0.2
     planner:
-      num_envs: 1
+      batch_size: 1
       dim_action: ${dim_action}
       num_simulations: 50
       dirichlet_fraction: 0.2

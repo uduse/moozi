@@ -15,7 +15,7 @@ env:
 
 replay:
   use_remote: true
-  min_size: 100
+  min_size: 1_000
   max_size: 500_000
   sampling_strategy: ranking
   num_unroll_steps: ${num_unroll_steps}
@@ -56,7 +56,7 @@ nn:
 train:
   enabled: true
   num_epochs: 2000
-  sample_update_ratio: 20
+  sample_update_ratio: 5
   batch_size: 512
   lr: 5.0e-2
   weight_decay: 1.0e-4
@@ -69,16 +69,15 @@ train:
     planner:
       batch_size: ${train.env_worker.num_envs}
       dim_action: ${dim_action}
-      num_simulations: 20
+      num_simulations: 50
       dirichlet_alpha: 0.2
       dirichlet_fraction: 0.2
       temperature: 1.0
 
   reanalyze_worker:
-    num_workers: 1
-    num_targets: 20
+    num_workers: 20
     planner:
-      batch_size: ${train.reanalyze_worker.num_targets}
+      batch_size: 1
       dim_action: ${dim_action}
       num_simulations: 50
       dirichlet_alpha: 0.2

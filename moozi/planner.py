@@ -34,6 +34,7 @@ def make_planner(
     dirichlet_fraction: float = 0.25,
     dirichlet_alpha: float = 0.3,
     temperature: float = 1.0,
+    output_action: bool = True,
 ) -> Law:
     def malloc():
         return {
@@ -76,13 +77,15 @@ def make_planner(
             temperature=temperature,
         )
         stats = policy_output.search_tree.summary()
-        return {
-            "action": policy_output.action,
+        ret = {
             "action_probs": policy_output.action_weights,
             "q_values": stats.qvalues,
             "root_value": stats.value,
             "random_key": random_key,
         }
+        if output_action:
+            ret["action"] = policy_output.action
+        return ret
 
     return Law(
         name="planner",

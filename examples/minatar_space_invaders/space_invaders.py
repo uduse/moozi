@@ -107,17 +107,17 @@ model = make_model(nn_arch_cls, nn_spec)
 
 
 # %%
-def _termination_penalty(is_last, reward):
-    reward_overwrite = jax.lax.cond(
-        is_last,
-        lambda: reward - 1,
-        lambda: reward,
-    )
-    return {"reward": reward_overwrite}
+# def _termination_penalty(is_last, reward):
+#     reward_overwrite = jax.lax.cond(
+#         is_last,
+#         lambda: reward - 10.0,
+#         lambda: reward,
+#     )
+#     return {"reward": reward_overwrite}
 
 
-penalty = Law.wrap(_termination_penalty)
-penalty.apply = link(jax.vmap(unlink(penalty.apply)))
+# penalty = Law.wrap(_termination_penalty)
+# penalty.apply = link(jax.vmap(unlink(penalty.apply)))
 
 # %%
 def make_env_worker_universe(config):
@@ -132,6 +132,7 @@ def make_env_worker_universe(config):
         config.dim_action,
     )
 
+    penalizer = make_last_step_penalizer(penalty=10.0).vmap(batch_size=num_envs)
     planner = make_planner(model=model, **config.train.env_worker.planner).jit(
         backend="gpu"
     )
@@ -142,7 +143,7 @@ def make_env_worker_universe(config):
     final_law = sequential(
         [
             vec_env,
-            penalty,
+            penalizer,
             frame_stacker,
             concat_stacked_to_obs,
             planner,
@@ -196,8 +197,12 @@ def make_reanalyze_universe():
         config.dim_action,
     ).vmap(batch_size=1)
     planner = make_planner(
-        model=model, dim_action=config.dim_action, batch_size=1, num_simulations=10
-    )
+        model=model,
+        dim_action=config.dim_action,
+        batch_size=1,
+        num_simulations=10,
+        output_action=False,
+    ).jit(backend="cpu")
     terminalor = make_terminator(size=1)
     final_law = sequential(
         [
@@ -246,9 +251,13 @@ test_worker = ray.remote(num_gpus=config.train.test_worker.num_gpus)(
 ).remote(partial(make_test_worker_universe, config), name="test_worker")
 
 # %%
-reanalyze_worker = ray.remote(num_gpus=0)(RolloutWorker).remote(
-    partial(make_reanalyze_universe), name="reanalyze_worker"
-)
+reanalyze_workers = [
+    ray.remote(num_gpus=0, num_cpus=0)(RolloutWorker).remote(
+        partial(make_reanalyze_universe), name=f"reanalyze_worker_{i}"
+    )
+    for i in range(config.train.reanalyze_worker.num_workers)
+]
+
 
 @ray.remote
 def get_item(val):
@@ -262,7 +271,7 @@ start_training = False
 for epoch in range(1, config.train.num_epochs + 1):
     logger.info(f"Epoch {epoch}")
 
-    for w in train_workers + [reanalyze_worker]:
+    for w in train_workers + reanalyze_workers:
         w.set.remote("params", ps.get_params.remote())
         w.set.remote("state", ps.get_state.remote())
 
@@ -304,12 +313,10 @@ for epoch in range(1, config.train.num_epochs + 1):
                 )
                 terminal_logger.write.remote(ps_update_result)
 
-        reanalyze_worker.set.remote(
-            "traj",
-            get_item.remote(rb.get_trajs_batch.remote(1)),
-        )
-        updated_traj = reanalyze_worker.run.remote()
-        rb.add_trajs.remote(updated_traj, from_env=False)
+        for re_w in reanalyze_workers:
+            re_w.set.remote("traj", get_item.remote(rb.get_trajs_batch.remote(1)))
+            updated_traj = re_w.run.remote()
+            rb.add_trajs.remote(updated_traj, from_env=False)
 
     if epoch % config.param_opt.save_interval == 0:
         ps.save.remote()

@@ -227,7 +227,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         losses["loss/value_0"] = vmap(rlax.categorical_cross_entropy)(
             labels=n_step_return_transformed,
             logits=network_output.value,
-        )
+        ) * 0.25
 
         losses["loss/action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
             labels=batch.action_probs.take(0, axis=1),
@@ -276,7 +276,7 @@ class MuZeroLossWithScalarTransform(LossFn):
                     labels=n_step_return_transformed,
                     logits=network_output.value,
                 )
-                * transition_loss_scale
+                * transition_loss_scale * 0.25
             )
 
             # action probs loss

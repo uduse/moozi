@@ -619,7 +619,7 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
         )
         rgbs = np.array(cs[numerical_state - 1] * 255, dtype=np.uint8)
         img = Image.fromarray(rgbs)
-        img = img.resize((img.width * 20, img.height * 20), Image.NEAREST)
+        img = img.resize((img.width * 25, img.height * 25), Image.NEAREST)
         draw = ImageDraw.Draw(img)
         action_map = {
             0: "Stay",
@@ -630,7 +630,7 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
         with np.printoptions(precision=3, suppress=True, floatmode="fixed"):
             content = (
                 f"R {reward[0]}\n"
-                f"V {root_value[0]}\n"
+                f"V {np.array(root_value[0])}\n"
                 f"π {action_probs[0]}\n"
                 f"Q {q_values[0]}\n"
                 f"A {action_map[int(action[0])]}\n"
@@ -650,7 +650,7 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
                 save_all=True,
                 append_images=images[1:],
                 optimize=True,
-                quality=20,
+                quality=40,
                 duration=40,
             )
             logger.info("gif saved to " + str(gif_fpath))
@@ -728,3 +728,16 @@ def make_env_mocker():
         apply=link(apply),
         read=get_keys(apply),
     )
+
+
+def make_last_step_penalizer(penalty: float = 10.0):
+    @Law.wrap
+    def termination_penalty(is_last, reward):
+        reward_overwrite = jax.lax.cond(
+            is_last,
+            lambda: reward - penalty,
+            lambda: reward,
+        )
+        return {"reward": reward_overwrite}
+
+    return termination_penalty

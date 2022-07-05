@@ -1,3 +1,4 @@
+import tree
 import typing
 from typing import NamedTuple
 
@@ -18,6 +19,7 @@ class StepSample(NamedTuple):
     frame: np.ndarray
 
     # last reward from the environment
+    # TODO: rename last_reward to just reward
     last_reward: np.ndarray
     is_first: np.ndarray
     is_last: np.ndarray
@@ -42,6 +44,9 @@ class StepSample(NamedTuple):
             action=np.asarray(self.action, dtype=np.int32),
         )
 
+    def shapes(self) -> dict:
+        return tree.map_structure(lambda x: x.shape, self)
+
 
 # Trajectory is a StepSample with stacked values
 class TrajectorySample(StepSample):
@@ -51,7 +56,7 @@ class TrajectorySample(StepSample):
 class TrainTarget(NamedTuple):
     # right now we only support perfect information games
     # so stacked_frames is a history of symmetric observations
-    obs: np.ndarray
+    frame: np.ndarray
 
     # action taken in in each step, -1 means no action taken (terminal state)
     action: np.ndarray
@@ -77,7 +82,7 @@ class TrainTarget(NamedTuple):
 
     def cast(self) -> "TrainTarget":
         return TrainTarget(
-            obs=np.asarray(self.obs, dtype=np.float32),
+            frame=np.asarray(self.obs, dtype=np.float32),
             action=np.asarray(self.action, dtype=np.int32),
             n_step_return=np.asarray(self.n_step_return, dtype=np.float32),
             last_reward=np.asarray(self.last_reward, dtype=np.float32),
@@ -87,6 +92,9 @@ class TrainTarget(NamedTuple):
                 self.importance_sampling_ratio, dtype=np.float32
             ),
         )
+
+    def shapes(self) -> dict:
+        return tree.map_structure(lambda x: x.shape, self)
 
 
 # TODO: maybe make statistics a part of training state?

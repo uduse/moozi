@@ -65,7 +65,8 @@ class ReplayBuffer:
     def _process_trajs(self, trajs: List[TrajectorySample], from_env: bool):
         for traj in trajs:
             chex.assert_rank(traj.last_reward, 1)
-            for i in range(len(traj.last_reward) - 1):
+            traj_len = traj.action.shape[0]
+            for i in range(traj_len):
                 target = make_target_from_traj(
                     traj,
                     start_idx=i,

@@ -228,6 +228,8 @@ def training_suite_factory(config):
         weight_decay=config.train.weight_decay,
         lr=config.train.lr,
         num_unroll_steps=config.num_unroll_steps,
+        num_stacked_frames=config.num_stacked_frames,
+        target_update_period=config.train.target_update_period,
     )
 
 

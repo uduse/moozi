@@ -1,4 +1,7 @@
 # %%
+from moozi.laws import MinAtarVisualizer
+import gym
+import operator
 import uuid
 from PIL import Image, ImageDraw, ImageFont
 import seaborn as sns
@@ -42,7 +45,8 @@ load_dotenv()
 logger.remove()
 logger.add(sys.stderr, level="INFO")
 
-config = OmegaConf.load("/moozi/examples/minatar_space_invaders/config.yml")
+config_path = "/moozi/examples/minatar_space_invaders/config.yml"
+config = OmegaConf.load(config_path)
 OmegaConf.resolve(config)
 print(OmegaConf.to_yaml(config, resolve=True))
 
@@ -70,7 +74,6 @@ class Universe:
         return ret
 
 
-# %%
 class RolloutWorker:
     def __init__(
         self, universe_factory: Callable, name: str = "rollout_worker"
@@ -96,7 +99,6 @@ class RolloutWorker:
         self.universe.tape[key] = value
 
 
-# %%
 scalar_transform = make_scalar_transform(**config.scalar_transform)
 nn_arch_cls = eval(config.nn.arch_cls)
 nn_spec = eval(config.nn.spec_cls)(
@@ -104,19 +106,6 @@ nn_spec = eval(config.nn.spec_cls)(
 )
 model = make_model(nn_arch_cls, nn_spec)
 
-
-# %%
-def _termination_penalty(is_last, reward):
-    reward_overwrite = jax.lax.cond(
-        is_last,
-        lambda: reward - 10.0,
-        lambda: reward,
-    )
-    return {"reward": reward_overwrite}
-
-
-penalty = Law.wrap(_termination_penalty)
-penalty.apply = link(jax.vmap(unlink(penalty.apply)))
 
 # %%
 def make_env_worker_universe(config):
@@ -131,27 +120,10 @@ def make_env_worker_universe(config):
         config.dim_action,
     )
 
-    cat_obs = Law(
-        name="cat_obs",
-        malloc=lambda: {
-            "obs": jnp.zeros(
-                (
-                    num_envs,
-                    config.nn.spec_kwargs.obs_rows,
-                    config.nn.spec_kwargs.obs_cols,
-                    config.nn.spec_kwargs.obs_channels,
-                )
-            )
-        },
-        apply=link(
-            lambda stacked_frames, stacked_actions: {
-                "obs": jnp.concatenate([stacked_frames, stacked_actions], axis=-1)
-            }
-        ),
-        read={"stacked_frames", "stacked_actions"},
+    penalizer = make_last_step_penalizer(penalty=10.0).vmap(batch_size=num_envs)
+    planner = make_planner(model=model, **config.train.env_worker.planner).jit(
+        backend="gpu", max_trace=10
     )
-
-    planner = make_planner(model=model, **config.train.env_worker.planner)
 
     traj_writer = make_traj_writer(num_envs)
     terminator = make_terminator(num_envs)
@@ -159,14 +131,10 @@ def make_env_worker_universe(config):
     final_law = sequential(
         [
             vec_env,
-            penalty,
-            sequential(
-                [
-                    frame_stacker,
-                    cat_obs,
-                    planner,
-                ],
-            ).jit(backend="gpu"),
+            penalizer,
+            frame_stacker,
+            concat_stacked_to_obs,
+            planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
             traj_writer,
             terminator,
@@ -177,31 +145,60 @@ def make_env_worker_universe(config):
     return Universe(tape, final_law)
 
 
-# %%
 def make_test_worker_universe(config):
-    policy = sequential(
-        [
-            make_batch_stacker(
-                1,
-                config.env.num_rows,
-                config.env.num_cols,
-                config.env.num_channels,
-                config.num_stacked_frames,
-                config.dim_action,
-            ),
-            make_planner(model=model, **config.train.test_worker.planner),
-        ]
+    stacker = make_batch_stacker(
+        1,
+        config.env.num_rows,
+        config.env.num_cols,
+        config.env.num_channels,
+        config.num_stacked_frames,
+        config.dim_action,
     )
-    policy.apply = chex.assert_max_traces(n=1)(policy.apply)
-    policy.apply = jax.jit(policy.apply, backend="gpu")
+    planner = make_planner(model=model, **config.train.test_worker.planner).jit(
+        backend="gpu", max_trace=10
+    )
 
     final_law = sequential(
         [
             make_vec_env(config.env.name, 1),
-            policy,
+            stacker,
+            concat_stacked_to_obs,
+            planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="test_worker_gifs"),
             make_traj_writer(1),
             make_reward_terminator(5),
+        ]
+    )
+    tape = make_tape(seed=config.seed)
+    tape.update(final_law.malloc())
+    return Universe(tape, final_law)
+
+
+def make_reanalyze_universe():
+    env_mocker = make_env_mocker()
+    stacker = make_stacker(
+        config.env.num_rows,
+        config.env.num_cols,
+        config.env.num_channels,
+        config.num_stacked_frames,
+        config.dim_action,
+    ).vmap(batch_size=1)
+    planner = make_planner(
+        model=model,
+        dim_action=config.dim_action,
+        batch_size=1,
+        num_simulations=10,
+        output_action=False,
+    ).jit(backend="cpu", max_trace=10)
+    terminalor = make_terminator(size=1)
+    final_law = sequential(
+        [
+            env_mocker,
+            stacker,
+            concat_stacked_to_obs,
+            planner,
+            make_traj_writer(1),
+            terminalor,
         ]
     )
     tape = make_tape(seed=config.seed)
@@ -218,112 +215,51 @@ def training_suite_factory(config):
         weight_decay=config.train.weight_decay,
         lr=config.train.lr,
         num_unroll_steps=config.num_unroll_steps,
+        num_stacked_frames=config.num_stacked_frames,
     )
 
 
 # %%
 ps = ParameterServer(training_suite_factory=training_suite_factory(config))
 rb = ReplayBuffer(**config.replay)
+train_worker = RolloutWorker(partial(make_env_worker_universe, config))
+test_worker = RolloutWorker(partial(make_test_worker_universe, config))
+reanalyze_workers = RolloutWorker(partial(make_reanalyze_universe))
 
 # %%
-checkpoint = "/root/.local/share/virtualenvs/moozi-g1CZ00E9/.guild/runs/3a44c2de50bb413e9ae79fb3a8976187/checkpoints/9765.pkl"
-ps.restore(checkpoint)
+train_worker.set("params", ps.get_params())
+train_worker.set("state", ps.get_state())
 
 # %%
-w = RolloutWorker(partial(make_env_worker_universe, config))
+trajs = train_worker.run()
+rb.add_trajs(trajs)
 
 # %%
-w.set("params", ps.get_params())
-w.set("state", ps.get_state())
-for _ in range(1):
-    trajs = w.run()
-    rb.add_trajs(trajs)
+traj = rb.get_trajs_batch(1)[0]
 
 # %%
-trajs_batch = rb.get_trajs_batch(2)
+steps = unstack_sequence_fields(traj, batch_size=traj.frame.shape[0])
 
 # %%
-@Law.wrap
-def to_step_sample(
-    frame,
-    reward,
-    is_first,
-    is_last,
-    to_play,
-    legal_actions_mask,
-    root_value,
-    action_probs,
-    action,
-):
-    return {
-        "step_sample": StepSample(
-            frame=frame,
-            last_reward=reward,
-            is_first=is_first,
-            is_last=is_last,
-            to_play=to_play,
-            legal_actions_mask=legal_actions_mask,
-            root_value=root_value,
-            action_probs=action_probs,
-            action=action,
-        )
-    }
-
+from IPython.display import display
+vis = MinAtarVisualizer()
+for step in steps:
+    img = vis.make_image(frame=step.frame)
+    img = vis.add_descriptions(
+        img,
+        root_value=step.root_value,
+        reward=step.last_reward,
+        action=step.action,
+        action_probs=step.action_probs,
+    )
+    display(img)
 
 # %%
-
-# re_law = make_re()
-# tape = make_tape(seed=config.seed)
-# tape.update(re_law.malloc())
-# tape["params"] = ps.get_params()
-# tape["state"] = ps.get_state()
-# tape['traj'] = trajs_batch[0]
-
-# universe = Universe(tape, re_law)
-# result = universe.run()
+rb.min_size = 1
+target = rb.get_train_targets_batch(10)
+print(target.shapes())
 
 # %%
-# jnp.mean(-jnp.sum(result[0].action_probs  * jnp.log(trajs_batch[0].action_probs + 1e-15), axis=-1))
+ps.update(target, target.frame.shape[0])
 
 # %%
-# from acme.utils.tree_utils import stack_sequence_fields
-# from acme.jax.utils import squeeze_batch_dim
-
-# new_traj = stack_sequence_fields(
-#     [squeeze_batch_dim(step_sample) for step_sample in step_samples]
-# )
-
-# %%
-# from moozi.nn.training import make_target_from_traj
-
-# make_target_from_traj(
-#     new_traj,
-#     start_idx=0,
-#     discount=0.99,
-#     num_unroll_steps=5,
-#     num_td_steps=1,
-#     num_stacked_frames=4,
-# )
-
-# %%
-# w_re = RolloutWorker(partial(make_reanalyze_universe, config))
-# w_re.set("params", ps.get_params())
-# w_re.set("state", ps.get_state())
-
-# %%
-# w_re.set("train_target", old)
-# result = w_re.run()
-
-# %%
-# tree.map_structure(lambda x: x.shape, old)
-
-# # %%
-# tape["policy_cross_entropy"]
-
-# # %%
-# def output_ones():
-#     return jnp.ones((10, 2))
-
-
-# jax.vmap(output_ones, axis_size=10)()
-# # %%

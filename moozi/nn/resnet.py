@@ -234,6 +234,13 @@ class ResNetArchitecture(NNArchitecture):
         next_hidden_state = normalize_hidden_state(next_hidden_state)
         return next_hidden_state, reward_logits
 
+    def _proj_net(self, hidden_state, is_training):
+        chex.assert_shape(
+            hidden_state,
+            (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
+        )
+        return hk.nets.MLP(output_sizes=[64, 64])(hidden_state)
+
 
 def normalize_hidden_state(hidden_state):
     batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)

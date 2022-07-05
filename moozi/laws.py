@@ -230,40 +230,6 @@ class ReanalyzeEnvLaw:
         )
 
 
-@link
-@dataclass
-class ReanalyzeEnvLawV2:
-    def __call__(self, input_buffer):
-        input_buffer_update = tuple(input_buffer[1:])
-        train_target: TrainTarget = input_buffer[0]
-        assert isinstance(train_target, TrainTarget)
-        return dict(
-            stacked_frames=train_target.stacked_frames,
-            is_last=False,
-            legal_actions_mask=np.ones_like(train_target.action_probs),
-            input_buffer=input_buffer_update,
-        )
-
-
-def exit_if_no_input(input_buffer):
-    if not input_buffer:
-        return {"interrupt_exit": True}
-
-
-# @link
-# def increment_tick(num_ticks):
-#     return {"num_ticks": num_ticks + 1}
-
-
-# @link
-# def set_random_action_from_timestep(is_last, legal_actions):
-#     action = -1
-#     if not is_last:
-#         random_action = np.random.choice(np.flatnonzero(legal_actions == 1))
-#         action = random_action
-#     return dict(action=action)
-
-
 @dataclass
 class Law:
     name: str
@@ -326,7 +292,8 @@ def make_env_law(env_name) -> Law:
         if is_last:
             timestep = env.reset()
         else:
-            timestep = env.step(action)
+            # action 0 is reserved for termination
+            timestep = env.step(action - 1)
 
         if timestep.reward is None:
             reward = 0.0
@@ -405,28 +372,50 @@ def make_stacker(
     dim_action: int,
 ):
     def malloc():
+        stacked_actions = jnp.zeros(
+            (num_rows, num_cols, num_stacked_frames * dim_action),
+            dtype=jnp.float32,
+        )
+        stacked_actions = stacked_actions.at[:, :, 0].set(1)
+        stacked_actions = stacked_actions / dim_action
+
         return {
             "stacked_frames": jnp.zeros(
                 (num_rows, num_cols, num_stacked_frames * num_channels),
                 dtype=jnp.float32,
             ),
-            "stacked_actions": jnp.zeros(
-                (num_rows, num_cols, num_stacked_frames * dim_action),
-                dtype=jnp.float32,
-            ),
+            "stacked_actions": stacked_actions,
         }
 
-    def apply(stacked_frames, stacked_actions, frame, action):
-        stacked_frames = jnp.append(stacked_frames, frame, axis=-1)
-        stacked_frames = stacked_frames[..., np.array(frame.shape[-1]) :]
+    def apply(stacked_frames, stacked_actions, frame, action, is_first):
+        def _stack(stacked_frames, stacked_actions, frame, action):
+            new_stacked_frames = jnp.append(stacked_frames, frame, axis=-1)
+            frame_plane_size = np.array(frame.shape[-1])
+            new_stacked_frames = new_stacked_frames[..., frame_plane_size:]
+            action_plane = jax.nn.one_hot(action, dim_action)
+            action_plane = jnp.expand_dims(action_plane / dim_action, axis=[0, 1])
+            action_plane = jnp.tile(action_plane, (frame.shape[0], frame.shape[1], 1))
+            new_stacked_actions = jnp.append(stacked_actions, action_plane, axis=-1)
+            action_plane_size = np.array(action_plane.shape[-1])
+            new_stacked_actions = new_stacked_actions[..., action_plane_size:]
+            return {
+                "stacked_frames": new_stacked_frames,
+                "stacked_actions": new_stacked_actions,
+            }
 
-        action_plane = jax.nn.one_hot(action, dim_action)
-        action_plane = jnp.expand_dims(action_plane / dim_action, axis=[0, 1])
-        action_plane = jnp.tile(action_plane, (frame.shape[0], frame.shape[1], 1))
-        stacked_actions = jnp.append(stacked_actions, action_plane, axis=-1)
-        stacked_actions = stacked_actions[..., np.array(action_plane.shape[-1]) :]
+        def _reset_and_stack(stacked_frames, stacked_actions, frame, action):
+            ret = malloc()
+            return _stack(**ret, frame=frame, action=action)
 
-        return {"stacked_frames": stacked_frames, "stacked_actions": stacked_actions}
+        return jax.lax.cond(
+            is_first,
+            _reset_and_stack,
+            _stack,
+            stacked_frames,
+            stacked_actions,
+            frame,
+            action,
+        )
 
     return Law(
         name=f"batch_frame_stacker({num_rows=}, {num_cols=}, {num_channels=}, {num_stacked_frames=})",
@@ -434,6 +423,21 @@ def make_stacker(
         apply=link(apply),
         read=get_keys(apply),
     )
+
+
+# @Law.wrap
+# def reset_stacked_frames_and_actions_if_last(is_last, stacked_frames, stacked_actions):
+#     return jax.lax.cond(
+#         is_last,
+#         lambda: {
+#             "stacked_frames": jnp.zeros_like(stacked_frames),
+#             "stacked_actions": jnp.zeros_like(stacked_actions),
+#         },
+#         lambda: {
+#             "stacked_frames": stacked_frames,
+#             "stacked_actions": stacked_actions,
+#         },
+#     )
 
 
 def make_batch_stacker_v2(
@@ -592,12 +596,7 @@ def make_reward_terminator(size: int):
 
 
 def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
-    cmap = sns.color_palette("cubehelix", n_channels)
-    cmap.insert(0, (0, 0, 0))
-    cs = np.array([cmap[i] for i in range(n_channels + 1)])
-    font = ImageFont.truetype("courier.ttf", 10)
-    root_dir = Path(root_dir)
-    root_dir.mkdir(parents=True, exist_ok=True)
+    vis = MinAtarVisualizer(num_channels=n_channels)
 
     def malloc():
         return {"images": []}
@@ -612,48 +611,20 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
         reward,
         images: List[Image.Image],
     ):
-        numerical_state = np.array(
-            np.amax(frame[0] * np.reshape(np.arange(n_channels) + 1, (1, 1, -1)), 2)
-            + 0.5,
-            dtype=int,
+        image = vis.make_image(
+            frame=frame[0],
         )
-        rgbs = np.array(cs[numerical_state - 1] * 255, dtype=np.uint8)
-        img = Image.fromarray(rgbs)
-        img = img.resize((img.width * 25, img.height * 25), Image.NEAREST)
-        draw = ImageDraw.Draw(img)
-        action_map = {
-            0: "Stay",
-            1: "Left",
-            2: "Right",
-            3: "Fire",
-        }
-        with np.printoptions(precision=3, suppress=True, floatmode="fixed"):
-            content = (
-                f"R {reward[0]}\n"
-                f"V {np.array(root_value[0])}\n"
-                f"π {action_probs[0]}\n"
-                f"Q {q_values[0]}\n"
-                f"A {action_map[int(action[0])]}\n"
-            )
-        draw.text((0, 0), content, fill="black", font=font)
-        images = images + [img]
+        image = vis.add_descriptions(
+            image,
+            root_value=root_value[0],
+            q_values=q_values[0],
+            action_probs=action_probs[0],
+            action=action[0],
+            reward=reward[0],
+        )
+        images = images + [image]
         if is_last[0]:
-            counter = 0
-            while gif_fpath := (root_dir / f"{counter}.gif"):
-                if gif_fpath.exists():
-                    counter += 1
-                else:
-                    break
-
-            images[0].save(
-                str(gif_fpath),
-                save_all=True,
-                append_images=images[1:],
-                optimize=True,
-                quality=40,
-                duration=40,
-            )
-            logger.info("gif saved to " + str(gif_fpath))
+            vis.save_gif(images, root_dir)
             images = []
         return {"images": images}
 
@@ -663,33 +634,6 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
         apply=link(apply),
         read=get_keys(apply),
     )
-
-
-# def timestep_to_image(frame, reward, root_value, action_probs, action, q_values):
-#     numerical_state = np.array(
-#         np.amax(frame * np.reshape(np.arange(6) + 1, (1, 1, -1)), 2) + 0.5,
-#         dtype=int,
-#     )
-#     rgbs = np.array(cs[numerical_state - 1] * 255, dtype=np.uint8)
-#     img = Image.fromarray(rgbs)
-#     img = img.resize((img.width * 20, img.height * 20), Image.NEAREST)
-#     draw = ImageDraw.Draw(img)
-#     action_map = {
-#         0: "Stay",
-#         1: "Left",
-#         2: "Right",
-#         3: "Fire",
-#     }
-#     with np.printoptions(precision=3, suppress=True, floatmode="fixed"):
-#         content = (
-#             f"R {reward[0]}\n"
-#             f"V {root_value[0]}\n"
-#             f"π {action_probs[0]}\n"
-#             f"Q {q_values[0]}\n"
-#             f"A {action_map[int(action[0])]}\n"
-#         )
-#     draw.text((0, 0), content, fill="black", font=font)
-#     return img
 
 
 @Law.wrap
@@ -730,9 +674,39 @@ def make_env_mocker():
     )
 
 
+def make_env_mocker_v2():
+    def malloc():
+        return {"traj": False, "curr_traj_index": 0}
+
+    def apply(traj: Union[StepSample, bool], curr_traj_index: int):
+        assert traj is not False
+        chex.assert_rank(traj.frame, 4)
+        ret = {
+            "curr_traj_index": curr_traj_index + 1,
+            "frame": traj.frame[curr_traj_index],
+            "action": traj.action[curr_traj_index],
+            "reward": traj.last_reward[curr_traj_index],
+            "legal_actions_mask": traj.legal_actions_mask[curr_traj_index],
+            "to_play": traj.to_play[curr_traj_index],
+            "is_first": traj.is_first[curr_traj_index],
+            "is_last": traj.is_last[curr_traj_index],
+        }
+        if traj.is_last[curr_traj_index]:
+            ret["curr_traj_index"] = 0
+            ret["traj"] = False
+        return ret
+
+    return Law(
+        name="env_mocker",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )
+
+
 def make_last_step_penalizer(penalty: float = 10.0):
     @Law.wrap
-    def termination_penalty(is_last, reward):
+    def penalize_last_step(is_last, reward):
         reward_overwrite = jax.lax.cond(
             is_last,
             lambda: reward - penalty,
@@ -740,4 +714,114 @@ def make_last_step_penalizer(penalty: float = 10.0):
         )
         return {"reward": reward_overwrite}
 
-    return termination_penalty
+    return penalize_last_step
+
+
+class MinAtarVisualizer:
+    def __init__(self, num_channels: int = 6):
+        self._num_channels = num_channels
+        cmap = sns.color_palette("cubehelix", self._num_channels)
+        cmap.insert(0, (0, 0, 0))
+        self.colors = np.array([cmap[i] for i in range(self._num_channels + 1)])
+        try:
+            self.font = ImageFont.truetype("courier.ttf", 10)
+        except:
+            font_path_user_root = str(Path("~/courier.ttf").expanduser().resolve())
+            self.font = ImageFont.truetype(font_path_user_root, 10)
+
+    def make_image(
+        self,
+        frame,
+    ) -> Image:
+        frame = np.asarray(frame, dtype=np.float32)
+        numerical_state = np.array(
+            np.amax(
+                frame * np.reshape(np.arange(self._num_channels) + 1, (1, 1, -1)), 2
+            )
+            + 0.5,
+            dtype=int,
+        )
+        rgbs = np.array(self.colors[numerical_state - 1] * 255, dtype=np.uint8)
+        img = Image.fromarray(rgbs)
+        img = img.resize((img.width * 25, img.height * 25), Image.NEAREST)
+        return img
+
+    def add_descriptions(
+        self,
+        img,
+        root_value=None,
+        q_values=None,
+        action_probs=None,
+        action=None,
+        reward=None,
+        action_map=None,
+    ):
+        if root_value is not None:
+            root_value = np.asarray(root_value, dtype=np.float32)
+        if q_values is not None:
+            q_values = np.asarray(q_values, dtype=np.float32)
+        if action_probs is not None:
+            action_probs = np.asarray(action_probs, dtype=np.float32)
+        if action is not None:
+            action = np.asarray(action, dtype=np.int32)
+        if reward is not None:
+            reward = np.asarray(reward, dtype=np.float32)
+
+        img = img.copy()
+        draw = ImageDraw.Draw(img)
+        with np.printoptions(precision=3, suppress=True, floatmode="fixed"):
+            content = ""
+            if reward is not None:
+                content += f"R {reward}\n"
+            if root_value is not None:
+                content += f"V {root_value}\n"
+            if q_values is not None:
+                content += f"Q {q_values}\n"
+            if action_probs is not None:
+                content += f"π {action_probs}\n"
+            if action is not None:
+                if action_map:
+                    action = action_map[action]
+                content += f"A {action}\n"
+        draw.text((0, 0), content, fill="black", font=self.font)
+        return img
+
+    def cat_images(self, images, max_columns: int = 5):
+        num_columns = min(len(images), max_columns)
+        num_rows = int(np.ceil(len(images) / max_columns))
+        width = images[0].width * num_columns
+        height = images[0].height * num_rows
+        dst = Image.new("RGB", (width, height))
+        for row in range(num_rows):
+            for i in range(len(images)):
+                dst.paste(images[i], (i * images[i].width, 0))
+            return dst
+
+    def save_gif(self, images, root_dir):
+        root_dir = Path(root_dir)
+        root_dir.mkdir(parents=True, exist_ok=True)
+        counter = 0
+        while gif_fpath := (root_dir / f"{counter}.gif"):
+            if gif_fpath.exists():
+                counter += 1
+            else:
+                break
+        images[0].save(
+            str(gif_fpath),
+            save_all=True,
+            append_images=images[1:],
+            optimize=True,
+            quality=40,
+            duration=40,
+        )
+        logger.info("gif saved to " + str(gif_fpath))
+
+    def make_images_from_obs(self, obs, num_stacked_frames) -> list:
+        images = []
+        for i in range(num_stacked_frames):
+            lower = self._num_channels * i
+            upper = self._num_channels * (i + 1)
+            img = self.make_image(obs[:, :, lower:upper])
+            img = self.add_descriptions(img)
+            images.append(img)
+        return images

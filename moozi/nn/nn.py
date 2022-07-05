@@ -105,6 +105,9 @@ class NNArchitecture(hk.Module):
     ):
         raise NotImplementedError
 
+    def _proj_net(self, hidden_state: jnp.ndarray, is_training: bool):
+        raise NotImplementedError
+
     def root_inference(self, root_feats: RootFeatures, is_training: bool):
         """Uses the representation function and the prediction function."""
         hidden_state = self._repr_net(root_feats.obs, is_training)
@@ -159,11 +162,11 @@ class NNArchitecture(hk.Module):
             policy_logits=policy_logits,
             hidden_state=next_hidden_state,
         )
-        
-    # def project(self, is_training):
-    #     projection = self._project_net(is_training)
-    #     return projection
 
+    def project(self, hidden_state, is_training):
+        projection = self._project_net(hidden_state, is_training)
+        chex.assert_equal_shape(projection, hidden_state)
+        return projection
 
 
 # TODO: also add action histories as bias planes
@@ -278,10 +281,9 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
     def trans_inference_unbatched(params, state, feats, is_training):
         out, state = trans_inference(params, state, add_batch_dim(feats), is_training)
         return squeeze_batch_dim(out), state
-        
-    # def project(params, state, is_training):
-    #     # TODO: project
-    #     return
+
+    # def project_unbatched(params, state, is_training):
+    #     return project_
 
     return NNModel(
         init_params_and_state,

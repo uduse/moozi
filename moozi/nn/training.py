@@ -1,6 +1,6 @@
 from dataclasses import dataclass
-from acme.utils.tree_utils import stack_sequence_fields
-from typing import Any, Callable, Dict, Tuple, Type
+from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
+from typing import Any, Callable, Dict, List, Tuple, Type
 
 import chex
 import haiku as hk
@@ -14,7 +14,7 @@ import tree
 from jax import vmap
 from moozi import ScalarTransform, TrainingState, TrainTarget
 from moozi.core.types import TrainingState, TrajectorySample
-from moozi.laws import make_stacker
+from moozi.laws import concat_stacked_to_obs, make_stacker, make_env_mocker_v2
 from moozi.nn import (
     NNArchitecture,
     NNModel,
@@ -51,134 +51,81 @@ def scale_gradient(x, scale):
 
 
 def _compute_prior_kl(
-    model: NNModel, batch: TrainTarget, orig_params, new_params, state
+    model: NNModel,
+    obs,
+    orig_params,
+    new_params,
+    orig_state,
+    new_state,
 ):
     is_training = False
+
     orig_out, _ = model.root_inference(
         orig_params,
-        state,
-        RootFeatures(obs=batch.obs, player=jnp.array(0)),
+        orig_state,
+        RootFeatures(obs=obs, player=jnp.array(0)),
         is_training,
     )
     orig_logits = orig_out.policy_logits
+
     new_out, _ = model.root_inference(
         new_params,
-        state,
-        RootFeatures(obs=batch.obs, player=jnp.array(0)),
+        new_state,
+        RootFeatures(obs=obs, player=jnp.array(0)),
         is_training,
     )
     new_logits = new_out.policy_logits
+
     prior_kl = jnp.mean(rlax.categorical_kl_divergence(orig_logits, new_logits))
     return prior_kl
 
 
-# @dataclass
-# class MuZeroLoss(LossFn):
-#     num_unroll_steps: int
-#     weight_decay: float = 1e-4
+def _make_obs_from_train_target(
+    batch: TrainTarget,
+    idx: int,
+    num_stacked_frames: int,
+    num_unroll_steps: int,
+    dim_action: int,
+):
+    (
+        batch_size,
+        num_frames,
+        num_rows,
+        num_cols,
+        num_channels,
+    ) = batch.frame.shape
 
-#     def __call__(
-#         self,
-#         model: hk.Params,
-#         state: hk.State,
-#         batch: TrainTarget,
-#     ) -> Tuple[chex.ArrayDevice, Any]:
-#         chex.assert_rank(
-#             [
-#                 batch.stacked_frames,
-#                 batch.action,
-#                 batch.n_step_return,
-#                 batch.last_reward,
-#                 batch.action_probs,
-#             ],
-#             [4, 2, 2, 2, 3],
-#         )
-#         chex.assert_equal_shape_prefix(
-#             [
-#                 batch.stacked_frames,
-#                 batch.action,
-#                 batch.n_step_return,
-#                 batch.last_reward,
-#                 batch.action_probs,
-#             ],
-#             prefix_len=1,
-#         )  # assert same batch dim
-#         batch_size = batch.stacked_frames.shape[0]
+    assert num_frames == (num_stacked_frames + num_unroll_steps)
+    stacked_frames = batch.frame[:, idx : idx + num_stacked_frames]
+    stacked_frames = jnp.moveaxis(stacked_frames, 1, -1)
+    stacked_frames = jnp.reshape(stacked_frames, (batch_size, num_rows, num_cols, -1))
+    chex.assert_shape(
+        stacked_frames,
+        (batch_size, num_rows, num_cols, num_stacked_frames * num_channels),
+    )
 
-#         init_inf_features = RootFeatures(
-#             obs=batch.stacked_frames,
-#             # TODO: actually pass player
-#             player=jnp.ones((batch.stacked_frames.shape[0], 1)),
-#         )
-#         is_training = True
-#         network_output, state = model.root_inference(
-#             params, state, init_inf_features, is_training
-#         )
+    stacked_actions = batch.action[:, idx : idx + num_stacked_frames]
+    stacked_actions = jax.nn.one_hot(stacked_actions, dim_action)
+    stacked_actions = stacked_actions / dim_action
+    stacked_actions = jnp.reshape(stacked_actions, (batch_size, -1))
+    stacked_actions = stacked_actions[:, jnp.newaxis, jnp.newaxis, :]
+    stacked_actions = jnp.tile(stacked_actions, (1, num_rows, num_cols, 1))
+    chex.assert_shape(
+        stacked_actions,
+        (batch_size, num_rows, num_cols, num_stacked_frames * dim_action),
+    )
 
-#         losses = {}
-
-#         losses["loss/value_0"] = vmap(mse)(
-#             batch.n_step_return.take(0, axis=1), network_output.value
-#         )
-#         losses["loss/action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
-#             batch.action_probs.take(0, axis=1), network_output.policy_logits
-#         )
-
-#         transition_loss_scale = 1 / self.num_unroll_steps
-#         for i in range(self.num_unroll_steps):
-#             hidden_state = scale_gradient(network_output.hidden_state, 0.5)
-#             recurr_inf_features = TransitionFeatures(
-#                 hidden_state=hidden_state,
-#                 action=batch.action.take(0, axis=1),
-#             )
-#             network_output, state = model.trans_inference(
-#                 params, state, recurr_inf_features, is_training
-#             )
-
-#             losses[f"loss/reward_{str(i + 1)}"] = (
-#                 vmap(mse)(batch.last_reward.take(i + 1, axis=1), network_output.reward)
-#                 * transition_loss_scale
-#             )
-#             losses[f"loss/value_{str(i + 1)}"] = (
-#                 vmap(mse)(batch.n_step_return.take(i + 1, axis=1), network_output.value)
-#                 * transition_loss_scale
-#             )
-#             losses[f"loss/action_probs_{str(i + 1)}"] = (
-#                 vmap(rlax.categorical_cross_entropy)(
-#                     batch.action_probs.take(i + 1, axis=1), network_output.policy_logits
-#                 )
-#                 * transition_loss_scale
-#             )
-
-#         # all batched losses should be the shape of (batch_size,)
-#         tree.map_structure(lambda x: chex.assert_shape(x, (batch_size,)), losses)
-
-#         losses["loss/l2"] = jnp.reshape(
-#             params_l2_loss(params) * self.weight_decay, (1,)
-#         )
-
-#         # apply importance sampling adjustment
-#         losses = tree.map_structure(
-#             lambda x: x * batch.importance_sampling_ratio, losses
-#         )
-
-#         # sum all losses
-#         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
-
-#         losses["loss"] = loss
-
-#         step_data = {}
-#         for key, value in tree.map_structure(jnp.mean, losses).items():
-#             step_data[key] = value
-
-#         return loss, dict(state=state, step_data=step_data)
+    return jnp.concatenate([stacked_frames, stacked_actions], axis=-1)
 
 
 @dataclass
 class MuZeroLossWithScalarTransform(LossFn):
+    num_stacked_frames: int
     num_unroll_steps: int
     scalar_transform: ScalarTransform
+    dim_action: int
     weight_decay: float = 1e-4
+    consistency_loss_coef: float = 1.0
 
     def __call__(
         self,
@@ -187,33 +134,17 @@ class MuZeroLossWithScalarTransform(LossFn):
         state: hk.State,
         batch: TrainTarget,
     ) -> Tuple[chex.ArrayDevice, Any]:
-        chex.assert_rank(
-            [
-                batch.obs,
-                batch.action,
-                batch.n_step_return,
-                batch.last_reward,
-                batch.action_probs,
-            ],
-            [4, 2, 2, 2, 3],
-        )
-        chex.assert_equal_shape_prefix(
-            [
-                batch.obs,
-                batch.action,
-                batch.n_step_return,
-                batch.last_reward,
-                batch.action_probs,
-            ],
-            prefix_len=1,
-        )  # assert same batch dim
-        batch_size = batch.obs.shape[0]
+        self._check_shapes(batch)
+        batch_size = batch.frame.shape[0]
 
-        init_inf_features = RootFeatures(
-            obs=batch.obs,
-            # TODO: actually pass player
-            player=jnp.zeros((batch_size, 1)),
+        obs = _make_obs_from_train_target(
+            batch,
+            0,
+            num_stacked_frames=self.num_stacked_frames,
+            num_unroll_steps=self.num_unroll_steps,
+            dim_action=self.dim_action,
         )
+        init_inf_features = RootFeatures(obs=obs, player=jnp.zeros((batch_size,)))
         is_training = True
         network_output, state = model.root_inference(
             params, state, init_inf_features, is_training
@@ -222,12 +153,22 @@ class MuZeroLossWithScalarTransform(LossFn):
         losses = {}
         info = {}
 
+        reward = batch.last_reward.take(0, axis=1)
+        reward_transformed = self.scalar_transform.transform(reward)
+        losses["loss/reward_0"] = vmap(rlax.categorical_cross_entropy)(
+            labels=reward_transformed,
+            logits=network_output.reward,
+        )
+
         n_step_return = batch.n_step_return.take(0, axis=1)
         n_step_return_transformed = self.scalar_transform.transform(n_step_return)
-        losses["loss/value_0"] = vmap(rlax.categorical_cross_entropy)(
-            labels=n_step_return_transformed,
-            logits=network_output.value,
-        ) * 0.25
+        losses["loss/value_0"] = (
+            vmap(rlax.categorical_cross_entropy)(
+                labels=n_step_return_transformed,
+                logits=network_output.value,
+            )
+            * 0.25
+        )
 
         losses["loss/action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
             labels=batch.action_probs.take(0, axis=1),
@@ -276,7 +217,8 @@ class MuZeroLossWithScalarTransform(LossFn):
                     labels=n_step_return_transformed,
                     logits=network_output.value,
                 )
-                * transition_loss_scale * 0.25
+                * transition_loss_scale
+                * 0.25
             )
 
             # action probs loss
@@ -287,6 +229,26 @@ class MuZeroLossWithScalarTransform(LossFn):
                 )
                 * transition_loss_scale
             )
+
+            # consistency loss
+            next_obs = _make_obs_from_train_target(
+                batch,
+                idx=i + 1,
+                num_stacked_frames=self.num_stacked_frames,
+                num_unroll_steps=self.num_unroll_steps,
+                dim_action=self.dim_action,
+            )
+
+            losses[f"loss/consistency_{str(i + 1)}"] = (
+                optax.cosine_distance(
+                    obs.reshape((obs.shape[0], -1)),
+                    jax.lax.stop_gradient(next_obs).reshape((next_obs.shape[0], -1)),
+                )
+                * transition_loss_scale
+                * self.consistency_loss_coef
+            )
+
+            obs = next_obs
 
         # all batched losses should be the shape of (batch_size,)
         tree.map_structure(lambda x: chex.assert_shape(x, (batch_size,)), losses)
@@ -314,11 +276,40 @@ class MuZeroLossWithScalarTransform(LossFn):
 
         return loss, dict(state=state, step_data=step_data)
 
+    def _check_shapes(self, batch):
+        chex.assert_rank(
+            [
+                batch.frame,
+                batch.action,
+                batch.n_step_return,
+                batch.root_value,
+                batch.last_reward,
+                batch.action_probs,
+            ],
+            [5, 2, 2, 2, 2, 3],
+        )
+
+        # assert same batch dim
+        chex.assert_equal_shape_prefix(
+            [
+                batch.frame,
+                batch.action,
+                batch.n_step_return,
+                batch.root_value,
+                batch.last_reward,
+                batch.action_probs,
+            ],
+            prefix_len=1,
+        )
+
 
 def make_sgd_step_fn(
     model: NNModel,
     loss_fn: LossFn,
     optimizer,
+    num_unroll_steps: int,
+    num_stacked_frames: int,
+    dim_action: int,
     target_update_period: int = 1,
     include_prior_kl: bool = True,
     include_weights: bool = False,
@@ -326,11 +317,15 @@ def make_sgd_step_fn(
     @jax.jit
     @chex.assert_max_traces(n=1)
     def sgd_step_fn(training_state: TrainingState, batch: mz.replay.TrainTarget):
+        orig_params = training_state.params
+        orig_state = training_state.state
+
         # gradient descend
         _, new_key = jax.random.split(training_state.rng_key)
         grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
             model, training_state.params, training_state.state, batch
         )
+        new_state = extra["state"]
         updates, new_opt_state = optimizer.update(grads, training_state.opt_state)
         new_params = optax.apply_updates(training_state.params, updates)
         new_steps = training_state.steps + 1
@@ -343,7 +338,7 @@ def make_sgd_step_fn(
         new_training_state = TrainingState(
             params=new_params,
             target_params=target_params,
-            state=extra["state"],
+            state=new_state,
             opt_state=new_opt_state,
             steps=new_steps,
             rng_key=new_key,
@@ -357,8 +352,20 @@ def make_sgd_step_fn(
                 step_data[name] = weights
 
         if include_prior_kl:
+            obs = _make_obs_from_train_target(
+                batch,
+                idx=0,
+                num_stacked_frames=num_stacked_frames,
+                num_unroll_steps=num_unroll_steps,
+                dim_action=dim_action,
+            )
             prior_kl = _compute_prior_kl(
-                model, batch, training_state.params, new_params, training_state.state
+                model=model,
+                obs=obs,
+                orig_params=orig_params,
+                new_params=new_params,
+                orig_state=orig_state,
+                new_state=new_state,
             )
             step_data["prior_kl"] = prior_kl
 
@@ -374,18 +381,24 @@ def make_training_suite(
     weight_decay: float,
     lr: float,
     num_unroll_steps: int,
+    num_stacked_frames: int,
+    target_update_period: int = 1,
 ) -> Tuple[NNModel, TrainingState, Callable]:
     model = make_model(nn_arch_cls, nn_spec)
     random_key = jax.random.PRNGKey(seed)
-    params, state = model.init_params_and_state(random_key)
+    random_key, new_key = jax.random.split(random_key)
+    params, state = model.init_params_and_state(new_key)
     loss_fn = MuZeroLossWithScalarTransform(
+        num_stacked_frames=num_stacked_frames,
         num_unroll_steps=num_unroll_steps,
-        weight_decay=weight_decay,
         scalar_transform=nn_spec.scalar_transform,
+        weight_decay=weight_decay,
+        dim_action=nn_spec.dim_action,
+        consistency_loss_coef=1.0,
     )
     optimizer = optax.chain(
         optax.clip_by_global_norm(1),
-        optax.adam(lr, b1=0.9, b2=0.99),
+        optax.adam(lr),
     )
     training_state = TrainingState(
         params=params,
@@ -393,15 +406,22 @@ def make_training_suite(
         state=state,
         opt_state=optimizer.init(params),
         steps=0,
-        rng_key=jax.random.PRNGKey(seed),
+        rng_key=random_key,
     )
-    # TODO: set target update period
-    sgd_step_fn = make_sgd_step_fn(model, loss_fn, optimizer, target_update_period=20)
+    sgd_step_fn = make_sgd_step_fn(
+        model=model,
+        loss_fn=loss_fn,
+        optimizer=optimizer,
+        num_stacked_frames=num_stacked_frames,
+        num_unroll_steps=num_unroll_steps,
+        dim_action=nn_spec.dim_action,
+        target_update_period=target_update_period,
+    )
     return model.with_jit(), training_state, sgd_step_fn
 
 
 def make_target_from_traj(
-    sample: TrajectorySample,
+    traj: TrajectorySample,
     start_idx,
     discount,
     num_unroll_steps,
@@ -409,48 +429,25 @@ def make_target_from_traj(
     num_stacked_frames,
 ) -> TrainTarget:
     # assert not batched
-    assert len(sample.last_reward.shape) == 1
+    assert len(traj.last_reward.shape) == 1
+    assert sum(traj.is_last) == 1
+    assert traj.is_last[-1] == True
 
-    last_step_idx = sample.is_last.argmax()
-
-    _, num_rows, num_cols, num_channels = sample.frame.shape
-    dim_action = sample.action_probs.shape[-1]
-    stacker = make_stacker(
-        num_rows=num_rows,
-        num_cols=num_cols,
-        num_channels=num_channels,
-        num_stacked_frames=num_stacked_frames,
-        dim_action=dim_action,
-    )
-
-    frame_idx_lower = max(start_idx - num_stacked_frames + 1, 0)
-    frame_idx_upper = start_idx + 1
-
-    tape = stacker.malloc()
-    for i in range(frame_idx_lower, frame_idx_upper):
-        tape["frame"] = sample.frame[i]
-        tape["action"] = sample.action[i]
-        tape = stacker.apply(tape)
-    stacked_frames = tape["stacked_frames"]
-    stacked_actions = tape["stacked_actions"]
-    obs = np.concatenate([stacked_frames, stacked_actions], axis=-1)
-
-    action = _get_action(sample, start_idx, num_unroll_steps)
+    frame = _make_frame(traj, start_idx, num_stacked_frames, num_unroll_steps)
+    action = _make_action(traj, start_idx, num_stacked_frames, num_unroll_steps)
 
     unrolled_data = []
     for curr_idx in range(start_idx, start_idx + num_unroll_steps + 1):
-        n_step_return = _get_n_step_return(
-            sample, curr_idx, last_step_idx, num_td_steps, discount
-        )
-        last_reward = _get_last_reward(sample, start_idx, curr_idx, last_step_idx)
-        action_probs = _get_action_probs(sample, curr_idx, last_step_idx)
-        root_value = _get_root_value(sample, curr_idx, last_step_idx)
+        n_step_return = _make_n_step_return(traj, curr_idx, num_td_steps, discount)
+        last_reward = _make_last_reward(traj, curr_idx)
+        action_probs = _make_action_probs(traj, curr_idx)
+        root_value = _make_root_value(traj, curr_idx)
         unrolled_data.append((n_step_return, last_reward, action_probs, root_value))
 
     unrolled_data_stacked = stack_sequence_fields(unrolled_data)
 
     return TrainTarget(
-        obs=obs,
+        frame=frame,
         action=action,
         n_step_return=unrolled_data_stacked[0],
         last_reward=unrolled_data_stacked[1],
@@ -460,86 +457,103 @@ def make_target_from_traj(
     )
 
 
-def _get_action(sample: TrajectorySample, start_idx, num_unroll_steps):
-    action = sample.action[start_idx : start_idx + num_unroll_steps]
-    num_actions_to_pad = num_unroll_steps - action.size
-    if num_actions_to_pad > 0:
-        action = np.concatenate((action, np.full(num_actions_to_pad, -1)))
-    return action
+def _make_frame(
+    traj: TrajectorySample, start_idx, num_stacked_frames, num_unroll_steps
+):
+    frames = []
+    first_frame_idx = start_idx - num_stacked_frames + 1
+    last_frame_idx = start_idx + num_unroll_steps
+    for i in range(first_frame_idx, last_frame_idx + 1):
+        if i < 0 or i >= traj.frame.shape[0]:
+            frames.append(np.zeros_like(traj.frame[0]))
+        elif i < traj.frame.shape[0]:
+            frames.append(traj.frame[i])
+    return stack_sequence_fields(frames)
 
 
-def _get_n_step_return(
-    sample: TrajectorySample,
+def _make_action(
+    traj: TrajectorySample, start_idx, num_stacked_frames, num_unroll_steps
+):
+    first_frame_idx = start_idx - num_stacked_frames + 1
+    last_frame_idx = start_idx + num_unroll_steps
+    actions = []
+    for i in range(first_frame_idx, last_frame_idx + 1):
+        if i < 0 or i >= traj.action.shape[0]:
+            actions.append(np.zeros_like(traj.action[0]))
+        elif i < traj.action.shape[0]:
+            actions.append(traj.action[i])
+    return stack_sequence_fields(actions)
+
+
+def _make_n_step_return(
+    traj: TrajectorySample,
     curr_idx,
-    last_step_idx,
     num_td_steps,
     discount,
 ):
     """The observed N-step return with bootstrapping."""
+    last_step_idx = traj.frame.shape[0] - 1
     if curr_idx >= last_step_idx:
         return 0
 
-    bootstrap_idx = curr_idx + num_td_steps
-
-    accumulated_reward = _get_accumulated_reward(
-        sample, curr_idx, discount, bootstrap_idx
+    accumulated_reward = _make_accumulated_reward(
+        traj, curr_idx, num_td_steps, discount
     )
-    bootstrap_value = _get_bootstrap_value(
-        sample, last_step_idx, num_td_steps, discount, bootstrap_idx
-    )
+    bootstrap_value = _make_bootstrap_value(traj, curr_idx, num_td_steps, discount)
 
     return accumulated_reward + bootstrap_value
 
 
-def _get_bootstrap_value(
-    sample: TrajectorySample,
-    last_step_idx,
+def _make_accumulated_reward(
+    traj: TrajectorySample,
+    curr_idx,
     num_td_steps,
     discount,
-    bootstrap_idx,
 ) -> float:
-    if bootstrap_idx <= last_step_idx:
-        value = sample.root_value[bootstrap_idx] * (discount ** num_td_steps)
-        if sample.to_play[bootstrap_idx] != mz.BASE_PLAYER:
-            return -value
-        else:
-            return value
-    else:
-        return 0.0
-
-
-def _get_accumulated_reward(
-    sample: TrajectorySample, curr_idx, discount, bootstrap_idx
-) -> float:
+    bootstrap_idx = curr_idx + num_td_steps
     reward_sum = 0.0
-    last_rewards = sample.last_reward[curr_idx + 1 : bootstrap_idx + 1]
-    players_of_last_rewards = sample.to_play[curr_idx:bootstrap_idx]
-    for i, (last_rewrad, player) in enumerate(
-        zip(last_rewards, players_of_last_rewards)
-    ):
-        discounted_reward = last_rewrad * (discount ** i)
+    last_rewards = traj.last_reward[curr_idx + 1 : bootstrap_idx + 1]
+    for i, last_reward in enumerate(last_rewards):
+        discounted_reward = last_reward * (discount ** i)
         reward_sum += discounted_reward
     return reward_sum
 
 
-def _get_last_reward(sample: TrajectorySample, start_idx, curr_idx, last_step_idx):
-    if curr_idx == start_idx:
-        return 0
-    elif curr_idx <= last_step_idx:
-        return sample.last_reward[curr_idx]
+def _make_bootstrap_value(
+    traj: TrajectorySample,
+    curr_idx,
+    num_td_steps,
+    discount,
+) -> float:
+    bootstrap_idx = curr_idx + num_td_steps
+    if bootstrap_idx <= curr_idx:
+        # NOTE: multi player flip value
+        return traj.root_value[bootstrap_idx] * (discount ** num_td_steps)
+    else:
+        return 0.0
+
+
+def _make_last_reward(traj: TrajectorySample, curr_idx):
+    last_step_idx = traj.frame.shape[0] - 1
+    if curr_idx <= last_step_idx:
+        return traj.last_reward[curr_idx]
     else:
         return 0
 
 
-def _get_action_probs(sample: TrajectorySample, curr_idx, last_step_idx):
-    if curr_idx <= last_step_idx:
-        return sample.action_probs[curr_idx]
+def _make_action_probs(traj: TrajectorySample, curr_idx):
+    last_step_idx = traj.frame.shape[0] - 1
+    if curr_idx < last_step_idx:
+        return traj.action_probs[curr_idx]
     else:
-        return np.zeros_like(sample.action_probs[0])
+        vec = np.zeros_like(traj.action_probs[0])
+        vec[0] = 1.0
+        return vec
 
 
-def _get_root_value(sample: TrajectorySample, curr_idx, last_step_idx):
+def _make_root_value(traj: TrajectorySample, curr_idx):
+    last_step_idx = traj.frame.shape[0] - 1
     if curr_idx <= last_step_idx:
-        return sample.root_value[curr_idx]
+        return traj.root_value[curr_idx]
     else:
         return 0.0

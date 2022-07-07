@@ -1,4 +1,6 @@
 # %%
+from moozi.laws import MinAtarVisualizer
+import gym
 import operator
 import uuid
 from PIL import Image, ImageDraw, ImageFont
@@ -38,6 +40,7 @@ from moozi.planner import make_planner
 from moozi.utils import WallTimer
 from omegaconf import OmegaConf
 
+# %%
 load_dotenv()
 
 logger.remove()
@@ -71,13 +74,13 @@ class Universe:
         return ret
 
 
-# %%
 class RolloutWorker:
     def __init__(
         self, universe_factory: Callable, name: str = "rollout_worker"
     ) -> None:
         self.universe = universe_factory()
         self.name = name
+        print(f"{self.name} created")
 
         from loguru import logger
 
@@ -97,7 +100,6 @@ class RolloutWorker:
         self.universe.tape[key] = value
 
 
-# %%
 scalar_transform = make_scalar_transform(**config.scalar_transform)
 nn_arch_cls = eval(config.nn.arch_cls)
 nn_spec = eval(config.nn.spec_cls)(
@@ -106,20 +108,6 @@ nn_spec = eval(config.nn.spec_cls)(
 model = make_model(nn_arch_cls, nn_spec)
 
 
-# %%
-# def _termination_penalty(is_last, reward):
-#     reward_overwrite = jax.lax.cond(
-#         is_last,
-#         lambda: reward - 10.0,
-#         lambda: reward,
-#     )
-#     return {"reward": reward_overwrite}
-
-
-# penalty = Law.wrap(_termination_penalty)
-# penalty.apply = link(jax.vmap(unlink(penalty.apply)))
-
-# %%
 def make_env_worker_universe(config):
     num_envs = config.train.env_worker.num_envs
     vec_env = make_vec_env(config.env.name, num_envs)
@@ -134,7 +122,7 @@ def make_env_worker_universe(config):
 
     penalizer = make_last_step_penalizer(penalty=10.0).vmap(batch_size=num_envs)
     planner = make_planner(model=model, **config.train.env_worker.planner).jit(
-        backend="gpu"
+        backend="gpu", max_trace=10
     )
 
     traj_writer = make_traj_writer(num_envs)
@@ -143,7 +131,7 @@ def make_env_worker_universe(config):
     final_law = sequential(
         [
             vec_env,
-            penalizer,
+            # penalizer,
             frame_stacker,
             concat_stacked_to_obs,
             planner,
@@ -157,7 +145,6 @@ def make_env_worker_universe(config):
     return Universe(tape, final_law)
 
 
-# %%
 def make_test_worker_universe(config):
     stacker = make_batch_stacker(
         1,
@@ -168,7 +155,7 @@ def make_test_worker_universe(config):
         config.dim_action,
     )
     planner = make_planner(model=model, **config.train.test_worker.planner).jit(
-        backend="gpu"
+        backend="gpu", max_trace=10
     )
 
     final_law = sequential(
@@ -179,7 +166,7 @@ def make_test_worker_universe(config):
             planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="test_worker_gifs"),
             make_traj_writer(1),
-            make_reward_terminator(5),
+            make_reward_terminator(1),
         ]
     )
     tape = make_tape(seed=config.seed)
@@ -200,9 +187,9 @@ def make_reanalyze_universe():
         model=model,
         dim_action=config.dim_action,
         batch_size=1,
-        num_simulations=10,
+        num_simulations=50,
         output_action=False,
-    ).jit(backend="cpu")
+    ).jit(backend="cpu", max_trace=10)
     terminalor = make_terminator(size=1)
     final_law = sequential(
         [
@@ -229,7 +216,6 @@ def training_suite_factory(config):
         lr=config.train.lr,
         num_unroll_steps=config.num_unroll_steps,
         num_stacked_frames=config.num_stacked_frames,
-        target_update_period=config.train.target_update_period,
     )
 
 
@@ -261,15 +247,18 @@ reanalyze_workers = [
 ]
 
 
-@ray.remote
-def get_item(val):
-    return val[0]
+@ray.remote(
+    num_gpus=0, num_cpus=0, num_returns=config.train.reanalyze_worker.num_workers
+)
+def dispatch_trajs(trajs: list):
+    return trajs
 
 
 # %%
 jb_logger = JAXBoardLoggerRemote.remote()
 terminal_logger = TerminalLoggerRemote.remote()
 start_training = False
+train_targets = []
 for epoch in range(1, config.train.num_epochs + 1):
     logger.info(f"Epoch {epoch}")
 
@@ -285,8 +274,11 @@ for epoch in range(1, config.train.num_epochs + 1):
         terminal_logger.write.remote(test_result)
         jb_logger.write.remote(test_result)
 
+    # sync
+    # ray.get(train_targets)
+
     # generate train targets
-    train_targets = []
+    train_targets.clear()
     for w in train_workers:
         sample = w.run.remote()
         train_targets.append(rb.add_trajs.remote(sample, from_env=True))
@@ -304,28 +296,26 @@ for epoch in range(1, config.train.num_epochs + 1):
             / config.train.batch_size
         )
         num_updates = int(desired_num_updates - ray.get(ps.get_training_steps.remote()))
-        if num_updates > 0:
-            logger.info(f"Updating {num_updates} times")
-            for i in range(num_updates):
-                batch = rb.get_train_targets_batch.remote(
-                    batch_size=config.train.batch_size
-                )
-                ps_update_result = ps.update.remote(
-                    batch, batch_size=config.train.batch_size
-                )
-                terminal_logger.write.remote(ps_update_result)
+        batch = rb.get_train_targets_batch.remote(
+            batch_size=config.train.batch_size * num_updates
+        )
+        ps_update_result = ps.update.remote(batch, batch_size=config.train.batch_size)
+        terminal_logger.write.remote(ps_update_result)
 
-        for re_w in reanalyze_workers:
-            re_w.set.remote("traj", get_item.remote(rb.get_trajs_batch.remote(1)))
-            updated_traj = re_w.run.remote()
-            rb.add_trajs.remote(updated_traj, from_env=False)
+        if config.train.reanalyze_worker.num_workers > 0:
+            traj_refs = dispatch_trajs.remote(
+                rb.get_trajs_batch.remote(config.train.reanalyze_worker.num_workers)
+            )
+            for i, re_w in enumerate(reanalyze_workers):
+                re_w.set.remote("traj", traj_refs[0])
+                updated_traj = re_w.run.remote()
+                rb.add_trajs.remote(updated_traj, from_env=False)
 
     if epoch % config.param_opt.save_interval == 0:
         ps.save.remote()
 
-    # sync
-    ray.get(ps.log_tensorboard.remote())
-    ray.get(jb_logger.write.remote(rb.get_stats.remote()))
-    ray.get(train_targets)
+    ray.timeline(filename="/tmp/timeline.json")
+    ps.log_tensorboard.remote()
+    jb_logger.write.remote(rb.get_stats.remote())
 
 # %%

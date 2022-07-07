@@ -186,6 +186,7 @@ class ParameterServer:
     def log_tensorboard(self):
         log_datum = LogDatum.from_any(self._last_step_data)
         self._tb_logger.write(log_datum, self.training_state.steps)
+        return log_datum
 
     def get_training_steps(self):
         return self.training_state.steps
@@ -232,11 +233,11 @@ class ParameterServer:
 
     def save(self):
         path = self.save_dir / f"{self.training_state.steps}.pkl"
-        logger.debug(f"saving model to {path}")
+        logger.info(f"saving model to {path}")
         with open(path, "wb") as f:
             cloudpickle.dump((self.model, self.training_state, self.sgd_step_fn), f)
 
     def restore(self, path):
-        logger.debug(f"restoring model from {path}")
+        logger.info(f"restoring model from {path}")
         with open(path, "rb") as f:
             self.model, self.training_state, self.sgd_step_fn = cloudpickle.load(f)

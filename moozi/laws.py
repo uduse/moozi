@@ -16,7 +16,7 @@ from absl import logging
 from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from gym.wrappers.monitoring.video_recorder import VideoRecorder
 from loguru import logger
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from moozi.core import BASE_PLAYER, PolicyFeed, StepSample
 from moozi.core.env import make_env
@@ -599,7 +599,7 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
     vis = MinAtarVisualizer(num_channels=n_channels)
 
     def malloc():
-        return {"images": []}
+        return {"images": [], "image_counter": 0}
 
     def apply(
         is_last,
@@ -607,9 +607,12 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
         root_value,
         q_values,
         action_probs,
+        prior_probs,
         action,
         reward,
         images: List[Image.Image],
+        visit_counts,
+        image_counter: int,
     ):
         image = vis.make_image(
             frame=frame[0],
@@ -619,8 +622,10 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
             root_value=root_value[0],
             q_values=q_values[0],
             action_probs=action_probs[0],
+            prior_probs=prior_probs[0],
             action=action[0],
             reward=reward[0],
+            visit_counts=visit_counts[0],
         )
         images = images + [image]
         if is_last[0]:
@@ -752,9 +757,12 @@ class MinAtarVisualizer:
         root_value=None,
         q_values=None,
         action_probs=None,
+        prior_probs=None,
         action=None,
         reward=None,
         action_map=None,
+        visit_counts=None,
+        n_step_return=None
     ):
         if root_value is not None:
             root_value = np.asarray(root_value, dtype=np.float32)
@@ -766,6 +774,12 @@ class MinAtarVisualizer:
             action = np.asarray(action, dtype=np.int32)
         if reward is not None:
             reward = np.asarray(reward, dtype=np.float32)
+        if visit_counts is not None:
+            visit_counts = np.asarray(visit_counts, dtype=np.int32)
+        if prior_probs is not None:
+            prior_probs = np.asarray(prior_probs, dtype=np.float32)
+        if n_step_return is not None:
+            n_step_return = np.asarray(n_step_return, dtype=np.float32)
 
         img = img.copy()
         draw = ImageDraw.Draw(img)
@@ -773,12 +787,18 @@ class MinAtarVisualizer:
             content = ""
             if reward is not None:
                 content += f"R {reward}\n"
+            if n_step_return is not None:
+                content += f"G {n_step_return}\n"
             if root_value is not None:
                 content += f"V {root_value}\n"
-            if q_values is not None:
-                content += f"Q {q_values}\n"
+            if prior_probs is not None:
+                content += f"P {prior_probs}\n"
+            if visit_counts is not None:
+                content += f"N {visit_counts}\n"
             if action_probs is not None:
                 content += f"π {action_probs}\n"
+            if q_values is not None:
+                content += f"Q {q_values}\n"
             if action is not None:
                 if action_map:
                     action = action_map[action]
@@ -786,16 +806,26 @@ class MinAtarVisualizer:
         draw.text((0, 0), content, fill="black", font=self.font)
         return img
 
-    def cat_images(self, images, max_columns: int = 5):
+    def cat_images(self, images, max_columns: int = 5, border: bool = True):
+        if border:
+            images = [
+                ImageOps.expand(image, border=(2, 2, 2, 2), fill="black")
+                for image in images
+            ]
+
+        width, height = images[0].width, images[0].height
         num_columns = min(len(images), max_columns)
         num_rows = int(np.ceil(len(images) / max_columns))
-        width = images[0].width * num_columns
-        height = images[0].height * num_rows
-        dst = Image.new("RGB", (width, height))
+        canvas_width = width * num_columns
+        canvas_height = height * num_rows
+        dst = Image.new("RGB", (canvas_width, canvas_height))
         for row in range(num_rows):
-            for i in range(len(images)):
-                dst.paste(images[i], (i * images[i].width, 0))
-            return dst
+            for col in range(num_columns):
+                idx = row * num_columns + col
+                if idx >= len(images):
+                    continue
+                dst.paste(images[idx], (col * width, row * height))
+        return dst
 
     def save_gif(self, images, root_dir):
         root_dir = Path(root_dir)

@@ -1,52 +1,58 @@
 # %%
-from moozi.laws import MinAtarVisualizer
-import gym
-import operator
-import uuid
-from PIL import Image, ImageDraw, ImageFont
-import seaborn as sns
-import tree
+from IPython.display import display
 import contextlib
-from functools import partial
-import chex
+import operator
 import sys
+import uuid
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Callable, List, Set, Tuple, Union
 
+import chex
+import gym
 import jax
-
 import moozi
+import moozi as mz
 import numpy as np
 import ray
+import seaborn as sns
+import tree
+from acme.jax.utils import add_batch_dim
 from acme.utils.tree_utils import stack_sequence_fields
 from dotenv import load_dotenv
 from loguru import logger
-import moozi as mz
 from moozi.core import scalar_transform
 from moozi.core.env import make_env
+from moozi.core.link import link
 from moozi.core.scalar_transform import ScalarTransform, make_scalar_transform
-from moozi.core.tape import make_tape, include, exclude
+from moozi.core.tape import exclude, include, make_tape
+from moozi.laws import *
+from moozi.laws import MinAtarVisualizer
 from moozi.logging import JAXBoardLoggerRemote, TerminalLoggerRemote
 from moozi.nn.nn import NNModel, make_model
-from moozi.nn.training import make_training_suite
+from moozi.nn.training import (
+    _make_obs_from_train_target,
+    make_target_from_traj,
+    make_training_suite,
+)
 from moozi.parameter_optimizer import ParameterOptimizer, ParameterServer
-from moozi.replay import ReplayBuffer
-from moozi.core.link import link
-from moozi.laws import *
 from moozi.planner import make_planner
+from moozi.replay import ReplayBuffer
 
 # from moozi.rollout_worker import RolloutWorkerWithWeights, make_rollout_workers
 from moozi.utils import WallTimer
 from omegaconf import OmegaConf
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+# %%
 load_dotenv()
 
 logger.remove()
 logger.add(sys.stderr, level="INFO")
 
-config_path = "/moozi/examples/minatar_space_invaders/config.yml"
-config = OmegaConf.load(config_path)
+path = "/moozi/examples/minatar_space_invaders/config.yml"
+config = OmegaConf.load(path)
 OmegaConf.resolve(config)
 print(OmegaConf.to_yaml(config, resolve=True))
 
@@ -80,6 +86,7 @@ class RolloutWorker:
     ) -> None:
         self.universe = universe_factory()
         self.name = name
+        print(f"{self.name} created")
 
         from loguru import logger
 
@@ -107,7 +114,6 @@ nn_spec = eval(config.nn.spec_cls)(
 model = make_model(nn_arch_cls, nn_spec)
 
 
-# %%
 def make_env_worker_universe(config):
     num_envs = config.train.env_worker.num_envs
     vec_env = make_vec_env(config.env.name, num_envs)
@@ -131,7 +137,7 @@ def make_env_worker_universe(config):
     final_law = sequential(
         [
             vec_env,
-            penalizer,
+            # penalizer,
             frame_stacker,
             concat_stacked_to_obs,
             planner,
@@ -166,7 +172,7 @@ def make_test_worker_universe(config):
             planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="test_worker_gifs"),
             make_traj_writer(1),
-            make_reward_terminator(5),
+            make_reward_terminator(1),
         ]
     )
     tape = make_tape(seed=config.seed)
@@ -187,8 +193,9 @@ def make_reanalyze_universe():
         model=model,
         dim_action=config.dim_action,
         batch_size=1,
-        num_simulations=10,
+        num_simulations=50,
         output_action=False,
+        output_tree=True,
     ).jit(backend="cpu", max_trace=10)
     terminalor = make_terminator(size=1)
     final_law = sequential(
@@ -222,44 +229,151 @@ def training_suite_factory(config):
 # %%
 ps = ParameterServer(training_suite_factory=training_suite_factory(config))
 rb = ReplayBuffer(**config.replay)
-train_worker = RolloutWorker(partial(make_env_worker_universe, config))
-test_worker = RolloutWorker(partial(make_test_worker_universe, config))
-reanalyze_workers = RolloutWorker(partial(make_reanalyze_universe))
+vis = MinAtarVisualizer()
 
 # %%
-train_worker.set("params", ps.get_params())
-train_worker.set("state", ps.get_state())
+weights_path = "/root/.local/share/virtualenvs/moozi-g1CZ00E9/.guild/runs/65cee6cbba44461b8a379f65ea13d7a0/checkpoints/1130.pkl"
+ps.restore(weights_path)
 
 # %%
-trajs = train_worker.run()
+rollout_worker = RolloutWorker(
+    partial(make_env_worker_universe, config), name=f"rollout_worker"
+)
+rollout_worker.set("params", ps.get_params())
+rollout_worker.set("state", ps.get_state())
+
+# %%
+reanalyze_worker = RolloutWorker(
+    partial(make_reanalyze_universe), name=f"reanalyze_worker"
+)
+reanalyze_worker.set("params", ps.get_params())
+reanalyze_worker.set("state", ps.get_state())
+
+# %%
+trajs = []
+for i in range(1):
+    trajs.extend(rollout_worker.run())
 rb.add_trajs(trajs)
 
 # %%
-traj = rb.get_trajs_batch(1)[0]
-
-# %%
-steps = unstack_sequence_fields(traj, batch_size=traj.frame.shape[0])
-
-# %%
-from IPython.display import display
-vis = MinAtarVisualizer()
-for step in steps:
-    img = vis.make_image(frame=step.frame)
-    img = vis.add_descriptions(
-        img,
-        root_value=step.root_value,
-        reward=step.last_reward,
-        action=step.action,
-        action_probs=step.action_probs,
+traj = trajs[0]
+targets = [
+    make_target_from_traj(
+        traj,
+        start_idx=i,
+        discount=config.discount,
+        num_unroll_steps=config.num_unroll_steps,
+        num_stacked_frames=config.num_stacked_frames,
+        num_td_steps=config.num_td_steps,
     )
-    display(img)
+    for i in range(traj.action.shape[0])
+]
 
 # %%
-rb.min_size = 1
-target = rb.get_train_targets_batch(10)
-print(target.shapes())
+for i, target in enumerate(targets):
+    print(i)
+    print(target.n_step_return)
+    images = []
+    for i in range(target.frame.shape[0]):
+        image = vis.make_image(target.frame[i])
+        image = vis.add_descriptions(image)
+        images.append(image)
+    display(vis.cat_images(images))
+
 
 # %%
-ps.update(target, target.frame.shape[0])
+traj.root_value
+
+# %%
+images = []
+for i in range(traj.frame.shape[0]):
+    image = vis.make_image(traj.frame[i])
+    image = vis.add_descriptions(
+        image,
+        action=traj.action[i],
+        reward=traj.last_reward[i],
+    )
+    images.append(image)
+vis.cat_images(images)
+
+
+# %%
+images = []
+target = targets[18]
+for i in range(target.frame.shape[0]):
+    image = vis.make_image(target.frame[i])
+    image = vis.add_descriptions(image, action=target.action[i])
+    images.append(image)
+display(vis.cat_images(images))
+
+# %%
+obs = _make_obs_from_train_target(
+    add_batch_dim(target),
+    step=0,
+    num_stacked_frames=config.num_stacked_frames,
+    num_unroll_steps=config.num_unroll_steps,
+    dim_action=config.dim_action,
+)
+# %%
+rb.add_trajs(trajs)
+
+# %%
+batch = rb.get_train_targets_batch(config.train.batch_size)
+# %%
+for _ in range(100):
+    print(ps.update(batch, batch_size=config.train.batch_size))
+
+# %%
+import random
+
+targets = unstack_sequence_fields(batch, batch.frame.shape[0])
+target = random.choice(targets)
+target = add_batch_dim(target)
+
+# %%
+obs = _make_obs_from_train_target(
+    target, 0, config.num_stacked_frames, config.num_unroll_steps, config.dim_action
+)
+
+# %%
+target.frame.shape
+# %%
+images = []
+for i in range(target.frame.shape[1] - 1):
+    image = vis.make_image(target.frame[0, i])
+    image = vis.add_descriptions(image, action=target.action[0, i + 1])
+    images.append(image)
+display(vis.cat_images(images))
+
+# %%
+target.n_step_return
+
+# %%
+
+# %%
+traj = rb.get_trajs_batch(1)[0]
+reanalyze_worker.set("traj", traj)
+updated_traj = reanalyze_worker.run()
+rb.add_trajs(updated_traj, from_env=False)
+
+# %%
+tree = reanalyze_worker.universe.tape["tree"]
+
+from typing import Optional, Sequence
+
+import chex
+import jax
+import jax.numpy as jnp
+
+# %%
+import mctx
+import pygraphviz
+
+# %%
+graph = convert_tree_to_graph(tree)
+
+# %%
+graph.draw("/tmp/graph.dot", prog="dot")
+
 
 # %%

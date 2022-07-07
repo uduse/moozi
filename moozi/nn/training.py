@@ -82,7 +82,7 @@ def _compute_prior_kl(
 
 def _make_obs_from_train_target(
     batch: TrainTarget,
-    idx: int,
+    step: int,
     num_stacked_frames: int,
     num_unroll_steps: int,
     dim_action: int,
@@ -95,8 +95,10 @@ def _make_obs_from_train_target(
         num_channels,
     ) = batch.frame.shape
 
+    assert 0 <= step <= num_unroll_steps
     assert num_frames == (num_stacked_frames + num_unroll_steps)
-    stacked_frames = batch.frame[:, idx : idx + num_stacked_frames]
+
+    stacked_frames = batch.frame[:, step : step + num_stacked_frames]
     stacked_frames = jnp.moveaxis(stacked_frames, 1, -1)
     stacked_frames = jnp.reshape(stacked_frames, (batch_size, num_rows, num_cols, -1))
     chex.assert_shape(
@@ -104,7 +106,7 @@ def _make_obs_from_train_target(
         (batch_size, num_rows, num_cols, num_stacked_frames * num_channels),
     )
 
-    stacked_actions = batch.action[:, idx : idx + num_stacked_frames]
+    stacked_actions = batch.action[:, step : step + num_stacked_frames]
     stacked_actions = jax.nn.one_hot(stacked_actions, dim_action)
     stacked_actions = stacked_actions / dim_action
     stacked_actions = jnp.reshape(stacked_actions, (batch_size, -1))
@@ -139,7 +141,7 @@ class MuZeroLossWithScalarTransform(LossFn):
 
         obs = _make_obs_from_train_target(
             batch,
-            0,
+            step=0,
             num_stacked_frames=self.num_stacked_frames,
             num_unroll_steps=self.num_unroll_steps,
             dim_action=self.dim_action,
@@ -153,12 +155,13 @@ class MuZeroLossWithScalarTransform(LossFn):
         losses = {}
         info = {}
 
-        reward = batch.last_reward.take(0, axis=1)
-        reward_transformed = self.scalar_transform.transform(reward)
-        losses["loss/reward_0"] = vmap(rlax.categorical_cross_entropy)(
-            labels=reward_transformed,
-            logits=network_output.reward,
-        )
+        # NOTE: do not predict last reward because dynamics function isn't used
+        # reward = batch.last_reward.take(0, axis=1)
+        # reward_transformed = self.scalar_transform.transform(reward)
+        # losses["loss/reward_0"] = vmap(rlax.categorical_cross_entropy)(
+        #     labels=reward_transformed,
+        #     logits=network_output.reward,
+        # )
 
         n_step_return = batch.n_step_return.take(0, axis=1)
         n_step_return_transformed = self.scalar_transform.transform(n_step_return)
@@ -178,11 +181,12 @@ class MuZeroLossWithScalarTransform(LossFn):
         transition_loss_scale = 1 / self.num_unroll_steps
         for i in range(self.num_unroll_steps):
             hidden_state = scale_gradient(network_output.hidden_state, 0.5)
+
             if "hidden_state" not in info:
                 info["hidden_state"] = hidden_state
             trans_feats = TransitionFeatures(
                 hidden_state=hidden_state,
-                action=batch.action.take(i, axis=1),
+                action=batch.action.take(i + self.num_stacked_frames - 1, axis=1),
             )
             network_output, state = model.trans_inference(
                 params, state, trans_feats, is_training
@@ -233,22 +237,29 @@ class MuZeroLossWithScalarTransform(LossFn):
             # consistency loss
             next_obs = _make_obs_from_train_target(
                 batch,
-                idx=i + 1,
+                step=i + 1,
                 num_stacked_frames=self.num_stacked_frames,
                 num_unroll_steps=self.num_unroll_steps,
                 dim_action=self.dim_action,
             )
+            next_feats = RootFeatures(obs=next_obs, player=jnp.zeros((batch_size,)))
+
+            # skipping batch norm update because it's not used like this in the planning
+            # aka, not resetting "state"
+            next_network_output, _ = model.root_inference(
+                params, state, next_feats, is_training
+            )
 
             losses[f"loss/consistency_{str(i + 1)}"] = (
                 optax.cosine_distance(
-                    obs.reshape((obs.shape[0], -1)),
-                    jax.lax.stop_gradient(next_obs).reshape((next_obs.shape[0], -1)),
+                    network_output.hidden_state.reshape((batch_size, -1)),
+                    jax.lax.stop_gradient(next_network_output.hidden_state).reshape(
+                        (batch_size, -1)
+                    ),
                 )
                 * transition_loss_scale
                 * self.consistency_loss_coef
             )
-
-            obs = next_obs
 
         # all batched losses should be the shape of (batch_size,)
         tree.map_structure(lambda x: chex.assert_shape(x, (batch_size,)), losses)
@@ -354,7 +365,7 @@ def make_sgd_step_fn(
         if include_prior_kl:
             obs = _make_obs_from_train_target(
                 batch,
-                idx=0,
+                step=0,
                 num_stacked_frames=num_stacked_frames,
                 num_unroll_steps=num_unroll_steps,
                 dim_action=dim_action,
@@ -474,11 +485,12 @@ def _make_frame(
 def _make_action(
     traj: TrajectorySample, start_idx, num_stacked_frames, num_unroll_steps
 ):
-    first_frame_idx = start_idx - num_stacked_frames + 1
-    last_frame_idx = start_idx + num_unroll_steps
+    first_frame_idx = start_idx - num_stacked_frames
+    last_frame_idx = start_idx + num_unroll_steps - 1
+    last_step_idx = traj.action.shape[0] - 1
     actions = []
     for i in range(first_frame_idx, last_frame_idx + 1):
-        if i < 0 or i >= traj.action.shape[0]:
+        if i < 0 or i >= last_step_idx:
             actions.append(np.zeros_like(traj.action[0]))
         elif i < traj.action.shape[0]:
             actions.append(traj.action[i])
@@ -497,9 +509,17 @@ def _make_n_step_return(
         return 0
 
     accumulated_reward = _make_accumulated_reward(
-        traj, curr_idx, num_td_steps, discount
+        traj,
+        curr_idx,
+        num_td_steps=num_td_steps,
+        discount=discount,
     )
-    bootstrap_value = _make_bootstrap_value(traj, curr_idx, num_td_steps, discount)
+    bootstrap_value = _make_bootstrap_value(
+        traj,
+        curr_idx,
+        num_td_steps=num_td_steps,
+        discount=discount,
+    )
 
     return accumulated_reward + bootstrap_value
 
@@ -525,8 +545,9 @@ def _make_bootstrap_value(
     num_td_steps,
     discount,
 ) -> float:
+    last_step_idx = traj.frame.shape[0] - 1
     bootstrap_idx = curr_idx + num_td_steps
-    if bootstrap_idx <= curr_idx:
+    if bootstrap_idx <= last_step_idx:
         # NOTE: multi player flip value
         return traj.root_value[bootstrap_idx] * (discount ** num_td_steps)
     else:
@@ -546,6 +567,7 @@ def _make_action_probs(traj: TrajectorySample, curr_idx):
     if curr_idx < last_step_idx:
         return traj.action_probs[curr_idx]
     else:
+        # the terminal action is 0
         vec = np.zeros_like(traj.action_probs[0])
         vec[0] = 1.0
         return vec

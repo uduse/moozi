@@ -1,5 +1,5 @@
 seed: 0
-discount: 0.99
+discount: 0.997
 num_unroll_steps: 5
 num_td_steps: 5
 # TODO: rename num_stakd_frames to history_len or something
@@ -16,8 +16,8 @@ env:
 
 replay:
   use_remote: true
-  min_size: 1_000
-  max_size: 500_000
+  min_size: 3_000
+  max_size: 100_000
   sampling_strategy: ranking
   num_unroll_steps: ${num_unroll_steps}
   num_td_steps: ${num_td_steps}
@@ -64,36 +64,39 @@ train:
   update_period: 5
 
   env_worker:
-    num_workers: 2
+    num_workers: 4
     num_envs: 5
     num_cpus: 1
     num_gpus: 0.2
     planner:
       batch_size: ${train.env_worker.num_envs}
       dim_action: ${dim_action}
-      num_simulations: 50
-      dirichlet_alpha: 0.2
-      dirichlet_fraction: 0.2
+      discount: ${discount}
+      num_simulations: 20
+      dirichlet_alpha: 0.5
+      dirichlet_fraction: 0.75
       temperature: 1.0
 
   reanalyze_worker:
-    num_workers: 20
+    num_workers: 10
     planner:
       batch_size: 1
       dim_action: ${dim_action}
-      num_simulations: 50
+      discount: ${discount}
+      num_simulations: 20
       dirichlet_alpha: 0.2
       dirichlet_fraction: 0.2
       temperature: 1.0
 
   test_worker:
-    interval: 5
-    num_cpus: 1
+    interval: 30
+    num_cpus: 0
     num_gpus: 0.2
     planner:
       batch_size: 1
       dim_action: ${dim_action}
-      num_simulations: 50
+      discount: ${discount}
+      num_simulations: 20
       dirichlet_fraction: 0.2
       dirichlet_alpha: 0.2
       temperature: 0.5

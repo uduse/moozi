@@ -657,7 +657,7 @@ def make_env_mocker():
         ret = {
             "curr_traj_index": curr_traj_index + 1,
             "frame": np.expand_dims(traj.frame[curr_traj_index], axis=0),
-            "action": np.expand_dims(traj.action[curr_traj_index], axis=0),
+            "next_action": np.expand_dims(traj.action[curr_traj_index], axis=0),
             "reward": np.expand_dims(traj.last_reward[curr_traj_index], axis=0),
             "legal_actions_mask": np.expand_dims(
                 traj.legal_actions_mask[curr_traj_index], axis=0

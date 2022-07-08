@@ -58,8 +58,8 @@ train:
   enabled: true
   num_epochs: 2000
   sample_update_ratio: 5
-  batch_size: 512
-  lr: 5.0e-3
+  batch_size: 1024
+  lr: 1.0e-2
   weight_decay: 1.0e-4
   update_period: 5
 
@@ -72,7 +72,7 @@ train:
       batch_size: ${train.env_worker.num_envs}
       dim_action: ${dim_action}
       discount: ${discount}
-      num_simulations: 20
+      num_simulations: 50
       dirichlet_alpha: 0.2
       dirichlet_fraction: 0.2
       temperature: 1.0
@@ -83,7 +83,7 @@ train:
       batch_size: 1
       dim_action: ${dim_action}
       discount: ${discount}
-      num_simulations: 20
+      num_simulations: 50
       dirichlet_alpha: 0.2
       dirichlet_fraction: 0.2
       temperature: 1.0
@@ -96,7 +96,7 @@ train:
       batch_size: 1
       dim_action: ${dim_action}
       discount: ${discount}
-      num_simulations: 20
+      num_simulations: 50
       dirichlet_fraction: 0.2
       dirichlet_alpha: 0.2
       temperature: 0.5

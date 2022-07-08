@@ -81,7 +81,6 @@ class Universe:
         self.tape["output_buffer"] = tuple()
         return ret
 
-
 class RolloutWorker:
     def __init__(
         self, universe_factory: Callable, name: str = "rollout_worker"
@@ -234,27 +233,26 @@ def output_updated_train_target(
     return {"output_buffer": output_buffer + (new_target,), "quit": True}
 
 
-def make_reanalyze_universe_v2(config):
-    context_prep = make_context_prep(
-        num_stacked_frames=config.num_stacked_frames,
-        num_unroll_steps=config.num_unroll_steps,
-        dim_action=config.dim_action,
-    )
-    planner = make_planner(
-        model=model,
-        **config.train.reanalyze_worker.planner,
-    ).jit(backend="cpu", max_trace=10)
-    final_law = sequential(
-        [
-            context_prep,
-            planner,
-            output_updated_train_target,
-        ]
-    )
-    tape = make_tape(seed=config.seed)
-    tape.update(final_law.malloc())
-    return Universe(tape, final_law)
-
+# def make_reanalyze_universe_v2(config):
+#     # context_prep = make_context_prep(
+#     #     num_stacked_frames=config.num_stacked_frames,
+#     #     num_unroll_steps=config.num_unroll_steps,
+#     #     dim_action=config.dim_action,
+#     # )
+#     planner = make_planner(
+#         model=model,
+#         **config.train.reanalyze_worker.planner,
+#     ).jit(backend="cpu", max_trace=10)
+#     final_law = sequential(
+#         [
+#             context_prep,
+#             planner,
+#             output_updated_train_target,
+#         ]
+#     )
+#     tape = make_tape(seed=config.seed)
+#     tape.update(final_law.malloc())
+#     return Universe(tape, final_law)
 
 def training_suite_factory(config):
     return partial(
@@ -392,6 +390,9 @@ updated_target = reanalyze_worker.run()
 tree = reanalyze_worker.universe.tape["tree"]
 
 # %%
+updated_target = stack_sequence_fields(updated_target)
+
+# %%
 from moozi.planner import convert_tree_to_graph
 
 graph = convert_tree_to_graph(tree)
@@ -400,4 +401,9 @@ graph = convert_tree_to_graph(tree)
 graph.draw("/tmp/graph.dot", prog="dot")
 
 # %%
-vis.make_image(reanalyze_worker.universe.tape["frame"][0, ...])
+updated_target.root_value
+
+# %%
+train_target.root_value
+
+# %%

@@ -239,7 +239,11 @@ class ResNetArchitecture(NNArchitecture):
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
-        return hk.nets.MLP(output_sizes=[64, 64])(hidden_state)
+        hidden_state_flatten = hk.Flatten()(hidden_state)
+        projected = hk.nets.MLP(output_sizes=[128, 64, hidden_state.flatten.shape[-1]])(
+            hidden_state_flatten
+        )
+        return projected.reshape(hidden_state.shape)
 
 
 def normalize_hidden_state(hidden_state):

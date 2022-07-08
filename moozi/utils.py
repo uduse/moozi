@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import jax
+import os
 import random
 import functools
 
@@ -96,15 +98,24 @@ def check_ray_gpu():
     import ray
 
     ray.init(ignore_reinit_error=True)
+    print(
+        "(driver) CUDA_VISIBLE_DEVICES: {}".format(
+            os.environ.get("CUDA_VISIBLE_DEVICES", "")
+        )
+    )
+    print("(driver) jax devices:", jax.devices())
 
     @ray.remote(num_gpus=1)
     def use_gpu():
-        import os
         import jax
 
-        print("ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
-        print("CUDA_VISIBLE_DEVICES: {}".format(os.environ["CUDA_VISIBLE_DEVICES"]))
-        print("jax devices:", jax.devices())
+        print("(task) ray.get_gpu_ids(): {}".format(ray.get_gpu_ids()))
+        print(
+            "(task) CUDA_VISIBLE_DEVICES: {}".format(
+                os.environ.get("CUDA_VISIBLE_DEVICES", "")
+            )
+        )
+        print("(task) jax devices:", jax.devices())
 
     ray.get(use_gpu.remote())
 

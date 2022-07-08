@@ -184,11 +184,7 @@ def make_reanalyze_universe():
         config.dim_action,
     ).vmap(batch_size=1)
     planner = make_planner(
-        model=model,
-        dim_action=config.dim_action,
-        batch_size=1,
-        num_simulations=50,
-        output_action=False,
+        model=model, **config.train.reanalyze_worker.planner
     ).jit(backend="cpu", max_trace=10)
     terminalor = make_terminator(size=1)
     final_law = sequential(

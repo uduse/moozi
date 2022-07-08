@@ -1,5 +1,4 @@
 # %%
-from IPython.display import display
 import contextlib
 import operator
 import sys
@@ -7,20 +6,23 @@ import uuid
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Callable, List, Set, Tuple, Union
+from typing import Callable, List, Optional, Sequence, Set, Tuple, Union
 
 import chex
 import gym
 import jax
-import moozi
+import jax.numpy as jnp
+import mctx
 import moozi as mz
 import numpy as np
+import pygraphviz
 import ray
 import seaborn as sns
 import tree
 from acme.jax.utils import add_batch_dim
 from acme.utils.tree_utils import stack_sequence_fields
 from dotenv import load_dotenv
+from IPython.display import display
 from loguru import logger
 from moozi.core import scalar_transform
 from moozi.core.env import make_env
@@ -180,7 +182,7 @@ def make_test_worker_universe(config):
     return Universe(tape, final_law)
 
 
-def make_reanalyze_universe():
+def make_reanalyze_universe(config):
     env_mocker = make_env_mocker()
     stacker = make_stacker(
         config.env.num_rows,
@@ -191,11 +193,7 @@ def make_reanalyze_universe():
     ).vmap(batch_size=1)
     planner = make_planner(
         model=model,
-        dim_action=config.dim_action,
-        batch_size=1,
-        num_simulations=50,
-        output_action=False,
-        output_tree=True,
+        **config.reanalyze_worker.planner,
     ).jit(backend="cpu", max_trace=10)
     terminalor = make_terminator(size=1)
     final_law = sequential(
@@ -206,6 +204,51 @@ def make_reanalyze_universe():
             planner,
             make_traj_writer(1),
             terminalor,
+        ]
+    )
+    tape = make_tape(seed=config.seed)
+    tape.update(final_law.malloc())
+    return Universe(tape, final_law)
+
+
+def make_context_prep(num_stacked_frames, num_unroll_steps, dim_action):
+    @Law.wrap
+    def prepare_context(train_target):
+        obs = _make_obs_from_train_target(
+            batch=train_target,
+            step=0,
+            num_stacked_frames=num_stacked_frames,
+            num_unroll_steps=num_unroll_steps,
+            dim_action=dim_action,
+        )
+        return {"obs": obs}
+
+    return prepare_context
+
+
+@Law.wrap
+def output_updated_train_target(
+    train_target: TrainTarget, root_value, action_probs, output_buffer
+):
+    new_target = train_target._replace(root_value=root_value, action_probs=action_probs)
+    return {"output_buffer": output_buffer + (new_target,), "quit": True}
+
+
+def make_reanalyze_universe_v2(config):
+    context_prep = make_context_prep(
+        num_stacked_frames=config.num_stacked_frames,
+        num_unroll_steps=config.num_unroll_steps,
+        dim_action=config.dim_action,
+    )
+    planner = make_planner(
+        model=model,
+        **config.train.reanalyze_worker.planner,
+    ).jit(backend="cpu", max_trace=10)
+    final_law = sequential(
+        [
+            context_prep,
+            planner,
+            output_updated_train_target,
         ]
     )
     tape = make_tape(seed=config.seed)
@@ -229,10 +272,11 @@ def training_suite_factory(config):
 # %%
 ps = ParameterServer(training_suite_factory=training_suite_factory(config))
 rb = ReplayBuffer(**config.replay)
+rb.min_size = 1
 vis = MinAtarVisualizer()
 
 # %%
-weights_path = "/root/.local/share/virtualenvs/moozi-g1CZ00E9/.guild/runs/65cee6cbba44461b8a379f65ea13d7a0/checkpoints/1130.pkl"
+weights_path = "/root/.local/share/virtualenvs/moozi-g1CZ00E9/.guild/runs/a44a467c7d47452691006ebadd50770f/checkpoints/1019.pkl"
 ps.restore(weights_path)
 
 # %%
@@ -244,7 +288,7 @@ rollout_worker.set("state", ps.get_state())
 
 # %%
 reanalyze_worker = RolloutWorker(
-    partial(make_reanalyze_universe), name=f"reanalyze_worker"
+    partial(make_reanalyze_universe_v2, config), name=f"reanalyze_worker"
 )
 reanalyze_worker.set("params", ps.get_params())
 reanalyze_worker.set("state", ps.get_state())
@@ -282,9 +326,6 @@ for i, target in enumerate(targets):
 
 
 # %%
-traj.root_value
-
-# %%
 images = []
 for i in range(traj.frame.shape[0]):
     image = vis.make_image(traj.frame[i])
@@ -318,8 +359,6 @@ obs = _make_obs_from_train_target(
 rb.add_trajs(trajs)
 
 # %%
-batch = rb.get_train_targets_batch(config.train.batch_size)
-# %%
 for _ in range(100):
     print(ps.update(batch, batch_size=config.train.batch_size))
 
@@ -336,8 +375,6 @@ obs = _make_obs_from_train_target(
 )
 
 # %%
-target.frame.shape
-# %%
 images = []
 for i in range(target.frame.shape[1] - 1):
     image = vis.make_image(target.frame[0, i])
@@ -345,35 +382,22 @@ for i in range(target.frame.shape[1] - 1):
     images.append(image)
 display(vis.cat_images(images))
 
-# %%
-target.n_step_return
 
 # %%
-
-# %%
-traj = rb.get_trajs_batch(1)[0]
-reanalyze_worker.set("traj", traj)
-updated_traj = reanalyze_worker.run()
-rb.add_trajs(updated_traj, from_env=False)
+train_target = rb.get_train_targets_batch(10)
+reanalyze_worker.set("train_target", train_target)
+updated_target = reanalyze_worker.run()
 
 # %%
 tree = reanalyze_worker.universe.tape["tree"]
 
-from typing import Optional, Sequence
-
-import chex
-import jax
-import jax.numpy as jnp
-
 # %%
-import mctx
-import pygraphviz
+from moozi.planner import convert_tree_to_graph
 
-# %%
 graph = convert_tree_to_graph(tree)
 
 # %%
 graph.draw("/tmp/graph.dot", prog="dot")
 
-
 # %%
+vis.make_image(reanalyze_worker.universe.tape["frame"][0, ...])

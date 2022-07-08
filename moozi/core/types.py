@@ -35,8 +35,8 @@ class StepSample(NamedTuple):
         return StepSample(
             frame=np.asarray(self.frame, dtype=np.float32),
             last_reward=np.asarray(self.last_reward, dtype=np.float32),
-            is_first=np.asarray(self.is_first, dtype=np.bool8),
-            is_last=np.asarray(self.is_last, dtype=np.bool8),
+            is_first=np.asarray(self.is_first, dtype=bool),
+            is_last=np.asarray(self.is_last, dtype=bool),
             to_play=np.asarray(self.to_play, dtype=np.int32),
             legal_actions_mask=np.asarray(self.legal_actions_mask, dtype=np.int32),
             root_value=np.asarray(self.root_value, dtype=np.float32),

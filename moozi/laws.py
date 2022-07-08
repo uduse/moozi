@@ -748,7 +748,7 @@ class MinAtarVisualizer:
         )
         rgbs = np.array(self.colors[numerical_state - 1] * 255, dtype=np.uint8)
         img = Image.fromarray(rgbs)
-        img = img.resize((img.width * 25, img.height * 25), Image.NEAREST)
+        img = img.resize((img.width * 25, img.height * 25), Image.Resampling.NEAREST)
         return img
 
     def add_descriptions(

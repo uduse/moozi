@@ -44,14 +44,14 @@ nn:
     obs_channels: 44
     repr_rows: 10
     repr_cols: 10
-    repr_channels: 48
+    repr_channels: 64
     dim_action: ${dim_action}
-    repr_tower_blocks: 4
-    repr_tower_dim: 48
-    pred_tower_blocks: 4
-    pred_tower_dim: 48
+    repr_tower_blocks: 6
+    repr_tower_dim: 64
+    pred_tower_blocks: 2
+    pred_tower_dim: 64
     dyna_tower_blocks: 2
-    dyna_tower_dim: 48
+    dyna_tower_dim: 64
     dyna_state_blocks: 2
 
 train:
@@ -59,7 +59,7 @@ train:
   num_epochs: 2000
   sample_update_ratio: 5
   batch_size: 512
-  lr: 5.0e-2
+  lr: 5.0e-3
   weight_decay: 1.0e-4
   update_period: 5
 
@@ -73,12 +73,12 @@ train:
       dim_action: ${dim_action}
       discount: ${discount}
       num_simulations: 20
-      dirichlet_alpha: 0.5
-      dirichlet_fraction: 0.75
+      dirichlet_alpha: 0.2
+      dirichlet_fraction: 0.2
       temperature: 1.0
 
   reanalyze_worker:
-    num_workers: 10
+    num_workers: 20
     planner:
       batch_size: 1
       dim_action: ${dim_action}

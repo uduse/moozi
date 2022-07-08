@@ -35,13 +35,13 @@ def make_planner(
     batch_size: int,
     dim_action: int,
     model: NNModel,
+    discount: float = 1.0,
     num_simulations: int = 10,
     dirichlet_fraction: float = 0.25,
     dirichlet_alpha: float = 0.3,
     temperature: float = 1.0,
     output_action: bool = True,
     output_tree: bool = False,
-    discount: float = 1.0,
 ) -> Law:
     def malloc():
         return {
@@ -83,7 +83,7 @@ def make_planner(
             recurrent_fn=make_paritial_recurr_fn(model, state, discount),
             num_simulations=num_simulations,
             # TODO: max_depth should be the same as num_unroll_steps?
-            max_depth=5,
+            max_depth=6,
             invalid_actions=invalid_actions,
             dirichlet_fraction=dirichlet_fraction,
             dirichlet_alpha=dirichlet_alpha,

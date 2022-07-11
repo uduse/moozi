@@ -240,10 +240,23 @@ class ResNetArchitecture(NNArchitecture):
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
         hidden_state_flatten = hk.Flatten()(hidden_state)
-        projected = hk.nets.MLP(output_sizes=[128, 64, hidden_state.flatten.shape[-1]])(
-            hidden_state_flatten
+        x = hidden_state_flatten
+
+        x = hk.Linear(32)(x)
+        x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(
+            x, is_training=is_training
         )
-        return projected.reshape(hidden_state.shape)
+        # x = jax.nn.leaky_relu(x)
+
+        # x = hk.Linear(32)(x)
+        # x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(
+        #     x, is_training=is_training
+        # )
+        x = jax.nn.leaky_relu(x)
+        x = hk.Linear(hidden_state_flatten.shape[-1])(x)
+
+        projected = x.reshape(hidden_state.shape)
+        return projected
 
 
 def normalize_hidden_state(hidden_state):

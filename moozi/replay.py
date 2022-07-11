@@ -1,4 +1,4 @@
-import asyncio
+import cloudpickle
 from threading import Thread
 import collections
 import random
@@ -26,6 +26,7 @@ class ReplayEntry:
     priority: float = 1.0
     num_sampled: int = 0
     from_env: bool = True
+    freshness: float = 1.0
 
 
 @dataclass(repr=False)
@@ -39,6 +40,8 @@ class ReplayBuffer:
     num_td_steps: int = 5
     num_stacked_frames: int = 4
     discount: float = 0.997
+    decay: float = 0.9
+    save_dir: str = "./replay/"
 
     _num_targets_created: int = 0
     _trajs: Deque[ReplayEntry] = field(init=False)
@@ -139,11 +142,17 @@ class ReplayBuffer:
         ) / len(self._train_targets)
         return ret
 
+    def apply_decay(self):
+        for target in self._train_targets:
+            target.freshness *= self.decay
+
     def _sample_targets(self, batch_size: int) -> List[ReplayEntry]:
         if self.sampling_strategy == "uniform":
             weights = np.ones(len(self._train_targets))
         elif self.sampling_strategy == "ranking":
             weights = self._compute_ranking_weights()
+        elif self.sampling_strategy == "value_diff":
+            weights = self._compute_value_diff_weights()
         elif self.sampling_strategy == "hybrid":
             ranking_weights = self._compute_ranking_weights()
             freq_weights = self._compute_freq_weights()
@@ -151,6 +160,10 @@ class ReplayBuffer:
             weights /= np.sum(weights)
         else:
             raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")
+
+        if self.decay < 1.0:
+            weights *= np.array([e.freshness for e in self._train_targets])
+            weights /= np.sum(weights)
 
         indices = np.arange(len(self._train_targets))
         batch_indices = np.random.choice(indices, size=batch_size, p=weights)
@@ -176,3 +189,21 @@ class ReplayBuffer:
         weights = 1 / (ranks + 1)
         weights /= np.sum(weights)
         return weights
+
+    def _compute_value_diff_weights(self):
+        priorities = np.array([item.priority for item in self._train_targets])
+        weights = priorities
+        weights += 0.1
+        weights /= np.sum(weights)
+        return weights
+
+    def save(self):
+        path = self.save_dir / f"{self._num_targets_created}.pkl"
+        logger.info(f"saving replays to {path}")
+        with open(path, "wb") as f:
+            cloudpickle.dump(self.__dict__, f)
+
+    def restore(self, path):
+        logger.info(f"restoring replays from {path}")
+        with open(path, "rb") as f:
+            self.__dict__ = cloudpickle.load(f)

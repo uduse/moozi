@@ -30,12 +30,14 @@
   operations:
     train:
       default: true
-      main: examples.minatar_space_invaders.space_invaders
+      main: examples.minatar_space_invaders.driver
       output-scalars: off
       flags-dest: config:examples/minatar_space_invaders/config.yml
       flags-import: all
       requires:
         - file: courier.ttf
+        - file: .env
+        - file: examples/minatar_space_invaders/lib.py
       sourcecode:
         - "*.py"
         - "*.yml"

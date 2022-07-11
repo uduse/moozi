@@ -84,10 +84,91 @@ def make_planner(
             num_simulations=num_simulations,
             # TODO: max_depth should be the same as num_unroll_steps?
             max_depth=6,
+            qtransform=mctx.qtransform_completed_by_mix_value,
             invalid_actions=invalid_actions,
             dirichlet_fraction=dirichlet_fraction,
             dirichlet_alpha=dirichlet_alpha,
             temperature=temperature,
+        )
+        stats = policy_output.search_tree.summary()
+        ret = {
+            "prior_probs": jax.nn.softmax(nn_output.policy_logits),
+            "visit_counts": stats.visit_counts,
+            "action_probs": policy_output.action_weights,
+            "q_values": stats.qvalues,
+            "root_value": stats.value,
+            "random_key": random_key,
+        }
+        if output_action:
+            # doesn't output action to reanalyze
+            ret["action"] = policy_output.action
+        if output_tree:
+            ret["tree"] = policy_output.search_tree
+        return ret
+
+    return Law(
+        name="planner",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )
+
+
+def make_gumbel_planner(
+    batch_size: int,
+    dim_action: int,
+    model: NNModel,
+    discount: float = 1.0,
+    num_simulations: int = 10,
+    temperature: float = 1.0,
+    output_action: bool = True,
+    output_tree: bool = False,
+    gumbel_scale: float = 1.0,
+) -> Law:
+    def malloc():
+        return {
+            "root_value": jnp.zeros(batch_size, dtype=jnp.float32),
+            "action": jnp.full(batch_size, fill_value=0, dtype=jnp.int32),
+            "action_probs": jnp.full(
+                (batch_size, dim_action), fill_value=0, dtype=jnp.float32
+            ),
+            "q_values": jnp.full(
+                (batch_size, dim_action), fill_value=0, dtype=jnp.float32
+            ),
+        }
+
+    def apply(
+        params: hk.Params,
+        state: hk.State,
+        obs,
+        random_key,
+    ):
+        is_training = False
+        batch_size = obs.shape[0]
+        random_key, new_key = jax.random.split(random_key, 2)
+        root_feats = RootFeatures(
+            obs=obs, player=np.zeros((batch_size,), dtype=np.int32)
+        )
+        nn_output, _ = model.root_inference(params, state, root_feats, is_training)
+        root = mctx.RootFnOutput(
+            prior_logits=nn_output.policy_logits,
+            value=nn_output.value,
+            embedding=nn_output.hidden_state,
+        )
+        # using numpy because it's constant
+        invalid_actions = np.zeros((batch_size, dim_action))
+        invalid_actions[:, 0] = 1
+        policy_output = mctx.gumbel_muzero_policy(
+            params=params,
+            rng_key=new_key,
+            root=root,
+            recurrent_fn=make_paritial_recurr_fn(model, state, discount),
+            num_simulations=num_simulations,
+            invalid_actions=invalid_actions,
+            # TODO: max_depth should be the same as num_unroll_steps?
+            max_depth=6,
+            # temperature=temperature,
+            gumbel_scale=gumbel_scale,
         )
         stats = policy_output.search_tree.summary()
         ret = {

@@ -57,12 +57,55 @@ jb_logger = JAXBoardLoggerRemote.remote()
 terminal_logger = TerminalLoggerRemote.remote()
 start_training = False
 train_targets = []
+for w in train_workers + reanalyze_workers:
+    w.set.remote("params", ps.get_params.remote())
+    w.set.remote("state", ps.get_state.remote())
 for epoch in range(1, config.train.num_epochs + 1):
     logger.info(f"Epoch {epoch}")
 
-    for w in train_workers + reanalyze_workers:
-        w.set.remote("params", ps.get_params.remote())
-        w.set.remote("state", ps.get_state.remote())
+    # sync replay buffer and parameter server
+    num_targets_created = ray.get(rb.get_num_targets_created.remote())
+    num_training_steps = ray.get(ps.get_training_steps.remote())
+    rb.apply_decay.remote()
+
+    if not start_training:
+        start_training = num_targets_created >= config.replay.min_size
+        if start_training:
+            logger.info(f"Start training ...")
+
+    if epoch % 10 == 0:
+        for w in train_workers + reanalyze_workers:
+            w.set.remote("params", ps.get_params.remote())
+            w.set.remote("state", ps.get_state.remote())
+
+    if start_training:
+        # desired_num_updates = (
+        #     config.train.sample_update_ratio
+        #     * num_targets_created
+        #     / config.train.batch_size
+        # )
+        # num_updates = int(desired_num_updates - num_training_steps)
+        num_updates = 30
+        batch = rb.get_train_targets_batch.remote(
+            batch_size=config.train.batch_size * num_updates
+        )
+        ps_update_result = ps.update.remote(batch, batch_size=config.train.batch_size)
+        terminal_logger.write.remote(ps_update_result)
+
+    if start_training and config.train.reanalyze_worker.num_workers > 0:
+        traj_refs = dispatch_trajs.remote(
+            rb.get_trajs_batch.remote(config.train.reanalyze_worker.num_workers)
+        )
+        for i, re_w in enumerate(reanalyze_workers):
+            re_w.set.remote("traj", traj_refs[0])
+            updated_traj = re_w.run.remote()
+            rb.add_trajs.remote(updated_traj, from_env=False)
+
+    # generate train targets
+    train_targets.clear()
+    for w in train_workers:
+        sample = w.run.remote()
+        train_targets.append(rb.add_trajs.remote(sample, from_env=True))
 
     if epoch % config.train.test_worker.interval == 0:
         # launch test
@@ -71,40 +114,6 @@ for epoch in range(1, config.train.num_epochs + 1):
         test_result = test_worker.run.remote()
         terminal_logger.write.remote(test_result)
         jb_logger.write.remote(test_result)
-
-    # generate train targets
-    train_targets.clear()
-    for w in train_workers:
-        sample = w.run.remote()
-        train_targets.append(rb.add_trajs.remote(sample, from_env=True))
-
-    if not start_training:
-        rb_size = ray.get(rb.get_num_targets_created.remote())
-        start_training = rb_size >= config.replay.min_size
-        if start_training:
-            logger.info(f"Start training ...")
-
-    if start_training:
-        desired_num_updates = (
-            config.train.sample_update_ratio
-            * ray.get(rb.get_num_targets_created.remote())
-            / config.train.batch_size
-        )
-        num_updates = int(desired_num_updates - ray.get(ps.get_training_steps.remote()))
-        batch = rb.get_train_targets_batch.remote(
-            batch_size=config.train.batch_size * num_updates
-        )
-        ps_update_result = ps.update.remote(batch, batch_size=config.train.batch_size)
-        terminal_logger.write.remote(ps_update_result)
-
-        if config.train.reanalyze_worker.num_workers > 0:
-            traj_refs = dispatch_trajs.remote(
-                rb.get_trajs_batch.remote(config.train.reanalyze_worker.num_workers)
-            )
-            for i, re_w in enumerate(reanalyze_workers):
-                re_w.set.remote("traj", traj_refs[0])
-                updated_traj = re_w.run.remote()
-                rb.add_trajs.remote(updated_traj, from_env=False)
 
     if epoch % config.param_opt.save_interval == 0:
         ps.save.remote()

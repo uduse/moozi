@@ -11,27 +11,27 @@ env:
   num_rows: 10
   num_cols: 10
   num_channels: 6
-  known_bound_min: 0
-  known_bound_max: 1
 
 replay:
   use_remote: true
-  min_size: 3_000
-  max_size: 100_000
-  sampling_strategy: ranking
+  min_size: 50_000
+  max_size: 10_000_000
+  sampling_strategy: value_diff
   num_unroll_steps: ${num_unroll_steps}
   num_td_steps: ${num_td_steps}
   num_stacked_frames: ${num_stacked_frames}
   discount: ${discount}
+  decay: 0.8
+  save_dir: ./replay/
 
 scalar_transform:
-  support_min: -10
-  support_max: 10
+  support_min: -2
+  support_max: 2
   eps: 1.0e-3
 
 param_opt:
   use_remote: true
-  num_gpus: 0.4
+  num_gpus: 0.6
   save_interval: 10
   save_dir: ./checkpoints/
 
@@ -46,39 +46,42 @@ nn:
     repr_cols: 10
     repr_channels: 64
     dim_action: ${dim_action}
-    repr_tower_blocks: 6
+    repr_tower_blocks: 12
     repr_tower_dim: 64
     pred_tower_blocks: 2
-    pred_tower_dim: 64
+    pred_tower_dim: 32
     dyna_tower_blocks: 2
-    dyna_tower_dim: 64
+    dyna_tower_dim: 32
     dyna_state_blocks: 2
 
 train:
   enabled: true
   num_epochs: 2000
-  sample_update_ratio: 5
+  sample_update_ratio: 20
   batch_size: 1024
-  lr: 1.0e-2
-  weight_decay: 1.0e-4
-  update_period: 5
+  bathces_per_transfer: 10
+  lr: 2.0e-4
+  weight_decay: 1.0e-3
+  update_period: 20
 
   env_worker:
-    num_workers: 4
-    num_envs: 5
+    num_workers: 24
+    num_envs: 30
     num_cpus: 1
     num_gpus: 0.2
+    planner_type: gumbel
     planner:
       batch_size: ${train.env_worker.num_envs}
       dim_action: ${dim_action}
       discount: ${discount}
-      num_simulations: 50
-      dirichlet_alpha: 0.2
-      dirichlet_fraction: 0.2
+      num_simulations: 2
+      # dirichlet_alpha: 0.2
+      # dirichlet_fraction: 0.2
       temperature: 1.0
+      output_tree: true
 
   reanalyze_worker:
-    num_workers: 20
+    num_workers: 0
     planner:
       batch_size: 1
       dim_action: ${dim_action}

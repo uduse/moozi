@@ -19,7 +19,7 @@ from moozi.laws import *
 from moozi.laws import MinAtarVisualizer
 from moozi.nn.nn import NNModel, make_model
 from moozi.nn.training import make_training_suite
-from moozi.planner import make_planner
+from moozi.planner import make_planner, make_gumbel_planner
 from moozi.universe import Universe
 from omegaconf import OmegaConf
 
@@ -28,10 +28,14 @@ load_dotenv()
 logger.remove()
 logger.add(sys.stderr, level="INFO")
 
-config = OmegaConf.load(Path(__file__).parent / "config.yml")
-OmegaConf.resolve(config)
-print(OmegaConf.to_yaml(config, resolve=True))
 
+def get_config():
+    config = OmegaConf.load(Path(__file__).parent / "config.yml")
+    OmegaConf.resolve(config)
+    return config
+
+
+config = get_config()
 
 scalar_transform = make_scalar_transform(**config.scalar_transform)
 nn_arch_cls = eval(config.nn.arch_cls)
@@ -44,7 +48,7 @@ model = make_model(nn_arch_cls, nn_spec)
 def make_env_worker_universe(config):
     num_envs = config.train.env_worker.num_envs
     vec_env = make_vec_env(config.env.name, num_envs)
-    frame_stacker = make_batch_stacker(
+    frame_stacker = make_batch_stacker_v2(
         num_envs,
         config.env.num_rows,
         config.env.num_cols,
@@ -53,10 +57,14 @@ def make_env_worker_universe(config):
         config.dim_action,
     )
 
-    penalizer = make_last_step_penalizer(penalty=10.0).vmap(batch_size=num_envs)
-    planner = make_planner(model=model, **config.train.env_worker.planner).jit(
-        backend="gpu", max_trace=10
-    )
+    if config.train.env_worker.planner_type == "gumbel":
+        planner = make_gumbel_planner(
+            model=model, **config.train.env_worker.planner
+        ).jit(backend="gpu", max_trace=10)
+    elif config.train.env_worker.planner_type == "muzero":
+        planner = make_planner(
+            model=model, **config.train.env_worker.planner
+        )
 
     traj_writer = make_traj_writer(num_envs)
     terminator = make_terminator(num_envs)
@@ -64,7 +72,6 @@ def make_env_worker_universe(config):
     final_law = sequential(
         [
             vec_env,
-            # penalizer,
             frame_stacker,
             concat_stacked_to_obs,
             planner,
@@ -79,7 +86,7 @@ def make_env_worker_universe(config):
 
 
 def make_test_worker_universe(config):
-    stacker = make_batch_stacker(
+    stacker = make_batch_stacker_v2(
         1,
         config.env.num_rows,
         config.env.num_cols,

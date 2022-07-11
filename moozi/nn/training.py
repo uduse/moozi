@@ -250,16 +250,24 @@ class MuZeroLossWithScalarTransform(LossFn):
                 params, state, next_feats, is_training
             )
 
-            losses[f"loss/consistency_{str(i + 1)}"] = (
-                optax.cosine_distance(
-                    network_output.hidden_state.reshape((batch_size, -1)),
-                    jax.lax.stop_gradient(next_network_output.hidden_state).reshape(
-                        (batch_size, -1)
-                    ),
+            if self.consistency_loss_coef > 0.0:
+                next_hidden_state = jax.lax.stop_gradient(
+                    next_network_output.hidden_state
                 )
-                * transition_loss_scale
-                * self.consistency_loss_coef
-            )
+                curr_projection, state = model.projection_inference(
+                    params, state, network_output.hidden_state, is_training
+                )
+                next_projection, state = model.projection_inference(
+                    params, state, next_hidden_state, is_training
+                )
+                losses[f"loss/consistency_{str(i + 1)}"] = (
+                    optax.cosine_distance(
+                        curr_projection.reshape((batch_size, -1)),
+                        next_projection.reshape((batch_size, -1)),
+                    )
+                    * transition_loss_scale
+                    * self.consistency_loss_coef
+                )
 
         # all batched losses should be the shape of (batch_size,)
         tree.map_structure(lambda x: chex.assert_shape(x, (batch_size,)), losses)
@@ -464,7 +472,7 @@ def make_target_from_traj(
         last_reward=unrolled_data_stacked[1],
         action_probs=unrolled_data_stacked[2],
         root_value=unrolled_data_stacked[3],
-        importance_sampling_ratio=np.ones((1,)),
+        importance_sampling_ratio=np.array(1),
     )
 
 

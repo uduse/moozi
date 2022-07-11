@@ -163,9 +163,9 @@ class NNArchitecture(hk.Module):
             hidden_state=next_hidden_state,
         )
 
-    def project(self, hidden_state, is_training):
-        projection = self._project_net(hidden_state, is_training)
-        chex.assert_equal_shape(projection, hidden_state)
+    def projection_inference(self, hidden_state, is_training: bool):
+        projection = self._proj_net(hidden_state, is_training)
+        chex.assert_equal_shape([projection, hidden_state])
         return projection
 
 
@@ -191,6 +191,10 @@ class NNModel:
         [hk.Params, hk.State, TransitionFeatures, bool], Tuple[NNOutput, hk.State]
     ]
 
+    projection_inference: Callable[
+        [hk.Params, hk.State, jnp.ndarray, bool], Tuple[jnp.ndarray, hk.State]
+    ]
+
     #: unbatched version of root_inference
     root_inference_unbatched: Callable[
         [hk.Params, hk.State, RootFeatures, bool], Tuple[NNOutput, hk.State]
@@ -199,6 +203,10 @@ class NNModel:
     #: unbatched version of trans_inference
     trans_inference_unbatched: Callable[
         [hk.Params, hk.State, TransitionFeatures, bool], Tuple[NNOutput, hk.State]
+    ]
+
+    projection_inference_unbatched: Callable[
+        [hk.Params, hk.State, jnp.ndarray, bool], Tuple[jnp.ndarray, hk.State]
     ]
 
     # TODO: remove hk_transformed here in the future, currently here for debugging purposes
@@ -213,8 +221,10 @@ class NNModel:
             init_params_and_state=self.init_params_and_state,
             root_inference=jax.jit(self.root_inference),
             trans_inference=jax.jit(self.trans_inference),
+            projection_inference=jax.jit(self.projection_inference),
             root_inference_unbatched=jax.jit(self.root_inference_unbatched),
             trans_inference_unbatched=jax.jit(self.trans_inference_unbatched),
+            projection_inference_unbatched=jax.jit(self.projection_inference_unbatched),
             hk_transformed=self.hk_transformed,
         )
 
@@ -235,9 +245,15 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
             root_out = module.root_inference(root_feats, is_training=False)
             trans_out = module.trans_inference(trans_feats, is_training=True)
             trans_out = module.trans_inference(trans_feats, is_training=False)
-            return (trans_out, root_out)
+            project_out = module._proj_net(trans_feats.hidden_state, is_training=True)
+            project_out = module._proj_net(trans_feats.hidden_state, is_training=False)
+            return (trans_out, root_out, project_out)
 
-        return module_walk, (module.root_inference, module.trans_inference)
+        return module_walk, (
+            module.root_inference,
+            module.trans_inference,
+            module.projection_inference,
+        )
 
     hk_transformed = hk.multi_transform_with_state(multi_transform_target)
 
@@ -274,6 +290,11 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
             params, state, dummy_random_key, feats, is_training
         )
 
+    def projection_inference(params, state, hidden_state, is_training):
+        return hk_transformed.apply[2](
+            params, state, dummy_random_key, hidden_state, is_training
+        )
+
     def root_inference_unbatched(params, state, feats, is_training):
         out, state = root_inference(params, state, add_batch_dim(feats), is_training)
         return squeeze_batch_dim(out), state
@@ -282,14 +303,19 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
         out, state = trans_inference(params, state, add_batch_dim(feats), is_training)
         return squeeze_batch_dim(out), state
 
-    # def project_unbatched(params, state, is_training):
-    #     return project_
+    def projection_inference_unbatched(params, state, hidden_state, is_training):
+        out, state = projection_inference(
+            params, state, add_batch_dim(hidden_state), is_training
+        )
+        return squeeze_batch_dim(out), state
 
     return NNModel(
         init_params_and_state,
         root_inference,
         trans_inference,
+        projection_inference,
         root_inference_unbatched,
         trans_inference_unbatched,
+        projection_inference_unbatched,
         hk_transformed,
     )

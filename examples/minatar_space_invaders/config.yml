@@ -5,6 +5,7 @@ num_td_steps: 5
 # TODO: rename num_stakd_frames to history_len or something
 num_stacked_frames: 4
 dim_action: 5
+debug: false
 
 env:
   name: MinAtar:SpaceInvaders-v1
@@ -61,7 +62,7 @@ train:
   batch_size: 1024
   bathces_per_transfer: 10
   lr: 2.0e-4
-  weight_decay: 1.0e-3
+  weight_decay: 1.0e-4
   update_period: 20
 
   env_worker:
@@ -69,14 +70,14 @@ train:
     num_envs: 30
     num_cpus: 1
     num_gpus: 0.2
-    planner_type: gumbel
+    planner_type: muzero
     planner:
       batch_size: ${train.env_worker.num_envs}
       dim_action: ${dim_action}
       discount: ${discount}
-      num_simulations: 2
-      # dirichlet_alpha: 0.2
-      # dirichlet_fraction: 0.2
+      num_simulations: 20
+      dirichlet_alpha: 0.2
+      dirichlet_fraction: 0.2
       temperature: 1.0
       output_tree: true
 

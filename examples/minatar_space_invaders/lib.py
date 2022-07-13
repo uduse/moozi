@@ -60,11 +60,16 @@ def make_env_worker_universe(config):
     if config.train.env_worker.planner_type == "gumbel":
         planner = make_gumbel_planner(
             model=model, **config.train.env_worker.planner
-        ).jit(backend="gpu", max_trace=10)
+        )
     elif config.train.env_worker.planner_type == "muzero":
         planner = make_planner(
             model=model, **config.train.env_worker.planner
         )
+    else:
+        raise NotImplementedError
+    
+    if not config.debug:
+        planner = planner.jit(max_trace=10)
 
     traj_writer = make_traj_writer(num_envs)
     terminator = make_terminator(num_envs)

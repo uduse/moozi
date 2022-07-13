@@ -1,4 +1,5 @@
 import cloudpickle
+from pathlib import Path
 from threading import Thread
 import collections
 import random
@@ -198,7 +199,8 @@ class ReplayBuffer:
         return weights
 
     def save(self):
-        path = self.save_dir / f"{self._num_targets_created}.pkl"
+        path = Path(self.save_dir).expanduser() / f"{self._num_targets_created}.pkl"
+        path = str(path)
         logger.info(f"saving replays to {path}")
         with open(path, "wb") as f:
             cloudpickle.dump(self.__dict__, f)

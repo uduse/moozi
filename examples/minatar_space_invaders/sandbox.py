@@ -1,4 +1,5 @@
 # %%
+from acme.jax.utils import add_batch_dim
 from omegaconf import OmegaConf
 import numpy as np
 from IPython.display import display
@@ -7,13 +8,12 @@ import ray
 from functools import partial
 from moozi.laws import MinAtarVisualizer
 
-from moozi.logging import JAXBoardLoggerRemote, TerminalLoggerRemote
-from moozi.nn.training import make_target_from_traj
 from moozi.replay import ReplayBuffer
 from moozi.parameter_optimizer import ParameterServer
 from moozi.rollout_worker import RolloutWorker
 from moozi.laws import *
-from moozi.planner import convert_tree_to_graph
+from moozi.planner import convert_tree_to_graph, make_gumbel_planner
+from moozi.nn import RootFeatures, TransitionFeatures
 
 from lib import (
     training_suite_factory,
@@ -21,13 +21,16 @@ from lib import (
     make_reanalyze_universe,
     make_env_worker_universe,
     config,
+    model,
+    scalar_transform,
 )
 
 # %%
-vec_env = make_vec_env("MinAtar:SpaceInvaders-v1", num_envs=2)
+vec_env = make_vec_env("MinAtar:SpaceInvaders-v1", num_envs=1)
 
 # %%
 config = OmegaConf.load(Path(__file__).parent / "config.yml")
+config.debug = True
 config.train.env_worker.num_workers = 1
 config.train.env_worker.num_envs = 1
 config.replay.min_size = 1
@@ -42,8 +45,8 @@ rb.min_size = 1
 vis = MinAtarVisualizer()
 
 # %%
-# weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/0ad7dfc32c9f4685a02ba66b3731ef12/checkpoints/7589.pkl"
-# ps.restore(weights_path)
+weights_path = "/home/zeyi/moozi/examples/minatar_space_invaders/checkpoints/600.pkl"
+ps.restore(weights_path)
 
 # %%
 rollout_worker = RolloutWorker(
@@ -51,6 +54,7 @@ rollout_worker = RolloutWorker(
 )
 rollout_worker.set("params", ps.get_params())
 rollout_worker.set("state", ps.get_state())
+
 
 # %%
 reanalyze_worker = RolloutWorker(
@@ -60,137 +64,238 @@ reanalyze_worker.set("params", ps.get_params())
 reanalyze_worker.set("state", ps.get_state())
 
 # %%
-for i in range(100):
-    reanalyze_worker.universe.tick()
-    tape = reanalyze_worker.universe.tape
-    image = vis.make_image(tape["frame"][0])
-    image = vis.add_descriptions(
-        image,
-        action=tape["action"][0],
-        q_values=tape["q_values"][0],
-        action_probs=tape["action_probs"][0],
-        prior_probs=tape["prior_probs"][0],
-        reward=tape["reward"][0],
-        visit_counts=tape["visit_counts"][0],
-    )
-    display(image)
-    # graph = convert_tree_to_graph(tape["tree"])
-    # graph.draw(f"/tmp/graph_{i}.dot", prog="dot")
+u = make_env_worker_universe(config)
+u.tape["params"] = ps.get_params()
+u.tape["state"] = ps.get_state()
 
 # %%
-trajs = []
-for i in range(1):
-    trajs.extend(rollout_worker.run())
-rb.add_trajs(trajs)
+u.tick()
 
-# %%
-for _ in range(1000):
-    print(ps.update(rb.get_train_targets_batch(batch_size=10), batch_size=10))
-
-# %%
-images = []
-for i in range(traj.frame.shape[0]):
-    image = vis.make_image(traj.frame[i])
-    image = vis.add_descriptions(
-        image,
-        action=traj.action[i],
-        reward=traj.last_reward[i],
-    )
-    images.append(image)
-vis.cat_images(images)
-
-
-# %%
-reanalyze_worker.set('traj', trajs[0])
-# %%
-result = reanalyze_worker.run()
-
-# %%
-result
-
-# %%
-obs = _make_obs_from_train_target(
-    add_batch_dim(target),
-    step=0,
-    num_stacked_frames=config.num_stacked_frames,
-    num_unroll_steps=config.num_unroll_steps,
-    dim_action=config.dim_action,
+image = vis.make_image(u.tape["frame"][0])
+image = vis.add_descriptions(
+    image,
+    action=u.tape["action"][0],
+    q_values=u.tape["q_values"][0],
+    action_probs=u.tape["action_probs"][0],
+    prior_probs=u.tape["prior_probs"][0],
+    reward=u.tape["reward"][0],
+    visit_counts=u.tape["visit_counts"][0],
 )
-# %%
-rb.add_trajs(trajs)
+display(image)
+# graph = convert_tree_to_graph(tape["tree"])
+# graph.draw(f"/tmp/graph_{i}.dot", prog="dot")
+
 
 # %%
-# %%
-for _ in range(100):
-    print(ps.update(batch, batch_size=config.train.batch_size))
+g = convert_tree_to_graph(u.tape["tree"])
+g.draw(f"/tmp/graph.dot", prog="dot")
 
 # %%
-import random
-
-targets = unstack_sequence_fields(batch, batch.frame.shape[0])
-target = random.choice(targets)
-target = add_batch_dim(target)
-
-# %%
-obs = _make_obs_from_train_target(
-    target, 0, config.num_stacked_frames, config.num_unroll_steps, config.dim_action
+nn_out, _ = model.root_inference(
+    u.tape["params"],
+    u.tape["state"],
+    RootFeatures(u.tape["obs"], np.array(0)),
+    False,
 )
 
 # %%
+last_hidden = nn_out.hidden_state[0, ...]
+for action in [3]:
+    print(f"{action=}")
+    nn_out1, _ = model.trans_inference_unbatched(
+        u.tape["params"],
+        u.tape["state"],
+        TransitionFeatures(last_hidden, np.array(action)),
+        is_training=True,
+    )
+    value_probs = jax.nn.softmax(nn_out1.value)
+    value = scalar_transform.inverse_transform(
+        value_probs.reshape((1, *value_probs.shape))
+    )
+    reward_probs = jax.nn.softmax(nn_out1.reward)
+    reward = scalar_transform.inverse_transform(
+        reward_probs.reshape((1, *reward_probs.shape))
+    )
+    print(f"{value_probs.tolist()=}")
+    print(f"{value.tolist()=}")
+    print(f"{reward_probs.tolist()=}")
+    print(f"{reward.tolist()=}")
+    print()
+
+    nn_out2, _ = model.trans_inference_unbatched(
+        u.tape["params"],
+        u.tape["state"],
+        TransitionFeatures(last_hidden, np.array(action)),
+        is_training=False,
+    )
+    print(f"{nn_out2.value.tolist()=}")
+    print(f"{nn_out2.reward.tolist()=}")
+    print("\n")
+
+# %%
+nn_out2.value
+
+# %%
+vis.make_image(u.tape["frame"][20, ...])
+
+# %%
+rb.restore("/home/zeyi/moozi/examples/minatar_space_invaders/replay/415116.pkl")
+rb.get_stats()
+# %%
+targets = rb.get_train_targets_batch(10)
+targets = unstack_sequence_fields(targets, 10)
+
+# %%
+# planner = make_gumbel_planner(model=model, **config.train.env_worker.planner)
+
+# # %%
+# tape = vec_env.malloc()
+# # %%
+# frame_stacker = make_batch_stacker_v2(
+#     1,
+#     config.env.num_rows,
+#     config.env.num_cols,
+#     config.env.num_channels,
+#     config.num_stacked_frames,
+#     config.dim_action,
+# )
+
+
+# # %%
+# frame_stacker.apply(tape)
+
+# # %%
+# planner.apply({'obs'})
+
+# # %%
+# trajs = []
+# for i in range(1):
+#     trajs.extend(rollout_worker.run())
+# rb.add_trajs(trajs)
+
+# # %%
+# for _ in range(1000):
+#     print(ps.update(rb.get_train_targets_batch(batch_size=10), batch_size=10))
+
+# # %%
+# images = []
+# for i in range(traj.frame.shape[0]):
+#     image = vis.make_image(traj.frame[i])
+#     image = vis.add_descriptions(
+#         image,
+#         action=traj.action[i],
+#         reward=traj.last_reward[i],
+#     )
+#     images.append(image)
+# vis.cat_images(images)
+
+
+# # %%
+# reanalyze_worker.set("traj", trajs[0])
+# # %%
+# result = reanalyze_worker.run()
+
+# # %%
+# result
+
+# # %%
+# obs = _make_obs_from_train_target(
+#     add_batch_dim(target),
+#     step=0,
+#     num_stacked_frames=config.num_stacked_frames,
+#     num_unroll_steps=config.num_unroll_steps,
+#     dim_action=config.dim_action,
+# )
+# # %%
+# rb.add_trajs(trajs)
+
+# # %%
+# # %%
+# for _ in range(100):
+#     print(ps.update(batch, batch_size=config.train.batch_size))
+
+# # %%
+# import random
+
+# targets = unstack_sequence_fields(batch, batch.frame.shape[0])
+# target = random.choice(targets)
+# target = add_batch_dim(target)
+
+# # %%
+# obs = _make_obs_from_train_target(
+#     target, 0, config.num_stacked_frames, config.num_unroll_steps, config.dim_action
+# )
+
+# # %%
+# images = []
+# for i in range(target.frame.shape[1] - 1):
+#     image = vis.make_image(target.frame[0, i])
+#     image = vis.add_descriptions(image, action=target.action[0, i + 1])
+#     images.append(image)
+# display(vis.cat_images(images))
+
+
+# # %%
+# train_target = rb.get_train_targets_batch(10)
+# reanalyze_worker.set("train_target", train_target)
+# updated_target = reanalyze_worker.run()
+
+# # %%
+# tree = reanalyze_worker.universe.tape["tree"]
+
+# # %%
+# updated_target = stack_sequence_fields(updated_target)
+
+# # %%
+# from moozi.planner import convert_tree_to_graph
+
+# graph = convert_tree_to_graph(tree)
+
+# # %%
+# graph.draw("/tmp/graph.dot", prog="dot")
+
+# # %%
+# updated_target.root_value
+
+# # %%
+# train_target.root_value
+
+# # %%
+
+
+# ## CHEATSHEET
+
+# visualize targets
+target = targets[0]
 images = []
-for i in range(target.frame.shape[1] - 1):
-    image = vis.make_image(target.frame[0, i])
-    image = vis.add_descriptions(image, action=target.action[0, i + 1])
+for i in range(target.frame.shape[0]):
+    image = vis.make_image(target.frame[i])
+    descriptions = {}
+    if i >= config.num_stacked_frames - 1:
+        offset = i + 1 - config.num_stacked_frames
+        descriptions["n_step_return"] = target.n_step_return[offset]
+        descriptions["root_value"] = target.root_value[offset]
+        descriptions["action_probs"] = target.action_probs[offset]
+        descriptions["reward"] = target.last_reward[offset]
+    if i < target.frame.shape[0] - 1:
+        descriptions["action"] = target.action[i + 1]
+    image = vis.add_descriptions(image, **descriptions)
     images.append(image)
 display(vis.cat_images(images))
 
+# %%
+image = vis.make_image(u.tape["frame"][0])
+image = vis.add_descriptions(
+    image,
+    action=u.tape["action"][0],
+    q_values=u.tape["q_values"][0],
+    action_probs=u.tape["action_probs"][0],
+    prior_probs=u.tape["prior_probs"][0],
+    reward=u.tape["reward"][0],
+    visit_counts=u.tape["visit_counts"][0],
+)
+display(image)
+# graph = convert_tree_to_graph(tape["tree"])
+# graph.draw(f"/tmp/graph_{i}.dot", prog="dot")
 
 # %%
-train_target = rb.get_train_targets_batch(10)
-reanalyze_worker.set("train_target", train_target)
-updated_target = reanalyze_worker.run()
-
-# %%
-tree = reanalyze_worker.universe.tape["tree"]
-
-# %%
-updated_target = stack_sequence_fields(updated_target)
-
-# %%
-from moozi.planner import convert_tree_to_graph
-
-graph = convert_tree_to_graph(tree)
-
-# %%
-graph.draw("/tmp/graph.dot", prog="dot")
-
-# %%
-updated_target.root_value
-
-# %%
-train_target.root_value
-
-# %%
-
-
-## CHEATSHEET
-
-# visualize targets
-targets = [targets[0]]
-for i, target in enumerate(targets):
-    print(i)
-    images = []
-    for i in range(target.frame.shape[0]):
-        image = vis.make_image(target.frame[i])
-        descriptions = {}
-        if i >= config.num_stacked_frames - 1:
-            offset = i + 1 - config.num_stacked_frames
-            descriptions["n_step_return"] = target.n_step_return[offset]
-            descriptions["root_value"] = target.root_value[offset]
-            descriptions["action_probs"] = target.action_probs[offset]
-            descriptions["reward"] = target.last_reward[offset]
-        if i < target.frame.shape[0] - 1:
-            descriptions["action"] = target.action[i + 1]
-        image = vis.add_descriptions(image, **descriptions)
-        images.append(image)
-    display(vis.cat_images(images))

@@ -242,11 +242,11 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
 
         def module_walk(root_feats, trans_feats):
             root_out = module.root_inference(root_feats, is_training=True)
-            root_out = module.root_inference(root_feats, is_training=False)
+            # root_out = module.root_inference(root_feats, is_training=False)
             trans_out = module.trans_inference(trans_feats, is_training=True)
-            trans_out = module.trans_inference(trans_feats, is_training=False)
+            # trans_out = module.trans_inference(trans_feats, is_training=False)
             project_out = module._proj_net(trans_feats.hidden_state, is_training=True)
-            project_out = module._proj_net(trans_feats.hidden_state, is_training=False)
+            # project_out = module._proj_net(trans_feats.hidden_state, is_training=False)
             return (trans_out, root_out, project_out)
 
         return module_walk, (

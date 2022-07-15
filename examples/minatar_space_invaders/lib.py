@@ -48,26 +48,21 @@ model = make_model(nn_arch_cls, nn_spec)
 def make_env_worker_universe(config):
     num_envs = config.train.env_worker.num_envs
     vec_env = make_vec_env(config.env.name, num_envs)
-    frame_stacker = make_batch_stacker_v2(
-        num_envs,
-        config.env.num_rows,
-        config.env.num_cols,
-        config.env.num_channels,
-        config.num_stacked_frames,
-        config.dim_action,
-    )
+    obs_processor = make_obs_processor(
+        num_rows=config.env.num_rows,
+        num_cols=config.env.num_cols,
+        num_channels=config.env.num_channels,
+        num_stacked_frames=config.num_stacked_frames,
+        dim_action=config.dim_action,
+    ).vmap(batch_size=num_envs)
 
     if config.train.env_worker.planner_type == "gumbel":
-        planner = make_gumbel_planner(
-            model=model, **config.train.env_worker.planner
-        )
+        planner = make_gumbel_planner(model=model, **config.train.env_worker.planner)
     elif config.train.env_worker.planner_type == "muzero":
-        planner = make_planner(
-            model=model, **config.train.env_worker.planner
-        )
+        planner = make_planner(model=model, **config.train.env_worker.planner)
     else:
         raise NotImplementedError
-    
+
     if not config.debug:
         planner = planner.jit(max_trace=10)
 
@@ -77,8 +72,7 @@ def make_env_worker_universe(config):
     final_law = sequential(
         [
             vec_env,
-            frame_stacker,
-            concat_stacked_to_obs,
+            obs_processor,
             planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
             traj_writer,
@@ -91,23 +85,23 @@ def make_env_worker_universe(config):
 
 
 def make_test_worker_universe(config):
-    stacker = make_batch_stacker_v2(
-        1,
-        config.env.num_rows,
-        config.env.num_cols,
-        config.env.num_channels,
-        config.num_stacked_frames,
-        config.dim_action,
-    )
+    vec_env = make_vec_env(config.env.name, 1)
+    obs_processor = make_obs_processor(
+        num_rows=config.env.num_rows,
+        num_cols=config.env.num_cols,
+        num_channels=config.env.num_channels,
+        num_stacked_frames=config.num_stacked_frames,
+        dim_action=config.dim_action,
+    ).vmap(batch_size=1)
+
     planner = make_planner(model=model, **config.train.test_worker.planner).jit(
         backend="gpu", max_trace=10
     )
 
     final_law = sequential(
         [
-            make_vec_env(config.env.name, 1),
-            stacker,
-            concat_stacked_to_obs,
+            vec_env,
+            obs_processor,
             planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="test_worker_gifs"),
             make_traj_writer(1),
@@ -121,12 +115,12 @@ def make_test_worker_universe(config):
 
 def make_reanalyze_universe(config):
     env_mocker = make_env_mocker()
-    stacker = make_stacker(
-        config.env.num_rows,
-        config.env.num_cols,
-        config.env.num_channels,
-        config.num_stacked_frames,
-        config.dim_action,
+    obs_processor = make_obs_processor(
+        num_rows=config.env.num_rows,
+        num_cols=config.env.num_cols,
+        num_channels=config.env.num_channels,
+        num_stacked_frames=config.num_stacked_frames,
+        dim_action=config.dim_action,
     ).vmap(batch_size=1)
     planner = make_planner(model=model, **config.train.reanalyze_worker.planner).jit(
         backend="cpu", max_trace=10
@@ -135,8 +129,7 @@ def make_reanalyze_universe(config):
     final_law = sequential(
         [
             env_mocker,
-            stacker,
-            concat_stacked_to_obs,
+            obs_processor,
             planner,
             Law.wrap(lambda next_action: {"action": next_action}),
             make_traj_writer(1),

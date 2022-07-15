@@ -15,8 +15,8 @@ env:
 
 replay:
   use_remote: true
-  min_size: 50_000
-  max_size: 10_000_000
+  max_trajs_size: 1_000_000
+  max_targets_size: 5_000_000
   sampling_strategy: value_diff
   num_unroll_steps: ${num_unroll_steps}
   num_td_steps: ${num_td_steps}
@@ -64,9 +64,11 @@ train:
   lr: 2.0e-4
   weight_decay: 1.0e-4
   update_period: 20
+  min_targets_to_train: 3_000
+  updates_per_epoch: 30
 
   env_worker:
-    num_workers: 24
+    num_workers: 1
     num_envs: 30
     num_cpus: 1
     num_gpus: 0.2
@@ -82,7 +84,7 @@ train:
       output_tree: true
 
   reanalyze_worker:
-    num_workers: 0
+    num_workers: 42
     planner:
       batch_size: 1
       dim_action: ${dim_action}

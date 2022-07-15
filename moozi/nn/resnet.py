@@ -24,19 +24,26 @@ class ResNetSpec(NNSpec):
     dyna_state_blocks: int = 2
 
 
+def conv_3x3(num_channels):
+    return hk.Conv2D(
+        num_channels,
+        (3, 3),
+        padding="same",
+        with_bias=False,
+    )
+
+
+def bn():
+    return hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.999)
+
+
 @dataclass
 class ConvBlock(hk.Module):
     num_channels: int
 
     def __call__(self, x, is_training):
-        x = hk.Conv2D(
-            self.num_channels,
-            (3, 3),
-            padding="same",
-        )(x)
-        x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(
-            x, is_training=is_training
-        )
+        x = conv_3x3(self.num_channels)(x)
+        x = bn()(x, is_training=is_training)
         x = jax.nn.relu(x)
         return x
 
@@ -46,9 +53,16 @@ class ResBlock(hk.Module):
     def __call__(self, x, is_training):
         identity = x
         num_channels = x.shape[-1]
-        x = ConvBlock(num_channels)(x, is_training=is_training)
+
+        x = conv_3x3(num_channels)(x)
+        x = bn()(x, is_training)
+        x = jax.nn.relu(x)
+
+        x = conv_3x3(num_channels)(x)
+        x = bn()(x, is_training)
         x = x + identity
         x = jax.nn.relu(x)
+
         return x
 
 
@@ -119,9 +133,9 @@ class ResNetArchitecture(NNArchitecture):
         )
 
         hidden_state = ConvBlock(self.spec.repr_channels)(hidden_state, is_training)
-        hidden_state = hk.Conv2D(self.spec.repr_channels, (3, 3), padding="same")(
-            hidden_state
-        )
+        # hidden_state = hk.Conv2D(self.spec.repr_channels, (3, 3), padding="same")(
+        #     hidden_state
+        # )
         chex.assert_shape(
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
@@ -214,9 +228,9 @@ class ResNetArchitecture(NNArchitecture):
         next_hidden_state = ConvBlock(self.spec.repr_channels)(
             next_hidden_state, is_training
         )
-        next_hidden_state = hk.Conv2D(self.spec.repr_channels, (3, 3), padding="same")(
-            next_hidden_state
-        )
+        # next_hidden_state = hk.Conv2D(self.spec.repr_channels, (3, 3), padding="same")(
+        #     next_hidden_state
+        # )
         chex.assert_shape(
             next_hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
@@ -243,9 +257,7 @@ class ResNetArchitecture(NNArchitecture):
         x = hidden_state_flatten
 
         x = hk.Linear(32)(x)
-        x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(
-            x, is_training=is_training
-        )
+        x = bn()(x, is_training=is_training)
         # x = jax.nn.leaky_relu(x)
 
         # x = hk.Linear(32)(x)
@@ -262,5 +274,7 @@ class ResNetArchitecture(NNArchitecture):
 def normalize_hidden_state(hidden_state):
     batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)
     batch_max = jnp.max(hidden_state, axis=(1, 2, 3), keepdims=True)
-    hidden_state = (hidden_state - batch_min) / (batch_max - batch_min + 1e-8)
+    hidden_state = (hidden_state - batch_min) / (
+        batch_max - batch_min + jnp.array(1e-10)
+    )
     return hidden_state

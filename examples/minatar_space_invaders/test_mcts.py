@@ -17,7 +17,7 @@ from moozi.laws import *
 from moozi.planner import convert_tree_to_graph, make_gumbel_planner
 from moozi.nn import RootFeatures, TransitionFeatures
 
-from ..examples.minatar_space_invaders.lib import (
+from lib import (
     training_suite_factory,
     make_test_worker_universe,
     make_reanalyze_universe,
@@ -32,6 +32,7 @@ vec_env = make_vec_env("MinAtar:SpaceInvaders-v1", num_envs=1)
 
 # %%
 config = OmegaConf.load(Path(__file__).parent / "config.yml")
+
 # config.debug = True
 config.train.env_worker.num_workers = 1
 config.train.env_worker.num_envs = 1

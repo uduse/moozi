@@ -83,7 +83,7 @@ def make_planner(
             recurrent_fn=make_paritial_recurr_fn(model, state, discount),
             num_simulations=num_simulations,
             # TODO: max_depth should be the same as num_unroll_steps?
-            max_depth=6,
+            max_depth=5,
             qtransform=mctx.qtransform_completed_by_mix_value,
             invalid_actions=invalid_actions,
             dirichlet_fraction=dirichlet_fraction,
@@ -166,7 +166,7 @@ def make_gumbel_planner(
             num_simulations=num_simulations,
             invalid_actions=invalid_actions,
             # TODO: max_depth should be the same as num_unroll_steps?
-            max_depth=6,
+            max_depth=5,
             # temperature=temperature,
             gumbel_scale=gumbel_scale,
         )

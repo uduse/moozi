@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from moozi.core import PolicyFeed
+from moozi.core.scalar_transform import make_scalar_transform
 from moozi.nn import (
     NNSpec,
     ResNetArchitecture,
@@ -46,6 +47,7 @@ def model(env_spec, num_stacked_frames, request):
             repr_cols=obs_cols,
             repr_channels=2,
             dim_action=dim_action,
+            scalar_transform=make_scalar_transform(-30, 30),
         ),
     )
 

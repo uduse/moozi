@@ -14,7 +14,8 @@ import tree
 from jax import vmap
 from moozi import ScalarTransform, TrainingState, TrainTarget
 from moozi.core.types import TrainingState, TrajectorySample
-from moozi.laws import concat_stacked_to_obs, make_stacker, make_env_mocker_v2
+from moozi.core.utils import make_action_planes, make_frame_planes
+from moozi.laws import concat_stacked_to_obs, make_stacker
 from moozi.nn import (
     NNArchitecture,
     NNModel,
@@ -98,26 +99,23 @@ def _make_obs_from_train_target(
     assert 0 <= step <= num_unroll_steps
     assert num_frames == (num_stacked_frames + num_unroll_steps)
 
-    stacked_frames = batch.frame[:, step : step + num_stacked_frames]
-    stacked_frames = jnp.moveaxis(stacked_frames, 1, -1)
-    stacked_frames = jnp.reshape(stacked_frames, (batch_size, num_rows, num_cols, -1))
-    chex.assert_shape(
-        stacked_frames,
-        (batch_size, num_rows, num_cols, num_stacked_frames * num_channels),
+    history_frames = batch.frame[:, step : step + num_stacked_frames, ...]
+    stacked_frames = vmap(make_frame_planes)(history_frames)
+    history_actions = batch.action[:, step : step + num_stacked_frames, ...]
+    stacked_actions = vmap(make_action_planes, in_axes=[0, None, None, None])(
+        history_actions, num_rows, num_cols, dim_action
     )
-
-    stacked_actions = batch.action[:, step : step + num_stacked_frames]
-    stacked_actions = jax.nn.one_hot(stacked_actions, dim_action)
-    stacked_actions = stacked_actions / dim_action
-    stacked_actions = jnp.reshape(stacked_actions, (batch_size, -1))
-    stacked_actions = stacked_actions[:, jnp.newaxis, jnp.newaxis, :]
-    stacked_actions = jnp.tile(stacked_actions, (1, num_rows, num_cols, 1))
+    obs = jnp.concatenate([stacked_frames, stacked_actions], axis=-1)
     chex.assert_shape(
-        stacked_actions,
-        (batch_size, num_rows, num_cols, num_stacked_frames * dim_action),
+        obs,
+        (
+            batch_size,
+            num_rows,
+            num_cols,
+            num_stacked_frames * (num_channels + dim_action),
+        ),
     )
-
-    return jnp.concatenate([stacked_frames, stacked_actions], axis=-1)
+    return obs
 
 
 @dataclass

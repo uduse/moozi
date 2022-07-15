@@ -69,7 +69,7 @@ for epoch in range(1, config.train.num_epochs + 1):
     rb.apply_decay.remote()
 
     if not start_training:
-        start_training = num_targets_created >= config.replay.min_size
+        start_training = num_targets_created >= config.train.min_targets_to_train
         if start_training:
             logger.info(f"Start training ...")
 
@@ -79,15 +79,8 @@ for epoch in range(1, config.train.num_epochs + 1):
             w.set.remote("state", ps.get_state.remote())
 
     if start_training:
-        # desired_num_updates = (
-        #     config.train.sample_update_ratio
-        #     * num_targets_created
-        #     / config.train.batch_size
-        # )
-        # num_updates = int(desired_num_updates - num_training_steps)
-        num_updates = 30
         batch = rb.get_train_targets_batch.remote(
-            batch_size=config.train.batch_size * num_updates
+            batch_size=config.train.batch_size * config.train.updates_per_epoch
         )
         ps_update_result = ps.update.remote(batch, batch_size=config.train.batch_size)
         terminal_logger.write.remote(ps_update_result)

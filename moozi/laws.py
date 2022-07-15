@@ -19,6 +19,11 @@ from loguru import logger
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from moozi.core import BASE_PLAYER, PolicyFeed, StepSample
+from moozi.core.utils import (
+    make_frame_planes,
+    make_action_planes,
+    push_and_rotate_out_planes,
+)
 from moozi.core.env import make_env
 from moozi.core.link import link, unlink
 from moozi.core.tape import include
@@ -679,12 +684,19 @@ def make_env_mocker():
     )
 
 
-def make_env_mocker_v2():
+def make_env_mocker_v2(num_envs):
     def malloc():
-        return {"traj": False, "curr_traj_index": 0}
+        return {
+            "queued_trajs": tuple(),
+            "running_trajs": {i: None for i in range(num_envs)},
+            "curr_traj_index": {i: 0 for i in range(num_envs)},
+        }
 
-    def apply(traj: Union[StepSample, bool], curr_traj_index: int):
-        assert traj is not False
+    def apply(queued_trajs, running_trajs, curr_traj_index):
+        # refill envs
+        # for key in running_trajs:
+        #     if running_trajs[key] is None and 
+                
         chex.assert_rank(traj.frame, 4)
         ret = {
             "curr_traj_index": curr_traj_index + 1,
@@ -762,7 +774,7 @@ class MinAtarVisualizer:
         reward=None,
         action_map=None,
         visit_counts=None,
-        n_step_return=None
+        n_step_return=None,
     ):
         if root_value is not None:
             root_value = np.asarray(root_value, dtype=np.float32)
@@ -855,3 +867,80 @@ class MinAtarVisualizer:
             img = self.add_descriptions(img)
             images.append(img)
         return images
+
+
+# stacked_actions = jnp.zeros(
+#     (num_rows, num_cols, num_stacked_frames * dim_action),
+#     dtype=jnp.float32,
+# )
+# stacked_actions = stacked_actions.at[:, :, 0].set(1)
+# stacked_actions = stacked_actions / dim_action
+
+# return {
+#     "stacked_frames": jnp.zeros(
+#         (num_rows, num_cols, num_stacked_frames * num_channels),
+#         dtype=jnp.float32,
+#     ),
+#     "stacked_actions": stacked_actions,
+# }
+
+
+def make_obs_processor(
+    num_rows: int,
+    num_cols: int,
+    num_channels: int,
+    num_stacked_frames: int,
+    dim_action: int,
+):
+    def malloc():
+        empty_frames = jnp.zeros(
+            (num_stacked_frames, num_rows, num_cols, num_channels),
+            dtype=jnp.float32,
+        )
+        empty_actions = jnp.zeros(
+            (num_stacked_frames,),
+            dtype=jnp.int32,
+        )
+        return {
+            "history_frames": empty_frames,
+            "history_actions": empty_actions,
+        }
+
+    def apply(history_frames, history_actions, frame, action, is_first):
+        def _make_obs(history_frames, history_actions, frame, action):
+            stacked_frame_planes = push_and_rotate_out_planes(
+                make_frame_planes(history_frames),
+                make_frame_planes(frame.reshape((1, *frame.shape))),
+            )
+
+            stacked_action_planes = push_and_rotate_out_planes(
+                make_action_planes(history_actions, num_rows, num_cols, dim_action),
+                make_action_planes(
+                    action.reshape((1,)), num_rows, num_cols, dim_action
+                ),
+            )
+            obs = jnp.concatenate(
+                [stacked_frame_planes, stacked_action_planes], axis=-1
+            )
+            return {"obs": obs}
+
+        def _reset_then_make_obs(history_frames, history_actions, frame, action):
+            ret = malloc()
+            return _make_obs(**ret, frame=frame, action=action)
+
+        return jax.lax.cond(
+            is_first,
+            _reset_then_make_obs,
+            _make_obs,
+            history_frames,
+            history_actions,
+            frame,
+            action,
+        )
+
+    return Law(
+        name="obs_processor",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )

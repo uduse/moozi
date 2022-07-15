@@ -219,12 +219,30 @@ class NNModel:
         # NOTE: is static_argnum really should be used?
         return NNModel(
             init_params_and_state=self.init_params_and_state,
-            root_inference=jax.jit(self.root_inference),
-            trans_inference=jax.jit(self.trans_inference),
-            projection_inference=jax.jit(self.projection_inference),
-            root_inference_unbatched=jax.jit(self.root_inference_unbatched),
-            trans_inference_unbatched=jax.jit(self.trans_inference_unbatched),
-            projection_inference_unbatched=jax.jit(self.projection_inference_unbatched),
+            root_inference=jax.jit(
+                self.root_inference,
+                static_argnums=3,
+            ),
+            trans_inference=jax.jit(
+                self.trans_inference,
+                static_argnums=3,
+            ),
+            projection_inference=jax.jit(
+                self.projection_inference,
+                static_argnums=3,
+            ),
+            root_inference_unbatched=jax.jit(
+                self.root_inference_unbatched,
+                static_argnums=3,
+            ),
+            trans_inference_unbatched=jax.jit(
+                self.trans_inference_unbatched,
+                static_argnums=3,
+            ),
+            projection_inference_unbatched=jax.jit(
+                self.projection_inference_unbatched,
+                static_argnums=3,
+            ),
             hk_transformed=self.hk_transformed,
         )
 
@@ -240,13 +258,12 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
     def multi_transform_target():
         module = arch()
 
-        def module_walk(root_feats, trans_feats):
-            root_out = module.root_inference(root_feats, is_training=True)
-            # root_out = module.root_inference(root_feats, is_training=False)
-            trans_out = module.trans_inference(trans_feats, is_training=True)
-            # trans_out = module.trans_inference(trans_feats, is_training=False)
-            project_out = module._proj_net(trans_feats.hidden_state, is_training=True)
-            # project_out = module._proj_net(trans_feats.hidden_state, is_training=False)
+        def module_walk(root_feats, trans_feats, is_training):
+            root_out = module.root_inference(root_feats, is_training=is_training)
+            trans_out = module.trans_inference(trans_feats, is_training=is_training)
+            project_out = module._proj_net(
+                trans_feats.hidden_state, is_training=is_training
+            )
             return (trans_out, root_out, project_out)
 
         return module_walk, (
@@ -257,20 +274,33 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
 
     hk_transformed = hk.multi_transform_with_state(multi_transform_target)
 
-    def init_params_and_state(rng):
+    def init_params_and_state(random_key):
         batch = 1
         obs_shape = (batch, spec.obs_rows, spec.obs_cols, spec.obs_channels)
+
         root_feats = RootFeatures(
-            obs=jnp.zeros(obs_shape),
+            obs=jax.random.normal(random_key, shape=obs_shape),
             player=jnp.zeros((batch,)),
         )
+
         hidden_state_shape = (batch, spec.repr_rows, spec.repr_cols, spec.repr_channels)
         trans_feats = TransitionFeatures(
-            hidden_state=jnp.zeros(hidden_state_shape),
+            hidden_state=jax.random.normal(random_key, hidden_state_shape),
             action=jnp.zeros((batch,)),
         )
-
-        return hk_transformed.init(rng, root_feats, trans_feats)
+        params, state = hk_transformed.init(
+            random_key, root_feats, trans_feats, is_training=True
+        )
+        
+        # initialize with a random normal distribution to workaround
+        # https://github.com/deepmind/dm-haiku/issues/361
+        nn_out, state = hk_transformed.apply[0](
+            params, state, random_key, root_feats, is_training=True
+        )
+        _, state = hk_transformed.apply[1](
+            params, state, random_key, trans_feats, is_training=True
+        )
+        return params, state
 
     # workaround for https://github.com/deepmind/dm-haiku/issues/325#event-6253407164
     # TODO: follow up update for the issue and make changes accordingly

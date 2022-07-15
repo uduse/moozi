@@ -17,7 +17,7 @@
         // "--cov=.",
         // "--cov-report=xml",
         // "--cov-report=html",
-        "-s",  // capture std output
+        "-s", // capture std output
         "--ignore=local_deps",
         "tests",
     ],
@@ -27,5 +27,5 @@
     "python.testing.pytestEnabled": true,
     "python.linting.mypyEnabled": true,
     "cSpell.enabled": false,
-    "restructuredtext.syntaxHighlighting.disabled": true
+    "restructuredtext.syntaxHighlighting.disabled": true,
 }

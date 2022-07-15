@@ -32,8 +32,8 @@ class ReplayEntry:
 
 @dataclass(repr=False)
 class ReplayBuffer:
-    max_size: int = 1_000_000
-    min_size: int = 1_000
+    max_trajs_size: int = 1_000_000
+    max_targets_size: int = 1_000_000
     sampling_strategy: str = "uniform"
     use_remote: bool = False
 
@@ -51,8 +51,8 @@ class ReplayBuffer:
     _episode_return: Deque[float] = field(init=False)
 
     def __post_init__(self):
-        self._trajs = collections.deque(maxlen=self.max_size)
-        self._train_targets = collections.deque(maxlen=self.max_size)
+        self._trajs = collections.deque(maxlen=self.max_trajs_size)
+        self._train_targets = collections.deque(maxlen=self.max_targets_size)
         self._value_diffs = collections.deque(maxlen=256)
         self._episode_return = collections.deque(maxlen=256)
         logger.remove()
@@ -88,8 +88,8 @@ class ReplayBuffer:
             self._episode_return.append(np.sum(traj.last_reward))
 
     def get_train_targets_batch(self, batch_size: int) -> TrainTarget:
-        if self.get_targets_size() < self.min_size:
-            raise ValueError("Not enough samples in replay buffer.")
+        # if self.get_targets_size() < self.min_size:
+        #     raise ValueError("Not enough samples in replay buffer.")
         if len(self._train_targets) == 0:
             logger.error(f"No train targets available")
             raise ValueError("No train targets available")

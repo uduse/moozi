@@ -24,7 +24,9 @@ ps = ray.remote(num_gpus=config.param_opt.num_gpus)(ParameterServer).remote(
 )
 rb = ray.remote(ReplayBuffer).remote(**config.replay)
 
-config.train.num_epochs = 30
+# %%
+path = "/home/zeyi/moozi/examples/minatar_space_invaders/replay/1288974.pkl"
+rb.restore.remote(path)
 
 # %%
 train_workers = [
@@ -37,11 +39,12 @@ train_workers = [
 # %%
 jb_logger = JAXBoardLoggerRemote.remote()
 terminal_logger = TerminalLoggerRemote.remote()
-start_training = False
 for w in train_workers:
     w.set.remote("params", ps.get_params.remote())
     w.set.remote("state", ps.get_state.remote())
 
+# %%
+config.train.num_epochs = 30
 for epoch in range(1, config.train.num_epochs + 1):
     logger.info(f"Epoch {epoch}")
 
@@ -49,16 +52,19 @@ for epoch in range(1, config.train.num_epochs + 1):
         sample = w.run.remote()
         rb.add_trajs.remote(sample, from_env=True)
 
-# %%
-ray.get(rb.get_targets_size.remote())
+# %% 
+ray.get(rb.save.remote())
 
 # %%
-for _ in range(600):
+for _ in range(500):
     ps.update.remote(
         rb.get_train_targets_batch.remote(config.train.batch_size),
         config.train.batch_size,
     )
+    ps.log_tensorboard.remote()
+ray.get(ps.save.remote())
 
+# %% 
 # local version
 # for _ in range(100):
 #     print(
@@ -69,6 +75,16 @@ for _ in range(600):
 #     )
 
 # %%
-ray.get(ps.save.remote())
+
+# %%
+config.debug = True
+local_train_worker = RolloutWorker(
+    partial(make_env_worker_universe, config), name=f"rollout_worker"
+)
+local_train_worker.set("params", ray.get(ps.get_params.remote()))
+local_train_worker.set("state", ray.get(ps.get_state.remote()))
+
+# %%
+local_train_worker.run()
 
 # %%

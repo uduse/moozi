@@ -101,14 +101,14 @@ print(config.replay.discount)
 #         workers = []
 #         model = self.param_opt.get_model.remote()
 #         params_and_state = self.param_opt.get_params_and_state.remote()
-#         for i in range(self.config.train.env_workers.num_workers):
+#         for i in range(self.config.env_workers.num_workers):
 #             worker_name = f"{RolloutWorkerWithWeights.__name__}_{i}"
 #             worker = (
 #                 ray.remote(RolloutWorkerWithWeights)
 #                 .options(
 #                     name=worker_name,
-#                     num_cpus=self.config.train.env_workers.num_cpus,
-#                     num_gpus=self.config.train.env_workers.num_gpus,
+#                     num_cpus=self.config.env_workers.num_cpus,
+#                     num_gpus=self.config.env_workers.num_gpus,
 #                 )
 #                 .remote(name=worker_name)
 #             )

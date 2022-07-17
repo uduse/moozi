@@ -14,12 +14,11 @@ class Universe:
     def run(self):
         while True:
             self.tick()
-            if self.tape["quit"]:
+            if self.tape["output"] is not None:
                 break
         return self.flush()
 
     def flush(self):
-        ret = self.tape["output_buffer"]
-        logger.debug(f"flushing {len(ret)} trajectories")
-        self.tape["output_buffer"] = tuple()
+        ret = self.tape["output"]
+        self.tape["output"] = None
         return ret

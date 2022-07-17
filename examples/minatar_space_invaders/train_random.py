@@ -30,10 +30,10 @@ rb.restore.remote(path)
 
 # %%
 train_workers = [
-    ray.remote(num_gpus=config.train.env_worker.num_gpus)(RolloutWorker).remote(
+    ray.remote(num_gpus=config.env_worker.num_gpus)(RolloutWorker).remote(
         partial(make_env_worker_universe, config), name=f"rollout_worker_{i}"
     )
-    for i in range(config.train.env_worker.num_workers)
+    for i in range(config.env_worker.num_workers)
 ]
 
 # %%

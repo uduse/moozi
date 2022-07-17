@@ -21,7 +21,6 @@ def make_paritial_recurr_fn(model, state, discount):
         chex.assert_shape(nn_output.value, (None,))
         rnn_output = mctx.RecurrentFnOutput(
             reward=nn_output.reward,
-            # TODO: set discount here
             discount=jnp.full_like(nn_output.reward, fill_value=discount),
             prior_logits=nn_output.policy_logits,
             value=nn_output.value,
@@ -36,12 +35,12 @@ def make_planner(
     dim_action: int,
     model: NNModel,
     discount: float = 1.0,
+    num_unroll_steps: int = 5,
     num_simulations: int = 10,
-    dirichlet_fraction: float = 0.25,
-    dirichlet_alpha: float = 0.3,
-    temperature: float = 1.0,
     output_action: bool = True,
     output_tree: bool = False,
+    policy_type: str = "mcts",
+    kwargs: dict = {},
 ) -> Law:
     def malloc():
         return {
@@ -63,9 +62,8 @@ def make_planner(
     ):
         is_training = False
         batch_size = obs.shape[0]
-        random_key, new_key = jax.random.split(random_key, 2)
         root_feats = RootFeatures(
-            obs=obs, player=np.zeros((batch_size,), dtype=np.int32)
+            obs=obs, player=np.zeros((batch_size,), dtype=jnp.int32)
         )
         nn_output, _ = model.root_inference(params, state, root_feats, is_training)
         root = mctx.RootFnOutput(
@@ -73,23 +71,39 @@ def make_planner(
             value=nn_output.value,
             embedding=nn_output.hidden_state,
         )
-        # using numpy because it's constant
+
+        # the planning of the last step will be overwritten by the target
+        # creating process so it's okay that we always mast the no-op action
         invalid_actions = np.zeros((batch_size, dim_action))
         invalid_actions[:, 0] = 1
-        policy_output = mctx.muzero_policy(
-            params=params,
-            rng_key=new_key,
-            root=root,
-            recurrent_fn=make_paritial_recurr_fn(model, state, discount),
-            num_simulations=num_simulations,
-            # TODO: max_depth should be the same as num_unroll_steps?
-            max_depth=5,
-            qtransform=mctx.qtransform_completed_by_mix_value,
-            invalid_actions=invalid_actions,
-            dirichlet_fraction=dirichlet_fraction,
-            dirichlet_alpha=dirichlet_alpha,
-            temperature=temperature,
-        )
+        random_key, search_key = jax.random.split(random_key, 2)
+
+        if policy_type == "mcts":
+            policy_output = mctx.muzero_policy(
+                params=params,
+                rng_key=search_key,
+                root=root,
+                recurrent_fn=make_paritial_recurr_fn(model, state, discount),
+                num_simulations=num_simulations,
+                max_depth=num_unroll_steps,
+                invalid_actions=invalid_actions,
+                **kwargs,
+            )
+
+        elif policy_type == "gumbel":
+            policy_output = mctx.gumbel_muzero_policy(
+                params=params,
+                rng_key=search_key,
+                root=root,
+                recurrent_fn=make_paritial_recurr_fn(model, state, discount),
+                num_simulations=num_simulations,
+                invalid_actions=invalid_actions,
+                max_depth=num_unroll_steps,
+                **kwargs,
+            )
+        else:
+            # TODO: add prior policy
+            raise ValueError
         stats = policy_output.search_tree.summary()
         ret = {
             "prior_probs": jax.nn.softmax(nn_output.policy_logits),
@@ -112,130 +126,6 @@ def make_planner(
         apply=link(apply),
         read=get_keys(apply),
     )
-
-
-def make_gumbel_planner(
-    batch_size: int,
-    dim_action: int,
-    model: NNModel,
-    discount: float = 1.0,
-    num_simulations: int = 10,
-    temperature: float = 1.0,
-    output_action: bool = True,
-    output_tree: bool = False,
-    gumbel_scale: float = 1.0,
-) -> Law:
-    def malloc():
-        return {
-            "root_value": jnp.zeros(batch_size, dtype=jnp.float32),
-            "action": jnp.full(batch_size, fill_value=0, dtype=jnp.int32),
-            "action_probs": jnp.full(
-                (batch_size, dim_action), fill_value=0, dtype=jnp.float32
-            ),
-            "q_values": jnp.full(
-                (batch_size, dim_action), fill_value=0, dtype=jnp.float32
-            ),
-        }
-
-    def apply(
-        params: hk.Params,
-        state: hk.State,
-        obs,
-        random_key,
-    ):
-        is_training = False
-        batch_size = obs.shape[0]
-        random_key, new_key = jax.random.split(random_key, 2)
-        root_feats = RootFeatures(
-            obs=obs, player=np.zeros((batch_size,), dtype=np.int32)
-        )
-        nn_output, _ = model.root_inference(params, state, root_feats, is_training)
-        root = mctx.RootFnOutput(
-            prior_logits=nn_output.policy_logits,
-            value=nn_output.value,
-            embedding=nn_output.hidden_state,
-        )
-        # using numpy because it's constant
-        invalid_actions = np.zeros((batch_size, dim_action))
-        invalid_actions[:, 0] = 1
-        policy_output = mctx.gumbel_muzero_policy(
-            params=params,
-            rng_key=new_key,
-            root=root,
-            recurrent_fn=make_paritial_recurr_fn(model, state, discount),
-            num_simulations=num_simulations,
-            invalid_actions=invalid_actions,
-            # TODO: max_depth should be the same as num_unroll_steps?
-            max_depth=5,
-            # temperature=temperature,
-            gumbel_scale=gumbel_scale,
-        )
-        stats = policy_output.search_tree.summary()
-        ret = {
-            "prior_probs": jax.nn.softmax(nn_output.policy_logits),
-            "visit_counts": stats.visit_counts,
-            "action_probs": policy_output.action_weights,
-            "q_values": stats.qvalues,
-            "root_value": stats.value,
-            "random_key": random_key,
-        }
-        if output_action:
-            # doesn't output action to reanalyze
-            ret["action"] = policy_output.action
-        if output_tree:
-            ret["tree"] = policy_output.search_tree
-        return ret
-
-    return Law(
-        name="planner",
-        malloc=malloc,
-        apply=link(apply),
-        read=get_keys(apply),
-    )
-
-
-# def make_random_planner(
-#     batch_size: int,
-#     dim_action: int,
-#     output_action: bool = True,
-# ) -> Law:
-#     def malloc():
-#         return {
-#             "root_value": jnp.zeros(batch_size, dtype=jnp.float32),
-#             "action": jnp.full(batch_size, fill_value=0, dtype=jnp.int32),
-#             "action_probs": jnp.full(
-#                 (batch_size, dim_action), fill_value=0, dtype=jnp.float32
-#             ),
-#             "q_values": jnp.full(
-#                 (batch_size, dim_action), fill_value=0, dtype=jnp.float32
-#             ),
-#         }
-
-#     def apply(
-#         random_key,
-#     ):
-#         random_key, new_key = jax.random.split(random_key, 2)
-#         action_probs = jax.random.uniform(new_key, shape=(10, dim_action - 1))
-#         # action = jnp.argmax(
-#         #     , axis=1
-#         # )
-#         action += 1
-#         ret = {
-#             "action_probs": policy_output.action_weights,
-#             "q_values": stats.qvalues,
-#             "root_value": stats.value,
-#             "random_key": random_key,
-#         }
-#         if output_action:
-#             ret["action"] = policy_output.action
-#         return ret
-
-#     return Law(
-#         name="planner",
-#         malloc=malloc,
-#         apply=link(apply),
-#         read=get_keys(apply),
-#     )
 
 
 def convert_tree_to_graph(
@@ -250,6 +140,9 @@ def convert_tree_to_graph(
       batch_index: Index of the batch element to plot.
     Returns:
       A Graphviz graph representation of `tree`.
+
+    Copy-pasted from mctx library examples.
+    https://github.com/deepmind/mctx/blob/main/examples/visualization_demo.py
     """
     chex.assert_rank(tree.node_values, 2)
     batch_size = tree.node_values.shape[0]

@@ -5,6 +5,7 @@ import jax
 from moozi.core.utils import (
     make_action_planes,
     make_frame_planes,
+    push_and_rotate_out,
     push_and_rotate_out_planes,
 )
 from moozi.core.scalar_transform import make_scalar_transform
@@ -47,3 +48,17 @@ def test_push_and_rotate_out_planes():
         new_planes,
         np.array([[[1, 2, 10], [4, 5, 11]]]),
     )
+
+
+def test_push_and_rotate_out():
+    old_actions = np.array([0, 1, 2, 3])
+    new_action = np.array(4)
+    expected_actions = np.array([1, 2, 3, 4])
+    np.testing.assert_equal(
+        push_and_rotate_out(old_actions, new_action), expected_actions
+    )
+
+    old_frames = np.array([0, 1, 2, 3]).reshape((4, 1, 1, 1))
+    new_frame = np.array(4).reshape((1, 1, 1))
+    expected_frames = np.array([1, 2, 3, 4]).reshape((4, 1, 1, 1))
+    np.testing.assert_equal(push_and_rotate_out(old_frames, new_frame), expected_frames)

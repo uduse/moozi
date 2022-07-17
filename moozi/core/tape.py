@@ -8,6 +8,7 @@ def make_tape(seed: int = 0):
     tape = {}
     tape["random_key"] = jax.random.PRNGKey(seed)
     tape["output_buffer"] = tuple()
+    tape["output"] = None
     return tape
 
 

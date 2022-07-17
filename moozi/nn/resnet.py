@@ -1,3 +1,4 @@
+from functools import partial
 import jax
 import jax.numpy as jnp
 import chex
@@ -11,6 +12,7 @@ from moozi.nn import (
     TransitionFeatures,
     NNArchitecture,
 )
+from moozi.core.utils import make_action_planes
 
 
 @dataclass
@@ -110,7 +112,7 @@ class ResNetArchitecture(NNArchitecture):
 
         x = obs
 
-        # Downsample
+        # downsample
         obs_resolution = (self.spec.obs_rows, self.spec.obs_cols)
         repr_resolution = (self.spec.repr_rows, self.spec.repr_cols)
         if obs_resolution != repr_resolution:
@@ -133,9 +135,6 @@ class ResNetArchitecture(NNArchitecture):
         )
 
         hidden_state = ConvBlock(self.spec.repr_channels)(hidden_state, is_training)
-        # hidden_state = hk.Conv2D(self.spec.repr_channels, (3, 3), padding="same")(
-        #     hidden_state
-        # )
         chex.assert_shape(
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
@@ -167,39 +166,50 @@ class ResNetArchitecture(NNArchitecture):
         )
 
         # value head
-        value_logits = hk.Linear(
-            output_size=self.spec.scalar_transform.dim,
+        v_head = hk.Linear(128)(pred_trunk_flat)
+        v_head = bn()(v_head, is_training)
+        v_head = jax.nn.relu(v_head)
+        v_head = hk.Linear(
+            self.spec.scalar_transform.dim,
             w_init=hk.initializers.Constant(0),
-        )(pred_trunk_flat)
-        chex.assert_shape(value_logits, (None, self.spec.scalar_transform.dim))
+            b_init=hk.initializers.Constant(0),
+        )(v_head)
+        chex.assert_shape(v_head, (None, self.spec.scalar_transform.dim))
 
         # policy head
-        policy_logits = hk.Linear(
-            output_size=self.spec.dim_action, w_init=hk.initializers.Constant(0)
-        )(pred_trunk_flat)
-        chex.assert_shape(policy_logits, (None, self.spec.dim_action))
+        p_head = hk.Linear(128)(pred_trunk_flat)
+        p_head = bn()(p_head, is_training)
+        p_head = jax.nn.relu(p_head)
+        p_head = hk.Linear(
+            self.spec.dim_action,
+            w_init=hk.initializers.Constant(0),
+            b_init=hk.initializers.Constant(0),
+        )(p_head)
+        chex.assert_shape(p_head, (None, self.spec.dim_action))
 
-        return value_logits, policy_logits
+        return v_head, p_head
 
     def _dyna_net(self, hidden_state, action, is_training):
         chex.assert_shape(
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
-
-        # make state-action representation
-        # TODO: check correctness action one-hot encoding here
         chex.assert_shape(action, [None])
-        action_one_hot = jax.nn.one_hot(action, num_classes=self.spec.dim_action)
-        # broadcast to self.spec.repr_rows and self.spec.repr_cols dim
-        action_one_hot = jnp.expand_dims(action_one_hot, axis=[1, 2])
-        action_one_hot = (
-            jnp.tile(action_one_hot, (1, self.spec.repr_rows, self.spec.repr_cols, 1))
-            / self.spec.dim_action
-        )
-        chex.assert_equal_shape_prefix([hidden_state, action_one_hot], prefix_len=3)
 
-        state_action_repr = jnp.concatenate((hidden_state, action_one_hot), axis=-1)
+        # [B] -> [B, 1] -> [B, H, W, A]
+        action_planes_maker = jax.vmap(
+            partial(
+                make_action_planes,
+                num_rows=self.spec.repr_rows,
+                num_cols=self.spec.repr_cols,
+                dim_action=self.spec.dim_action,
+            )
+        )
+        action_planes = action_planes_maker(action.reshape((-1, 1)))
+        chex.assert_equal_shape_prefix([hidden_state, action_planes], prefix_len=3)
+
+        state_action_repr = jnp.concatenate((hidden_state, action_planes), axis=-1)
+        # [B, H, W, A + C]
         chex.assert_shape(
             state_action_repr,
             (
@@ -228,46 +238,31 @@ class ResNetArchitecture(NNArchitecture):
         next_hidden_state = ConvBlock(self.spec.repr_channels)(
             next_hidden_state, is_training
         )
-        # next_hidden_state = hk.Conv2D(self.spec.repr_channels, (3, 3), padding="same")(
-        #     next_hidden_state
-        # )
         chex.assert_shape(
             next_hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
 
         # reward head
-        reward_logits = hk.Linear(
-            output_size=self.spec.scalar_transform.dim,
+        r_head = hk.Linear(128)(dyna_trunk_flat)
+        r_head = bn()(r_head, is_training)
+        r_head = jax.nn.relu(r_head)
+        r_head = hk.Linear(
+            self.spec.scalar_transform.dim,
             w_init=hk.initializers.Constant(0),
-        )(dyna_trunk_flat)
+            b_init=hk.initializers.Constant(0),
+        )(r_head)
+        chex.assert_shape(r_head, (None, self.spec.scalar_transform.dim))
 
-        chex.assert_shape(reward_logits, (None, self.spec.scalar_transform.dim))
-
-        # TODO: check correctness of scaling
         next_hidden_state = normalize_hidden_state(next_hidden_state)
-        return next_hidden_state, reward_logits
+        return next_hidden_state, r_head
 
     def _proj_net(self, hidden_state, is_training):
         chex.assert_shape(
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
-        hidden_state_flatten = hk.Flatten()(hidden_state)
-        x = hidden_state_flatten
-
-        x = hk.Linear(32)(x)
-        x = bn()(x, is_training=is_training)
-        # x = jax.nn.leaky_relu(x)
-
-        # x = hk.Linear(32)(x)
-        # x = hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)(
-        #     x, is_training=is_training
-        # )
-        x = jax.nn.leaky_relu(x)
-        x = hk.Linear(hidden_state_flatten.shape[-1])(x)
-
-        projected = x.reshape(hidden_state.shape)
+        projected = ResBlock()(hidden_state, is_training)
         return projected
 
 

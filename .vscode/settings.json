@@ -28,4 +28,7 @@
     "python.linting.mypyEnabled": true,
     "cSpell.enabled": false,
     "restructuredtext.syntaxHighlighting.disabled": true,
+    "todo-tree.tree.showBadges": true,
+    "todo-tree.tree.disableCompactFolders": false,
+    "todo-tree.tree.showCountsInTree": false,
 }

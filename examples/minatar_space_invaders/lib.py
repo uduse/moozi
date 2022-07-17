@@ -19,7 +19,7 @@ from moozi.laws import *
 from moozi.laws import MinAtarVisualizer
 from moozi.nn.nn import NNModel, make_model
 from moozi.nn.training import make_training_suite
-from moozi.planner import make_planner, make_gumbel_planner
+from moozi.planner import make_planner
 from moozi.universe import Universe
 from omegaconf import OmegaConf
 
@@ -46,7 +46,7 @@ model = make_model(nn_arch_cls, nn_spec)
 
 
 def make_env_worker_universe(config):
-    num_envs = config.train.env_worker.num_envs
+    num_envs = config.env_worker.num_envs
     vec_env = make_vec_env(config.env.name, num_envs)
     obs_processor = make_obs_processor(
         num_rows=config.env.num_rows,
@@ -55,19 +55,14 @@ def make_env_worker_universe(config):
         num_stacked_frames=config.num_stacked_frames,
         dim_action=config.dim_action,
     ).vmap(batch_size=num_envs)
-
-    if config.train.env_worker.planner_type == "gumbel":
-        planner = make_gumbel_planner(model=model, **config.train.env_worker.planner)
-    elif config.train.env_worker.planner_type == "muzero":
-        planner = make_planner(model=model, **config.train.env_worker.planner)
-    else:
-        raise NotImplementedError
-
+    planner = make_planner(
+        model=model,
+        batch_size=num_envs,
+        **config.env_worker.planner,
+    )
     if not config.debug:
         planner = planner.jit(max_trace=10)
-
     traj_writer = make_traj_writer(num_envs)
-    terminator = make_terminator(num_envs)
 
     final_law = sequential(
         [
@@ -76,7 +71,7 @@ def make_env_worker_universe(config):
             planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
             traj_writer,
-            terminator,
+            make_output_buffer_waiter(num_envs),
         ]
     )
     tape = make_tape(seed=config.seed)
@@ -93,19 +88,16 @@ def make_test_worker_universe(config):
         num_stacked_frames=config.num_stacked_frames,
         dim_action=config.dim_action,
     ).vmap(batch_size=1)
-
-    planner = make_planner(model=model, **config.train.test_worker.planner).jit(
+    planner = make_planner(model=model, **config.test_worker.planner).jit(
         backend="gpu", max_trace=10
     )
-
     final_law = sequential(
         [
             vec_env,
             obs_processor,
             planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="test_worker_gifs"),
-            make_traj_writer(1),
-            make_reward_terminator(1),
+            make_reward_terminator(30),
         ]
     )
     tape = make_tape(seed=config.seed)
@@ -114,26 +106,31 @@ def make_test_worker_universe(config):
 
 
 def make_reanalyze_universe(config):
-    env_mocker = make_env_mocker()
+    batch_size = config.reanalyze.num_envs
+    env_mocker = make_batch_env_mocker(batch_size)
     obs_processor = make_obs_processor(
         num_rows=config.env.num_rows,
         num_cols=config.env.num_cols,
         num_channels=config.env.num_channels,
         num_stacked_frames=config.num_stacked_frames,
         dim_action=config.dim_action,
-    ).vmap(batch_size=1)
-    planner = make_planner(model=model, **config.train.reanalyze_worker.planner).jit(
-        backend="cpu", max_trace=10
+    ).vmap(batch_size)
+    planner = make_planner(
+        model=model,
+        batch_size=batch_size,
+        **config.reanalyze.planner,
     )
-    terminalor = make_terminator(size=1)
+    if not config.debug:
+        obs_processor = obs_processor.jit(backend="gpu", max_trace=10)
+        planner = planner.jit(backend="gpu", max_trace=10)
     final_law = sequential(
         [
             env_mocker,
             obs_processor,
             planner,
             Law.wrap(lambda next_action: {"action": next_action}),
-            make_traj_writer(1),
-            terminalor,
+            make_traj_writer(batch_size),
+            make_output_buffer_waiter(batch_size),
         ]
     )
     tape = make_tape(seed=config.seed)

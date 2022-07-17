@@ -1,4 +1,6 @@
 # %%
+import jax
+import haiku as hk
 from acme.jax.utils import add_batch_dim
 from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from omegaconf import OmegaConf
@@ -14,7 +16,7 @@ from moozi.replay import ReplayBuffer
 from moozi.parameter_optimizer import ParameterServer
 from moozi.rollout_worker import RolloutWorker
 from moozi.laws import *
-from moozi.planner import convert_tree_to_graph, make_gumbel_planner
+from moozi.planner import convert_tree_to_graph
 from moozi.nn import RootFeatures, TransitionFeatures
 
 from lib import (
@@ -27,14 +29,15 @@ from lib import (
     scalar_transform,
 )
 
+
 # %%
 vec_env = make_vec_env("MinAtar:SpaceInvaders-v1", num_envs=1)
 
 # %%
 config = OmegaConf.load(Path(__file__).parent / "config.yml")
 # config.debug = True
-config.train.env_worker.num_workers = 1
-config.train.env_worker.num_envs = 1
+config.env_worker.num_workers = 1
+config.env_worker.num_envs = 1
 OmegaConf.resolve(config)
 print(OmegaConf.to_yaml(config, resolve=True))
 OmegaConf.resolve(config)
@@ -45,8 +48,8 @@ rb = ReplayBuffer(**config.replay)
 vis = MinAtarVisualizer()
 
 # %%
-weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/561ace079fe84e9a9dc39944138f05f3/checkpoints/5900.pkl"
-ps.restore(weights_path)
+# weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/561ace079fe84e9a9dc39944138f05f3/checkpoints/5900.pkl"
+# ps.restore(weights_path)
 
 # %%
 rollout_worker = RolloutWorker(
@@ -88,12 +91,6 @@ for i in range(30):
     graph.draw(f"/tmp/graph_{i}.dot", prog="dot")
 
 # %%
-obs_from_env = u.tape["obs"]
-
-# %%
-traj = u.tape["output_buffer"][0]
-
-# %%
 targets = [
     make_target_from_traj(
         traj,
@@ -116,77 +113,6 @@ obs_from_target = _make_obs_from_train_target(
     dim_action=config.dim_action,
 )
 
-# %% 
-for i in range(config.num_stacked_frames):
-    display(vis.make_image(y[..., i * 6 : (i + 1) * 6]))
-
-# %%
-g = convert_tree_to_graph(u.tape["tree"])
-g.draw(f"/tmp/graph.dot", prog="dot")
-
-# %%
-u.tape["obs"].dtype
-
-# %%
-nn_out, _ = model.root_inference(
-    u.tape["params"],
-    u.tape["state"],
-    RootFeatures(u.tape["obs"], np.array(0)),
-    False,
-)
-nn_out.value.item()
-
-# %%
-nn_out, _ = model.root_inference(
-    u.tape["params"],
-    u.tape["state"],
-    RootFeatures(u.tape["obs"], np.array(0)),
-    True,
-)
-scalar_transform.inverse_transform(jax.nn.softmax(nn_out.value)).item()
-
-# %%
-last_hidden = nn_out.hidden_state[0, ...]
-for action in [3]:
-    print(f"{action=}")
-    nn_out1, _ = model.trans_inference_unbatched(
-        u.tape["params"],
-        u.tape["state"],
-        TransitionFeatures(last_hidden, np.array(action)),
-        is_training=True,
-    )
-    value_probs = jax.nn.softmax(nn_out1.value)
-    value = scalar_transform.inverse_transform(
-        value_probs.reshape((1, *value_probs.shape))
-    )
-    reward_probs = jax.nn.softmax(nn_out1.reward)
-    reward = scalar_transform.inverse_transform(
-        reward_probs.reshape((1, *reward_probs.shape))
-    )
-    print(f"{value_probs.tolist()=}")
-    print(f"{value.tolist()=}")
-    print(f"{reward_probs.tolist()=}")
-    print(f"{reward.tolist()=}")
-    print()
-
-    nn_out2, _ = model.trans_inference_unbatched(
-        u.tape["params"],
-        u.tape["state"],
-        TransitionFeatures(last_hidden, np.array(action)),
-        is_training=False,
-    )
-    print(f"{nn_out2.value.tolist()=}")
-    print(f"{nn_out2.reward.tolist()=}")
-    print("\n")
-
-# %%
-tree.map_structure(lambda x: jnp.max(x).item(), u.tape["state"])
-# %%
-nn_out2.value
-
-# %%
-vis.make_image(u.tape["frame"][20, ...])
-
 # %%
 rb.restore("/home/zeyi/moozi/examples/minatar_space_invaders/replay/415116.pkl")
 rb.get_stats()
@@ -195,32 +121,16 @@ targets = rb.get_train_targets_batch(10)
 targets = unstack_sequence_fields(targets, 10)
 
 # %%
-# planner = make_gumbel_planner(model=model, **config.train.env_worker.planner)
-
-# # %%
-# tape = vec_env.malloc()
-# # %%
-# frame_stacker = make_batch_stacker_v2(
-#     1,
-#     config.env.num_rows,
-#     config.env.num_cols,
-#     config.env.num_channels,
-#     config.num_stacked_frames,
-#     config.dim_action,
-# )
-
-
-# # %%
-# frame_stacker.apply(tape)
-
-# # %%
-# planner.apply({'obs'})
-
-# %%
+# generate traj
 trajs = []
 for i in range(1):
     trajs.extend(rollout_worker.run())
 rb.add_trajs(trajs)
+traj = trajs[0]
+
+# %%
+rea
+
 
 # %%
 for _ in range(1):
@@ -348,5 +258,53 @@ display(image)
 # graph.draw(f"/tmp/graph_{i}.dot", prog="dot")
 
 # %%
+# nn_out, _ = model.root_inference(
+#     u.tape["params"],
+#     u.tape["state"],
+#     RootFeatures(u.tape["obs"], np.array(0)),
+#     False,
+# )
+# nn_out.value.item()
 
-model
+# %%
+# nn_out, _ = model.root_inference(
+#     u.tape["params"],
+#     u.tape["state"],
+#     RootFeatures(u.tape["obs"], np.array(0)),
+#     True,
+# )
+# scalar_transform.inverse_transform(jax.nn.softmax(nn_out.value)).item()
+
+# # %%
+# last_hidden = nn_out.hidden_state[0, ...]
+# for action in [3]:
+#     print(f"{action=}")
+#     nn_out1, _ = model.trans_inference_unbatched(
+#         u.tape["params"],
+#         u.tape["state"],
+#         TransitionFeatures(last_hidden, np.array(action)),
+#         is_training=True,
+#     )
+#     value_probs = jax.nn.softmax(nn_out1.value)
+#     value = scalar_transform.inverse_transform(
+#         value_probs.reshape((1, *value_probs.shape))
+#     )
+#     reward_probs = jax.nn.softmax(nn_out1.reward)
+#     reward = scalar_transform.inverse_transform(
+#         reward_probs.reshape((1, *reward_probs.shape))
+#     )
+#     print(f"{value_probs.tolist()=}")
+#     print(f"{value.tolist()=}")
+#     print(f"{reward_probs.tolist()=}")
+#     print(f"{reward.tolist()=}")
+#     print()
+
+# nn_out2, _ = model.trans_inference_unbatched(
+#     u.tape["params"],
+#     u.tape["state"],
+#     TransitionFeatures(last_hidden, np.array(action)),
+#     is_training=False,
+# )
+# print(f"{nn_out2.value.tolist()=}")
+# print(f"{nn_out2.reward.tolist()=}")
+# print("\n")

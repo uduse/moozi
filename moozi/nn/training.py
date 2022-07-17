@@ -184,7 +184,7 @@ class MuZeroLossWithScalarTransform(LossFn):
                 info["hidden_state"] = hidden_state
             trans_feats = TransitionFeatures(
                 hidden_state=hidden_state,
-                action=batch.action.take(i + self.num_stacked_frames - 1, axis=1),
+                action=batch.action.take(i + self.num_stacked_frames, axis=1),
             )
             network_output, state = model.trans_inference(
                 params, state, trans_feats, is_training
@@ -232,26 +232,24 @@ class MuZeroLossWithScalarTransform(LossFn):
                 * transition_loss_scale
             )
 
-            # consistency loss
-            next_obs = _make_obs_from_train_target(
-                batch,
-                step=i + 1,
-                num_stacked_frames=self.num_stacked_frames,
-                num_unroll_steps=self.num_unroll_steps,
-                dim_action=self.dim_action,
-            )
-            next_feats = RootFeatures(obs=next_obs, player=jnp.zeros((batch_size,)))
-
-            # skipping batch norm update because it's not used like this in the planning
-            # aka, not resetting "state"
-            next_network_output, _ = model.root_inference(
-                params, state, next_feats, is_training
-            )
-
             if self.consistency_loss_coef > 0.0:
+                # consistency loss
+                next_obs = _make_obs_from_train_target(
+                    batch,
+                    step=i + 1,
+                    num_stacked_frames=self.num_stacked_frames,
+                    num_unroll_steps=self.num_unroll_steps,
+                    dim_action=self.dim_action,
+                )
+                next_feats = RootFeatures(obs=next_obs, player=jnp.zeros((batch_size,)))
+
+                next_network_output, state = model.root_inference(
+                    params, state, next_feats, is_training
+                )
                 next_hidden_state = jax.lax.stop_gradient(
                     next_network_output.hidden_state
                 )
+
                 curr_projection, state = model.projection_inference(
                     params, state, network_output.hidden_state, is_training
                 )
@@ -386,6 +384,10 @@ def make_sgd_step_fn(
             )
             step_data["prior_kl"] = prior_kl
 
+        step_data["update_size"] = sum(jnp.sum(p) for p in jax.tree_leaves(updates))
+
+        # return 0.5 * sum(jnp.sum(jnp.square(p)) for p in jax.tree_leaves(params))
+
         return new_training_state, step_data
 
     return sgd_step_fn
@@ -413,9 +415,16 @@ def make_training_suite(
         dim_action=nn_spec.dim_action,
         consistency_loss_coef=1.0,
     )
+    # schedule = optax.warmup_cosine_decay_schedule(
+    #     init_value=lr / 10,
+    #     peak_value=lr,
+    #     warmup_steps=2 * 1024,
+    #     decay_steps=32 * 1024,
+    #     end_value=lr / 10,
+    # )
     optimizer = optax.chain(
         optax.clip_by_global_norm(1),
-        optax.adam(lr),
+        optax.adam(learning_rate=lr),
     )
     training_state = TrainingState(
         params=params,

@@ -4,7 +4,7 @@ import inspect
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional, Set, Union
+from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple, Union
 
 import dm_env
 import jax
@@ -23,11 +23,12 @@ from moozi.core.utils import (
     make_frame_planes,
     make_action_planes,
     push_and_rotate_out_planes,
+    push_and_rotate_out,
 )
 from moozi.core.env import make_env
 from moozi.core.link import link, unlink
 from moozi.core.tape import include
-from moozi.core.types import TrainTarget
+from moozi.core.types import TrainTarget, TrajectorySample
 
 
 # TODO: make __call__ not a method but a static method or a function
@@ -48,13 +49,6 @@ def update_episode_stats(
         logging.debug({**dict(universe_id=universe_id), **result})
 
         return result
-
-
-@link
-def output_last_step_reward(is_last, reward, output_buffer):
-    if is_last:
-        output_buffer = output_buffer + (reward,)
-        return dict(output_buffer=output_buffer)
 
 
 @link
@@ -536,19 +530,17 @@ def make_traj_writer(
     )
 
 
-def make_terminator(size: int):
-    def malloc():
-        return {"quit": False}
-
+def make_output_buffer_waiter(size: int):
     def apply(output_buffer):
         if len(output_buffer) >= size:
-            return {"quit": True}
-        else:
-            return {"quit": False}
+            return {
+                "output": output_buffer[:size],
+                "output_buffer": output_buffer[size:],
+            }
 
     return Law(
-        name=f"terminator({size=})",
-        malloc=malloc,
+        name=f"buffer_waiter({size=})",
+        malloc=lambda: {},
         apply=link(apply),
         read=get_keys(apply),
     )
@@ -557,7 +549,6 @@ def make_terminator(size: int):
 def make_reward_terminator(size: int):
     def malloc():
         return {
-            "quit": False,
             "reward_records": tuple(),
             "reward_traj_count": 0,
         }
@@ -580,14 +571,12 @@ def make_reward_terminator(size: int):
                 "avr_reward_per_step": sum(reward_records) / len(reward_records),
             }
             return {
-                "quit": True,
+                "output": stats,
                 "reward_records": tuple(),
                 "reward_traj_count": 0,
-                "output_buffer": (stats,),
             }
         else:
             return {
-                "quit": False,
                 "reward_records": reward_records,
                 "reward_traj_count": reward_traj_count,
             }
@@ -684,41 +673,41 @@ def make_env_mocker():
     )
 
 
-def make_env_mocker_v2(num_envs):
-    def malloc():
-        return {
-            "queued_trajs": tuple(),
-            "running_trajs": {i: None for i in range(num_envs)},
-            "curr_traj_index": {i: 0 for i in range(num_envs)},
-        }
+# def make_env_mocker_v2(num_envs):
+#     def malloc():
+#         return {
+#             "queued_trajs": tuple(),
+#             "running_trajs": {i: None for i in range(num_envs)},
+#             "curr_traj_index": {i: 0 for i in range(num_envs)},
+#         }
 
-    def apply(queued_trajs, running_trajs, curr_traj_index):
-        # refill envs
-        # for key in running_trajs:
-        #     if running_trajs[key] is None and 
-                
-        chex.assert_rank(traj.frame, 4)
-        ret = {
-            "curr_traj_index": curr_traj_index + 1,
-            "frame": traj.frame[curr_traj_index],
-            "action": traj.action[curr_traj_index],
-            "reward": traj.last_reward[curr_traj_index],
-            "legal_actions_mask": traj.legal_actions_mask[curr_traj_index],
-            "to_play": traj.to_play[curr_traj_index],
-            "is_first": traj.is_first[curr_traj_index],
-            "is_last": traj.is_last[curr_traj_index],
-        }
-        if traj.is_last[curr_traj_index]:
-            ret["curr_traj_index"] = 0
-            ret["traj"] = False
-        return ret
+#     def apply(queued_trajs, running_trajs, curr_traj_index):
+#         # refill envs
+#         # for key in running_trajs:
+#         #     if running_trajs[key] is None and
 
-    return Law(
-        name="env_mocker",
-        malloc=malloc,
-        apply=link(apply),
-        read=get_keys(apply),
-    )
+#         chex.assert_rank(traj.frame, 4)
+#         ret = {
+#             "curr_traj_index": curr_traj_index + 1,
+#             "frame": traj.frame[curr_traj_index],
+#             "action": traj.action[curr_traj_index],
+#             "reward": traj.last_reward[curr_traj_index],
+#             "legal_actions_mask": traj.legal_actions_mask[curr_traj_index],
+#             "to_play": traj.to_play[curr_traj_index],
+#             "is_first": traj.is_first[curr_traj_index],
+#             "is_last": traj.is_last[curr_traj_index],
+#         }
+#         if traj.is_last[curr_traj_index]:
+#             ret["curr_traj_index"] = 0
+#             ret["traj"] = False
+#         return ret
+
+#     return Law(
+#         name="env_mocker",
+#         malloc=malloc,
+#         apply=link(apply),
+#         read=get_keys(apply),
+#     )
 
 
 def make_last_step_penalizer(penalty: float = 10.0):
@@ -869,22 +858,6 @@ class MinAtarVisualizer:
         return images
 
 
-# stacked_actions = jnp.zeros(
-#     (num_rows, num_cols, num_stacked_frames * dim_action),
-#     dtype=jnp.float32,
-# )
-# stacked_actions = stacked_actions.at[:, :, 0].set(1)
-# stacked_actions = stacked_actions / dim_action
-
-# return {
-#     "stacked_frames": jnp.zeros(
-#         (num_rows, num_cols, num_stacked_frames * num_channels),
-#         dtype=jnp.float32,
-#     ),
-#     "stacked_actions": stacked_actions,
-# }
-
-
 def make_obs_processor(
     num_rows: int,
     num_cols: int,
@@ -908,21 +881,21 @@ def make_obs_processor(
 
     def apply(history_frames, history_actions, frame, action, is_first):
         def _make_obs(history_frames, history_actions, frame, action):
-            stacked_frame_planes = push_and_rotate_out_planes(
-                make_frame_planes(history_frames),
-                make_frame_planes(frame.reshape((1, *frame.shape))),
-            )
-
-            stacked_action_planes = push_and_rotate_out_planes(
-                make_action_planes(history_actions, num_rows, num_cols, dim_action),
-                make_action_planes(
-                    action.reshape((1,)), num_rows, num_cols, dim_action
-                ),
+            history_frames = push_and_rotate_out(history_frames, frame)
+            history_actions = push_and_rotate_out(history_actions, action)
+            stacked_frame_planes = make_frame_planes(history_frames)
+            stacked_action_planes = make_action_planes(
+                history_actions, num_rows, num_cols, dim_action
             )
             obs = jnp.concatenate(
-                [stacked_frame_planes, stacked_action_planes], axis=-1
+                [stacked_frame_planes, stacked_action_planes],
+                axis=-1,
             )
-            return {"obs": obs}
+            return {
+                "obs": obs,
+                "history_frames": history_frames,
+                "history_actions": history_actions,
+            }
 
         def _reset_then_make_obs(history_frames, history_actions, frame, action):
             ret = malloc()
@@ -944,3 +917,128 @@ def make_obs_processor(
         apply=link(apply),
         read=get_keys(apply),
     )
+
+
+def make_batch_env_mocker(batch_size):
+    def malloc():
+        return {"dispatcher": TrajectoryDispatcher(batch_size), "trajs": tuple()}
+
+    def apply(
+        dispatcher: TrajectoryDispatcher,
+        trajs: Tuple[TrajectorySample, ...],
+    ):
+        dispatcher.add_trajs(list(trajs))
+        dispatcher.refill()
+        assert dispatcher.get_safe_buffer_refill_count() <= batch_size
+        ret = dispatcher.step()
+        return {"dispatcher": dispatcher, "trajs": tuple(), **ret}
+
+    return Law(
+        name="batch_env_mocker",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )
+
+
+class TrajectoryDispatcher:
+    def __init__(self, batch_size) -> None:
+        self._buffer: List[TrajectorySample] = []
+        self._mockers: Dict[int, Optional["TrajectoryMocker"]] = {
+            i: None for i in range(batch_size)
+        }
+
+    def add_trajs(self, trajs: List[TrajectorySample]) -> None:
+        if trajs:
+            self._buffer.extend(trajs)
+            logger.debug(f"{len(trajs)} trajectories moved to buffer")
+
+    def step(self) -> dict:
+        steps = []
+        for i, mocker in self._mockers.items():
+            assert mocker is not None
+            steps.append(mocker.step())
+            if mocker.is_done:
+                self._mockers[i] = None
+
+        return stack_sequence_fields(steps)
+
+    def refill(self) -> None:
+        to_refill = self._get_to_refill_ids()
+
+        if len(to_refill) > len(self._buffer):
+            raise ValueError
+
+        for i in to_refill:
+            self._mockers[i] = TrajectoryMocker(self._buffer.pop())
+
+        logger.debug(f"{len(to_refill)} trajectories refilled")
+
+    def get_safe_buffer_refill_count(self) -> int:
+        safe_buffer_size = len(self._mockers)
+        curr_buffer_size = len(self._buffer)
+        num_empty = len(self._get_to_refill_ids())
+        return max(safe_buffer_size - curr_buffer_size + num_empty, 0)
+
+    def _get_to_refill_ids(self) -> List[int]:
+        to_refill = []
+        for i, m in self._mockers.items():
+            if m is None:
+                to_refill.append(i)
+        return to_refill
+
+
+def make_step_counter():
+    def malloc():
+        return {"step_count": 0}
+
+    def apply(step_count):
+        return {"step_count": step_count + 1}
+
+    return Law(
+        name="step_counter",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )
+
+
+@dataclass
+class TrajectoryMocker:
+    traj: TrajectorySample
+    idx: int = 0
+
+    def __post_init__(self):
+        chex.assert_rank(self.traj.frame, 4)
+
+    def step(self) -> dict:
+        if self.idx == -1:
+            raise ValueError
+
+        curr_slice = self.get_curr_slice()
+
+        ret = {
+            "frame": curr_slice.frame,
+            "next_action": curr_slice.action,
+            "reward": curr_slice.last_reward,
+            "legal_actions_mask": curr_slice.legal_actions_mask,
+            "to_play": curr_slice.to_play,
+            "is_first": curr_slice.is_first,
+            "is_last": curr_slice.is_last,
+        }
+
+        if curr_slice.is_last:
+            is_actually_last_frame = self.idx == (self.traj.frame.shape[0] - 1)
+            assert is_actually_last_frame
+            self.idx = -1
+        else:
+            self.idx += 1
+
+        return ret
+
+    def get_curr_slice(self) -> StepSample:
+        return tree.map_structure(lambda x: x.take(self.idx, axis=0), self.traj)
+
+    @property
+    def is_done(self):
+        return self.idx == -1

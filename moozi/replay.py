@@ -5,7 +5,7 @@ import collections
 import random
 from dataclasses import dataclass, field
 import time
-from typing import Any, Deque, List, Optional, Sequence, TypeVar, Union
+from typing import Any, Deque, List, Optional, Sequence, Tuple, TypeVar, Union
 from queue import Queue, Empty
 
 import chex
@@ -44,6 +44,7 @@ class ReplayBuffer:
     decay: float = 0.9
     save_dir: str = "./replay/"
 
+    _num_env_frames_added: int = 0
     _num_targets_created: int = 0
     _trajs: Deque[ReplayEntry] = field(init=False)
     _train_targets: Deque[ReplayEntry] = field(init=False)
@@ -60,9 +61,12 @@ class ReplayBuffer:
         logger.info(f"Replay buffer created, {vars(self)}")
 
     def add_trajs(self, trajs: List[TrajectorySample], from_env: bool = True):
-        self._trajs.extend([ReplayEntry(traj) for traj in trajs])
+        if from_env:
+            self._trajs.extend([ReplayEntry(traj) for traj in trajs])
+            for traj in trajs:
+                self._num_env_frames_added += traj.frame.shape[0]
         self._process_trajs(trajs, from_env=from_env)
-        logger.debug(f"Added {len(trajs)} trajs to processing queue")
+        logger.debug(f"Added {len(trajs)} trajs to processing queue, {from_env=}")
         logger.debug(f"Size after adding samples: {self.get_trajs_size()}")
         return self.get_trajs_size()
 
@@ -109,14 +113,14 @@ class ReplayBuffer:
         logger.debug(f"Popping {len(train_targets)} train targets")
         return tree_utils.stack_sequence_fields(train_targets)
 
-    def get_trajs_batch(self, batch_size: int) -> TrajectorySample:
+    def get_trajs_batch(self, batch_size: int) -> Tuple[TrajectorySample, ...]:
         if len(self._trajs) == 0:
             logger.error(f"No trajs available")
             raise ValueError("No trajs available")
         entries = np.random.choice(self._trajs, size=batch_size)
         trajs = [entry.payload for entry in entries]
         logger.debug(f"Returning {len(trajs)} trajs")
-        return trajs
+        return tuple(trajs)
 
     def get_trajs_size(self):
         return len(self._trajs)
@@ -141,11 +145,14 @@ class ReplayBuffer:
         ret["reanalyze_ratio"] = sum(
             [(not item.from_env) for item in self._train_targets]
         ) / len(self._train_targets)
+        ret["num_env_frames_added"] = self._num_env_frames_added
         return ret
 
     def apply_decay(self):
         for target in self._train_targets:
             target.freshness *= self.decay
+        for traj in self._trajs:
+            traj.freshness *= self.decay
 
     def _sample_targets(self, batch_size: int) -> List[ReplayEntry]:
         if self.sampling_strategy == "uniform":

@@ -13,10 +13,7 @@ import trio
 logging.set_verbosity(logging.INFO)
 
 
-# TODO: rewrite everything in asyncio?
-# TODO: yes, we should rewrite everything in asyncio
-
-
+# TODO: deprecate the whole thing
 @dataclass
 class BatchingClient:
     client_id: int

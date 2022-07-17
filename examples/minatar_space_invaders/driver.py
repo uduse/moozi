@@ -25,29 +25,27 @@ rb = ray.remote(ReplayBuffer).remote(**config.replay)
 
 # %%
 train_workers = [
-    ray.remote(num_gpus=config.train.env_worker.num_gpus)(RolloutWorker).remote(
+    ray.remote(num_gpus=config.env_worker.num_gpus)(RolloutWorker).remote(
         partial(make_env_worker_universe, config), name=f"rollout_worker_{i}"
     )
-    for i in range(config.train.env_worker.num_workers)
+    for i in range(config.env_worker.num_workers)
 ]
 
 # %%
-test_worker = ray.remote(num_gpus=config.train.test_worker.num_gpus)(
-    RolloutWorker
-).remote(partial(make_test_worker_universe, config), name="test_worker")
+test_worker = ray.remote(num_gpus=config.test_worker.num_gpus)(RolloutWorker).remote(
+    partial(make_test_worker_universe, config), name="test_worker"
+)
 
 # %%
 reanalyze_workers = [
-    ray.remote(num_gpus=0, num_cpus=0)(RolloutWorker).remote(
-        partial(make_reanalyze_universe, config), name=f"reanalyze_worker_{i}"
-    )
-    for i in range(config.train.reanalyze_worker.num_workers)
+    ray.remote(num_gpus=config.reanalyze.num_gpus, num_cpus=config.reanalyze.num_cpus)(
+        RolloutWorker
+    ).remote(partial(make_reanalyze_universe, config), name=f"reanalyze_worker_{i}")
+    for i in range(config.reanalyze.num_workers)
 ]
 
 
-@ray.remote(
-    num_gpus=0, num_cpus=0, num_returns=config.train.reanalyze_worker.num_workers
-)
+@ray.remote(num_gpus=0, num_cpus=0, num_returns=config.reanalyze.num_workers)
 def dispatch_trajs(trajs: list):
     return trajs
 
@@ -56,12 +54,13 @@ def dispatch_trajs(trajs: list):
 jb_logger = JAXBoardLoggerRemote.remote()
 terminal_logger = TerminalLoggerRemote.remote()
 start_training = False
-train_targets = []
+reanalyze_refilled_once = False
+train_targets: list = []
 for w in train_workers + reanalyze_workers:
     w.set.remote("params", ps.get_params.remote())
     w.set.remote("state", ps.get_state.remote())
 for epoch in range(1, config.train.num_epochs + 1):
-    logger.info(f"Epoch {epoch}")
+    logger.info(f"epoch {epoch}")
 
     # sync replay buffer and parameter server
     num_targets_created = ray.get(rb.get_num_targets_created.remote())
@@ -71,9 +70,9 @@ for epoch in range(1, config.train.num_epochs + 1):
     if not start_training:
         start_training = num_targets_created >= config.train.min_targets_to_train
         if start_training:
-            logger.info(f"Start training ...")
+            logger.info(f"start training ...")
 
-    if epoch % 10 == 0:
+    if (epoch % config.train.update_period) == 0:
         for w in train_workers + reanalyze_workers:
             w.set.remote("params", ps.get_params.remote())
             w.set.remote("state", ps.get_state.remote())
@@ -85,14 +84,18 @@ for epoch in range(1, config.train.num_epochs + 1):
         ps_update_result = ps.update.remote(batch, batch_size=config.train.batch_size)
         terminal_logger.write.remote(ps_update_result)
 
-    if start_training and config.train.reanalyze_worker.num_workers > 0:
-        traj_refs = dispatch_trajs.remote(
-            rb.get_trajs_batch.remote(config.train.reanalyze_worker.num_workers)
-        )
+    if start_training and config.reanalyze.num_workers > 0:
+        updated_trajs = []
         for i, re_w in enumerate(reanalyze_workers):
-            re_w.set.remote("traj", traj_refs[0])
-            updated_traj = re_w.run.remote()
-            rb.add_trajs.remote(updated_traj, from_env=False)
+            reanalyze_refill_size = config.reanalyze.num_envs
+            if not reanalyze_refilled_once:
+                reanalyze_refill_size *= 2
+            trajs = rb.get_trajs_batch.remote(reanalyze_refill_size)
+            re_w.set.remote("trajs", trajs)
+            updated_trajs.append(re_w.run.remote())
+        for trajs in updated_trajs:
+            rb.add_trajs.remote(trajs, from_env=False)
+        reanalyze_refilled_once = True
 
     # generate train targets
     train_targets.clear()
@@ -100,7 +103,7 @@ for epoch in range(1, config.train.num_epochs + 1):
         sample = w.run.remote()
         train_targets.append(rb.add_trajs.remote(sample, from_env=True))
 
-    if epoch % config.train.test_worker.interval == 0:
+    if epoch % config.test_worker.interval == 0:
         # launch test
         test_worker.set.remote("params", ps.get_params.remote())
         test_worker.set.remote("state", ps.get_state.remote())

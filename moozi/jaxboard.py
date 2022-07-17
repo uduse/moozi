@@ -46,7 +46,7 @@ def _pack_images(images, rows, cols):
     """Helper utility to make a tiled field of images from numpy arrays.
 
     Args:
-        images: Image tensor in shape [N, W, H, C].
+        images: Image tensor in shape [N, H, W, C]. 
         rows: Number of images per row in tiled image.
         cols: Number of images per column in tiled image.
 

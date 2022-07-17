@@ -24,6 +24,7 @@ class StepSample(NamedTuple):
     is_first: np.ndarray
     is_last: np.ndarray
     to_play: np.ndarray
+    # TODO: make legal_actions_mask actually useful
     legal_actions_mask: np.ndarray
 
     # root value after the search
@@ -49,6 +50,8 @@ class StepSample(NamedTuple):
 
 
 # Trajectory is a StepSample with stacked values
+# e.g., StepSample.frame shape is [H, W, C]
+# TrajectorySample.frame shape is [N, H, W, C]
 class TrajectorySample(StepSample):
     pass
 
@@ -82,7 +85,7 @@ class TrainTarget(NamedTuple):
 
     def cast(self) -> "TrainTarget":
         return TrainTarget(
-            frame=np.asarray(self.obs, dtype=np.float32),
+            frame=np.asarray(self.frame, dtype=np.float32),
             action=np.asarray(self.action, dtype=np.int32),
             n_step_return=np.asarray(self.n_step_return, dtype=np.float32),
             last_reward=np.asarray(self.last_reward, dtype=np.float32),

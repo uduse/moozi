@@ -546,6 +546,24 @@ def make_output_buffer_waiter(size: int):
     )
 
 
+def make_steps_waiter(steps: int):
+    def malloc():
+        return {"curr_steps": 0}
+
+    def apply(curr_steps, output_buffer):
+        if curr_steps >= steps:
+            return {"curr_steps": 0, "output": output_buffer}
+        else:
+            return {"curr_steps": curr_steps + 1}
+
+    return Law(
+        name="steps_waiter",
+        malloc=malloc,
+        apply=link(apply),
+        read=get_keys(apply),
+    )
+
+
 def make_reward_terminator(size: int):
     def malloc():
         return {

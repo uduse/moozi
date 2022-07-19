@@ -149,11 +149,13 @@ class ParameterServer:
         self._tb_logger = mz.logging.JAXBoardLoggerV2(
             name="param_server", time_delta=30
         )
-        self._last_step_data = []
+        self._last_step_data: List[LogDatum] = []
 
         jax.config.update("jax_debug_nans", True)
         logger.remove()
         logger.add(sys.stderr, level="SUCCESS")
+        logger.add(f"logs/ps.debug.log", level="DEBUG")
+        logger.add(f"logs/ps.info.log", level="INFO")
 
     def update(self, big_batch: TrainTarget, batch_size: int):
         if len(big_batch) == 0:

@@ -85,7 +85,7 @@ def make_planner(
                 root=root,
                 recurrent_fn=make_paritial_recurr_fn(model, state, discount),
                 num_simulations=num_simulations,
-                max_depth=num_unroll_steps,
+                # max_depth=num_unroll_steps,
                 invalid_actions=invalid_actions,
                 **kwargs,
             )
@@ -98,7 +98,7 @@ def make_planner(
                 recurrent_fn=make_paritial_recurr_fn(model, state, discount),
                 num_simulations=num_simulations,
                 invalid_actions=invalid_actions,
-                max_depth=num_unroll_steps,
+                # max_depth=num_unroll_steps,
                 **kwargs,
             )
         else:

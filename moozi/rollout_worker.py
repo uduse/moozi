@@ -14,8 +14,8 @@ class RolloutWorker:
         from loguru import logger
 
         logger.remove()
-        logger.add(f"logs/rollout_worker.{self.name}.debug.log", level="DEBUG")
-        logger.add(f"logs/rollout_worker.{self.name}.info.log", level="INFO")
+        logger.add(f"logs/rw.{self.name}.debug.log", level="DEBUG")
+        logger.add(f"logs/rw.{self.name}.info.log", level="INFO")
         logger.info(
             f"RolloutWorker created, name: {self.name}, universe include {self.universe.tape.keys()}"
         )

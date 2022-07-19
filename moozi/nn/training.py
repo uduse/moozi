@@ -126,6 +126,7 @@ class MuZeroLossWithScalarTransform(LossFn):
     dim_action: int
     weight_decay: float = 1e-4
     consistency_loss_coef: float = 1.0
+    value_loss_coef: float = 0.25
 
     def __call__(
         self,
@@ -153,14 +154,6 @@ class MuZeroLossWithScalarTransform(LossFn):
         losses = {}
         info = {}
 
-        # NOTE: do not predict last reward because dynamics function isn't used
-        # reward = batch.last_reward.take(0, axis=1)
-        # reward_transformed = self.scalar_transform.transform(reward)
-        # losses["loss/reward_0"] = vmap(rlax.categorical_cross_entropy)(
-        #     labels=reward_transformed,
-        #     logits=network_output.reward,
-        # )
-
         n_step_return = batch.n_step_return.take(0, axis=1)
         n_step_return_transformed = self.scalar_transform.transform(n_step_return)
         losses["loss/value_0"] = (
@@ -168,7 +161,7 @@ class MuZeroLossWithScalarTransform(LossFn):
                 labels=n_step_return_transformed,
                 logits=network_output.value,
             )
-            * 0.25
+            * self.value_loss_coef
         )
 
         losses["loss/action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
@@ -220,7 +213,7 @@ class MuZeroLossWithScalarTransform(LossFn):
                     logits=network_output.value,
                 )
                 * transition_loss_scale
-                * 0.25
+                * self.value_loss_coef
             )
 
             # action probs loss
@@ -273,10 +266,10 @@ class MuZeroLossWithScalarTransform(LossFn):
         )
 
         # apply importance sampling adjustment
-        losses = tree.map_structure(
-            lambda x: x * batch.importance_sampling_ratio, losses
-        )
-        info["importance_sampling_ratio"] = batch.importance_sampling_ratio
+        # losses = tree.map_structure(
+        #     lambda x: x * batch.importance_sampling_ratio, losses
+        # )
+        # info["importance_sampling_ratio"] = batch.importance_sampling_ratio
 
         # sum all losses
         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
@@ -345,9 +338,11 @@ def make_sgd_step_fn(
         new_params = optax.apply_updates(training_state.params, updates)
         new_steps = training_state.steps + 1
 
-        # TODO: put the target_update_period in the config and use it
         target_params = rlax.periodic_update(
-            new_params, training_state.target_params, new_steps, target_update_period
+            new_params,
+            training_state.target_params,
+            new_steps,
+            target_update_period,
         )
 
         new_training_state = TrainingState(
@@ -384,7 +379,9 @@ def make_sgd_step_fn(
             )
             step_data["prior_kl"] = prior_kl
 
-        step_data["update_size"] = sum(jnp.sum(p) for p in jax.tree_leaves(updates))
+        step_data["update_size"] = sum(
+            jnp.sum(jnp.abs(p)) for p in jax.tree_leaves(updates)
+        )
 
         # return 0.5 * sum(jnp.sum(jnp.square(p)) for p in jax.tree_leaves(params))
 
@@ -415,15 +412,8 @@ def make_training_suite(
         dim_action=nn_spec.dim_action,
         consistency_loss_coef=1.0,
     )
-    # schedule = optax.warmup_cosine_decay_schedule(
-    #     init_value=lr / 10,
-    #     peak_value=lr,
-    #     warmup_steps=2 * 1024,
-    #     decay_steps=32 * 1024,
-    #     end_value=lr / 10,
-    # )
     optimizer = optax.chain(
-        optax.clip_by_global_norm(1),
+        optax.clip_by_global_norm(5),
         optax.adam(learning_rate=lr),
     )
     training_state = TrainingState(

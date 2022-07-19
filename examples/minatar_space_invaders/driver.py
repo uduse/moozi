@@ -13,17 +13,18 @@ from lib import (
     make_test_worker_universe,
     make_reanalyze_universe,
     make_env_worker_universe,
-    config,
+    get_config
 )
 
 
 # %%
+config = get_config()
+
 ps = ray.remote(num_gpus=config.param_opt.num_gpus)(ParameterServer).remote(
     training_suite_factory=training_suite_factory(config), use_remote=True
 )
 rb = ray.remote(ReplayBuffer).remote(**config.replay)
 
-# %%
 train_workers = [
     ray.remote(num_gpus=config.env_worker.num_gpus)(RolloutWorker).remote(
         partial(make_env_worker_universe, config), name=f"rollout_worker_{i}"
@@ -31,12 +32,10 @@ train_workers = [
     for i in range(config.env_worker.num_workers)
 ]
 
-# %%
 test_worker = ray.remote(num_gpus=config.test_worker.num_gpus)(RolloutWorker).remote(
     partial(make_test_worker_universe, config), name="test_worker"
 )
 
-# %%
 reanalyze_workers = [
     ray.remote(num_gpus=config.reanalyze.num_gpus, num_cpus=config.reanalyze.num_cpus)(
         RolloutWorker
@@ -45,20 +44,27 @@ reanalyze_workers = [
 ]
 
 
-@ray.remote(num_gpus=0, num_cpus=0, num_returns=config.reanalyze.num_workers)
-def dispatch_trajs(trajs: list):
-    return trajs
-
-
 # %%
 jb_logger = JAXBoardLoggerRemote.remote()
 terminal_logger = TerminalLoggerRemote.remote()
 start_training = False
 reanalyze_refilled_once = False
 train_targets: list = []
+num_steps_per_epoch = (
+    config.env_worker.num_steps
+    * config.env_worker.num_workers
+    * config.env_worker.num_envs
+    + config.reanalyze.num_workers
+    * config.reanalyze.num_envs
+    * config.reanalyze.num_steps
+)
+num_updates =  int(num_steps_per_epoch / config.train.steps_to_update_once)
+logger.info(f"Num updates per epoch: {num_updates}")
+
 for w in train_workers + reanalyze_workers:
     w.set.remote("params", ps.get_params.remote())
     w.set.remote("state", ps.get_state.remote())
+
 for epoch in range(1, config.train.num_epochs + 1):
     logger.info(f"epoch {epoch}")
 
@@ -72,30 +78,35 @@ for epoch in range(1, config.train.num_epochs + 1):
         if start_training:
             logger.info(f"start training ...")
 
-    if (epoch % config.train.update_period) == 0:
-        for w in train_workers + reanalyze_workers:
+    if (epoch % config.env_worker.update_period) == 0:
+        for w in train_workers:
+            w.set.remote("params", ps.get_params.remote())
+            w.set.remote("state", ps.get_state.remote())
+
+    if (epoch % config.reanalyze.update_period) == 0:
+        for w in reanalyze_workers:
             w.set.remote("params", ps.get_params.remote())
             w.set.remote("state", ps.get_state.remote())
 
     if start_training:
         batch = rb.get_train_targets_batch.remote(
-            batch_size=config.train.batch_size * config.train.updates_per_epoch
+            batch_size=config.train.batch_size * num_updates
         )
         ps_update_result = ps.update.remote(batch, batch_size=config.train.batch_size)
         terminal_logger.write.remote(ps_update_result)
 
-    if start_training and config.reanalyze.num_workers > 0:
-        updated_trajs = []
-        for i, re_w in enumerate(reanalyze_workers):
-            reanalyze_refill_size = config.reanalyze.num_envs
-            if not reanalyze_refilled_once:
-                reanalyze_refill_size *= 2
-            trajs = rb.get_trajs_batch.remote(reanalyze_refill_size)
-            re_w.set.remote("trajs", trajs)
-            updated_trajs.append(re_w.run.remote())
-        for trajs in updated_trajs:
-            rb.add_trajs.remote(trajs, from_env=False)
-        reanalyze_refilled_once = True
+    # if start_training and config.reanalyze.num_workers > 0:
+    #     updated_trajs = []
+    #     for i, re_w in enumerate(reanalyze_workers):
+    #         reanalyze_refill_size = config.reanalyze.num_envs
+    #         if not reanalyze_refilled_once:
+    #             reanalyze_refill_size *= 2
+    #         trajs = rb.get_trajs_batch.remote(reanalyze_refill_size)
+    #         re_w.set.remote("trajs", trajs)
+    #         updated_trajs.append(re_w.run.remote())
+    #     for trajs in updated_trajs:
+    #         rb.add_trajs.remote(trajs, from_env=False)
+    #     reanalyze_refilled_once = True
 
     # generate train targets
     train_targets.clear()

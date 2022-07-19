@@ -31,7 +31,7 @@ from lib import (
 
 
 # %%
-vec_env = make_vec_env("MinAtar:SpaceInvaders-v1", num_envs=1)
+vec_env = make_vec_env("MinAtar:Breakout-v1", num_envs=1)
 
 # %%
 config = OmegaConf.load(Path(__file__).parent / "config.yml")

@@ -12,7 +12,7 @@ import moozi
 from acme.utils.tree_utils import stack_sequence_fields
 from dotenv import load_dotenv
 from loguru import logger
-from moozi.core import scalar_transform
+from moozi.core import make_env_and_spec
 from moozi.core.scalar_transform import ScalarTransform, make_scalar_transform
 from moozi.core.tape import exclude, include, make_tape
 from moozi.laws import *
@@ -31,21 +31,36 @@ logger.add(sys.stderr, level="INFO")
 
 def get_config():
     config = OmegaConf.load(Path(__file__).parent / "config.yml")
+    if config.dim_action == "auto":
+        _, env_spec = make_env_and_spec(config.env.name)
+        config.dim_action = env_spec.actions.num_values + 1
+    num_rows, num_cols, num_channels = env_spec.observations.shape
+    if config.env.num_rows == "auto":
+        config.env.num_rows = num_rows
+    if config.env.num_cols == "auto":
+        config.env.num_cols = num_cols
+    if config.env.num_channels == "auto":
+        config.env.num_channels = num_channels
+    if config.nn.spec_kwargs.obs_channels == "auto":
+        config.nn.spec_kwargs.obs_channels = config.num_stacked_frames * (
+            config.env.num_channels + config.dim_action
+        )
     OmegaConf.resolve(config)
     return config
 
 
-config = get_config()
-
-scalar_transform = make_scalar_transform(**config.scalar_transform)
-nn_arch_cls = eval(config.nn.arch_cls)
-nn_spec = eval(config.nn.spec_cls)(
-    **config.nn.spec_kwargs, scalar_transform=scalar_transform
-)
-model = make_model(nn_arch_cls, nn_spec)
+def get_model(config) -> NNModel:
+    scalar_transform = make_scalar_transform(**config.scalar_transform)
+    nn_arch_cls = eval(config.nn.arch_cls)
+    nn_spec = eval(config.nn.spec_cls)(
+        **config.nn.spec_kwargs,
+        scalar_transform=scalar_transform,
+    )
+    return make_model(nn_arch_cls, nn_spec)
 
 
 def make_env_worker_universe(config):
+    model = get_model(config)
     num_envs = config.env_worker.num_envs
     vec_env = make_vec_env(config.env.name, num_envs)
     obs_processor = make_obs_processor(
@@ -71,7 +86,7 @@ def make_env_worker_universe(config):
             planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
             traj_writer,
-            make_output_buffer_waiter(num_envs),
+            make_steps_waiter(config.env_worker.num_steps),
         ]
     )
     tape = make_tape(seed=config.seed)
@@ -80,6 +95,7 @@ def make_env_worker_universe(config):
 
 
 def make_test_worker_universe(config):
+    model = get_model(config)
     vec_env = make_vec_env(config.env.name, 1)
     obs_processor = make_obs_processor(
         num_rows=config.env.num_rows,
@@ -97,7 +113,7 @@ def make_test_worker_universe(config):
             obs_processor,
             planner,
             make_min_atar_gif_recorder(n_channels=6, root_dir="test_worker_gifs"),
-            make_reward_terminator(30),
+            make_reward_terminator(15),
         ]
     )
     tape = make_tape(seed=config.seed)
@@ -106,6 +122,7 @@ def make_test_worker_universe(config):
 
 
 def make_reanalyze_universe(config):
+    model = get_model(config)
     batch_size = config.reanalyze.num_envs
     env_mocker = make_batch_env_mocker(batch_size)
     obs_processor = make_obs_processor(
@@ -139,6 +156,12 @@ def make_reanalyze_universe(config):
 
 
 def training_suite_factory(config):
+    scalar_transform = make_scalar_transform(**config.scalar_transform)
+    nn_arch_cls = eval(config.nn.arch_cls)
+    nn_spec = eval(config.nn.spec_cls)(
+        **config.nn.spec_kwargs,
+        scalar_transform=scalar_transform,
+    )
     return partial(
         make_training_suite,
         seed=config.seed,
@@ -148,4 +171,5 @@ def training_suite_factory(config):
         lr=config.train.lr,
         num_unroll_steps=config.num_unroll_steps,
         num_stacked_frames=config.num_stacked_frames,
+        target_update_period=config.train.target_update_period,
     )

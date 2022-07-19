@@ -48,7 +48,7 @@ nn:
     repr_cols: 10
     repr_channels: 48
     dim_action: ${dim_action}
-    repr_tower_blocks: 8
+    repr_tower_blocks: 6
     repr_tower_dim: 48
     pred_tower_blocks: 1
     pred_tower_dim: 48
@@ -60,7 +60,7 @@ train:
   num_epochs: 1024
   steps_to_update_once: 512
   batch_size: 1024
-  lr: 1.0e-2
+  lr: 2.0e-2
   weight_decay: 1.0e-4
   target_update_period: 500
   min_targets_to_train: 5_000
@@ -70,8 +70,8 @@ env_worker:
   num_envs: 16
   num_cpus: 1
   num_gpus: 0.1
-  num_steps: 30
-  update_period: 20
+  num_steps: 50
+  update_period: 15
   planner:
     dim_action: ${dim_action}
     discount: ${discount}
@@ -83,15 +83,18 @@ env_worker:
       temperature: 1.0
 
 test_worker:
-  interval: 25
+  interval: 10
   num_cpus: 0
   num_gpus: 0.2
+  num_trajs: 15
   planner:
     batch_size: 1
     dim_action: ${dim_action}
     discount: ${discount}
     num_unroll_steps: ${num_unroll_steps}
     num_simulations: 50
+    output_tree: true
+    limit_depth: true
     kwargs:
       dirichlet_alpha: 0.1
       dirichlet_fraction: 0.1

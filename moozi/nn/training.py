@@ -97,7 +97,7 @@ def _make_obs_from_train_target(
     ) = batch.frame.shape
 
     assert 0 <= step <= num_unroll_steps
-    assert num_frames == (num_stacked_frames + num_unroll_steps)
+    assert num_frames == (num_stacked_frames + 1)
 
     history_frames = batch.frame[:, step : step + num_stacked_frames, ...]
     stacked_frames = vmap(make_frame_planes)(history_frames)
@@ -225,7 +225,7 @@ class MuZeroLossWithScalarTransform(LossFn):
                 * transition_loss_scale
             )
 
-            if self.consistency_loss_coef > 0.0:
+            if self.consistency_loss_coef > 0.0 and i == 0:
                 # consistency loss
                 next_obs = _make_obs_from_train_target(
                     batch,
@@ -449,7 +449,7 @@ def make_target_from_traj(
     assert sum(traj.is_last) == 1
     assert traj.is_last[-1] == True
 
-    frame = _make_frame(traj, start_idx, num_stacked_frames, num_unroll_steps)
+    frame = _make_frame(traj, start_idx, num_stacked_frames)
     action = _make_action(traj, start_idx, num_stacked_frames, num_unroll_steps)
 
     unrolled_data = []
@@ -474,11 +474,12 @@ def make_target_from_traj(
 
 
 def _make_frame(
-    traj: TrajectorySample, start_idx, num_stacked_frames, num_unroll_steps
+    traj: TrajectorySample, start_idx, num_stacked_frames
 ):
+    # num_stacked_frames frames + one extra frame for consistency loss
     frames = []
     first_frame_idx = start_idx - num_stacked_frames + 1
-    last_frame_idx = start_idx + num_unroll_steps
+    last_frame_idx = start_idx + 1
     for i in range(first_frame_idx, last_frame_idx + 1):
         if i < 0 or i >= traj.frame.shape[0]:
             frames.append(np.zeros_like(traj.frame[0]))

@@ -611,7 +611,7 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
     vis = MinAtarVisualizer(num_channels=n_channels)
 
     def malloc():
-        return {"images": [], "image_counter": 0}
+        return {"images": []}
 
     def apply(
         is_last,
@@ -624,7 +624,6 @@ def make_min_atar_gif_recorder(n_channels=6, root_dir="gifs"):
         reward,
         images: List[Image.Image],
         visit_counts,
-        image_counter: int,
     ):
         image = vis.make_image(
             frame=frame[0],

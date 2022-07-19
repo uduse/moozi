@@ -29,7 +29,7 @@ logger.remove()
 logger.add(sys.stderr, level="INFO")
 
 
-def get_config():
+def get_config(overrides={}):
     config = OmegaConf.load(Path(__file__).parent / "config.yml")
     if config.dim_action == "auto":
         _, env_spec = make_env_and_spec(config.env.name)
@@ -45,6 +45,8 @@ def get_config():
         config.nn.spec_kwargs.obs_channels = config.num_stacked_frames * (
             config.env.num_channels + config.dim_action
         )
+    for key, value in overrides.items():
+        OmegaConf.update(config, key, value)
     OmegaConf.resolve(config)
     return config
 
@@ -112,8 +114,11 @@ def make_test_worker_universe(config):
             vec_env,
             obs_processor,
             planner,
-            make_min_atar_gif_recorder(n_channels=6, root_dir="test_worker_gifs"),
-            make_reward_terminator(15),
+            make_min_atar_gif_recorder(
+                n_channels=config.env.num_channels,
+                root_dir="test_worker_gifs",
+            ),
+            make_reward_terminator(config.test_worker.num_trajs),
         ]
     )
     tape = make_tape(seed=config.seed)

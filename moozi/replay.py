@@ -43,6 +43,7 @@ class ReplayBuffer:
     discount: float = 0.997
     decay: float = 0.9
     save_dir: str = "./replay/"
+    name: str = "replay"
 
     _num_env_frames_added: int = 0
     _num_targets_created: int = 0
@@ -57,7 +58,7 @@ class ReplayBuffer:
         self._value_diffs = collections.deque(maxlen=256)
         self._episode_return = collections.deque(maxlen=256)
         logger.remove()
-        logger.add("logs/replay.log", level="DEBUG")
+        logger.add(f"logs/{self.name}.log", level="DEBUG")
         logger.info(f"Replay buffer created, {vars(self)}")
 
     def add_trajs(self, trajs: List[TrajectorySample], from_env: bool = True):
@@ -206,7 +207,10 @@ class ReplayBuffer:
         return weights
 
     def save(self):
-        path = Path(self.save_dir).expanduser() / f"{self._num_targets_created}.pkl"
+        path = (
+            Path(self.save_dir).expanduser()
+            / f"{self.name}_{self._num_targets_created}.pkl"
+        )
         path = str(path)
         logger.info(f"saving replays to {path}")
         with open(path, "wb") as f:

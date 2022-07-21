@@ -28,20 +28,16 @@ from lib import (
 
 # %%
 jax.config.update("jax_disable_jit", False)
-config = get_config(
-    {
-        "test_worker.planner.limit_depth": False
-    }
-)
+config = get_config({"test_worker.planner.num_simulations": 10})
 print(OmegaConf.to_yaml(config))
 
 # %%
 ps = ParameterServer(training_suite_factory=training_suite_factory(config))
-rb = ReplayBuffer(**config.replay)
+rb = ReplayBuffer(**config.replay.kwargs)
 vis = MinAtarVisualizer()
 
 # %%
-weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/bf73036781ee4f87bd74da9a1508c716/checkpoints/2596.pkl"
+weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/581778ab7785429c9cba7921ae6df5a7/checkpoints/2183.pkl"
 ps.restore(weights_path)
 
 # # %%
@@ -76,39 +72,37 @@ ps.restore(weights_path)
 u = make_test_worker_universe(config)
 u.tape["params"] = ps.get_params()
 u.tape["state"] = ps.get_state()
+counter = 0
 
 
 # %%
-u.run()
+u.tape["random_key"] = jax.random.PRNGKey(0)
 
 # %%
-# counter = 0
+show_vis = True
+for i in range(332):
+    counter += 1
+    print(counter)
+    u.tick()
 
-# # %%
-# show_vis = True
-# for i in range(100):
-#     counter += 1
-#     print(counter)
-#     u.tick()
-
-#     if show_vis:
-#         image = vis.make_image(u.tape["frame"][0])
-#         image = vis.add_descriptions(
-#             image,
-#             action=u.tape["action"][0],
-#             q_values=u.tape["q_values"][0],
-#             action_probs=u.tape["action_probs"][0],
-#             prior_probs=u.tape["prior_probs"][0],
-#             root_value=u.tape["root_value"][0],
-#             reward=u.tape["reward"][0],
-#             visit_counts=u.tape["visit_counts"][0],
-#         )
-#         display(image)
-#         graph = convert_tree_to_graph(
-#             u.tape["tree"],
-#             action_labels=["Terminal", "Stay", "Left", "Right", "Fire"],
-#         )
-#         graph.draw(f"/tmp/graph_{counter}.dot", prog="dot")
+    if show_vis:
+        image = vis.make_image(u.tape["frame"][0])
+        image = vis.add_descriptions(
+            image,
+            action=u.tape["action"][0],
+            q_values=u.tape["q_values"][0],
+            action_probs=u.tape["action_probs"][0],
+            prior_probs=u.tape["prior_probs"][0],
+            root_value=u.tape["root_value"][0],
+            reward=u.tape["reward"][0],
+            visit_counts=u.tape["visit_counts"][0],
+        )
+        display(image)
+        graph = convert_tree_to_graph(
+            u.tape["tree"],
+            action_labels=["Terminal", "Stay", "Left", "Right", "Fire"],
+        )
+        graph.draw(f"/tmp/graph_{counter}.dot", prog="dot")
 
 # %%
 u.tape.keys()

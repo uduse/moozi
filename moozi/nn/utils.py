@@ -6,7 +6,7 @@ import tree
 from acme.utils.tree_utils import unstack_sequence_fields
 
 from moozi.batching_layer import BatchingLayer
-from moozi import Config, make_env, make_spec
+from moozi import make_env, make_spec
 from moozi.rollout_worker import RolloutWorkerWithWeights
 import numpy as np
 import moozi as mz

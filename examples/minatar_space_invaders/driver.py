@@ -1,4 +1,5 @@
 # %%
+import random
 from loguru import logger
 import ray
 from functools import partial
@@ -13,7 +14,7 @@ from lib import (
     make_test_worker_universe,
     make_reanalyze_universe,
     make_env_worker_universe,
-    get_config
+    get_config,
 )
 
 
@@ -23,7 +24,13 @@ config = get_config()
 ps = ray.remote(num_gpus=config.param_opt.num_gpus)(ParameterServer).remote(
     training_suite_factory=training_suite_factory(config), use_remote=True
 )
-rb = ray.remote(ReplayBuffer).remote(**config.replay)
+rbs = [
+    ray.remote(ReplayBuffer).remote(**config.replay.kwargs)
+    for i in range(config.replay.num_shards)
+]
+
+def get_rb():
+    return random.choice(rbs)
 
 train_workers = [
     ray.remote(num_gpus=config.env_worker.num_gpus)(RolloutWorker).remote(
@@ -58,7 +65,7 @@ num_steps_per_epoch = (
     * config.reanalyze.num_envs
     * config.reanalyze.num_steps
 )
-num_updates =  int(num_steps_per_epoch / config.train.steps_to_update_once)
+num_updates = int(num_steps_per_epoch / config.train.steps_to_update_once)
 logger.info(f"Num updates per epoch: {num_updates}")
 
 for w in train_workers + reanalyze_workers:
@@ -69,9 +76,10 @@ for epoch in range(1, config.train.num_epochs + 1):
     logger.info(f"epoch {epoch}")
 
     # sync replay buffer and parameter server
-    num_targets_created = ray.get(rb.get_num_targets_created.remote())
+    num_targets_created = ray.get(get_rb().get_num_targets_created.remote())
     num_training_steps = ray.get(ps.get_training_steps.remote())
-    rb.apply_decay.remote()
+    for rb in rbs:
+        rb.apply_decay.remote()
 
     if not start_training:
         start_training = num_targets_created >= config.train.min_targets_to_train
@@ -89,7 +97,7 @@ for epoch in range(1, config.train.num_epochs + 1):
             w.set.remote("state", ps.get_state.remote())
 
     if start_training:
-        batch = rb.get_train_targets_batch.remote(
+        batch = get_rb().get_train_targets_batch.remote(
             batch_size=config.train.batch_size * num_updates
         )
         ps_update_result = ps.update.remote(batch, batch_size=config.train.batch_size)
@@ -112,7 +120,7 @@ for epoch in range(1, config.train.num_epochs + 1):
     train_targets.clear()
     for w in train_workers:
         sample = w.run.remote()
-        train_targets.append(rb.add_trajs.remote(sample, from_env=True))
+        train_targets.append(get_rb().add_trajs.remote(sample, from_env=True))
 
     if epoch % config.test_worker.interval == 0:
         # launch test
@@ -127,4 +135,4 @@ for epoch in range(1, config.train.num_epochs + 1):
 
     ray.timeline(filename="/tmp/timeline.json")
     ps.log_tensorboard.remote()
-    jb_logger.write.remote(rb.get_stats.remote())
+    jb_logger.write.remote(rbs[0].get_stats.remote())

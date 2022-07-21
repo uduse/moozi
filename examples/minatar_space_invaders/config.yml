@@ -14,27 +14,28 @@ env:
   num_channels: auto
 
 replay:
-  # num_shards: 2
-  use_remote: true
-  max_trajs_size: 500_000
-  max_targets_size: 3_000_000
-  sampling_strategy: value_diff
-  num_unroll_steps: ${num_unroll_steps}
-  num_td_steps: ${num_td_steps}
-  num_stacked_frames: ${num_stacked_frames}
-  discount: ${discount}
-  decay: 0.97
-  save_dir: ./replay/
+  num_shards: 4
+  kwargs:
+    use_remote: true
+    max_trajs_size: 2_000
+    max_targets_size: 1_000_000
+    sampling_strategy: value_diff
+    num_unroll_steps: ${num_unroll_steps}
+    num_td_steps: ${num_td_steps}
+    num_stacked_frames: ${num_stacked_frames}
+    discount: ${discount}
+    decay: 0.97
+    save_dir: ./replay/
 
 scalar_transform:
-  support_min: -1
-  support_max: 1
+  support_min: -3
+  support_max: 3
   eps: 1.0e-3
 
 param_opt:
   use_remote: true
   num_gpus: 0.6
-  save_interval: 20
+  save_interval: 10
   save_dir: ./checkpoints/
 
 nn:
@@ -60,18 +61,19 @@ train:
   num_epochs: 1024
   steps_to_update_once: 512
   batch_size: 1024
-  lr: 2.0e-2
+  lr: 3.0e-2
   weight_decay: 1.0e-4
   target_update_period: 500
   min_targets_to_train: 5_000
+  consistency_loss_coef: 2.0
 
 env_worker:
-  num_workers: 24
+  num_workers: 40
   num_envs: 16
   num_cpus: 1
   num_gpus: 0.1
   num_steps: 50
-  update_period: 15
+  update_period: 10
   planner:
     dim_action: ${dim_action}
     discount: ${discount}
@@ -83,10 +85,10 @@ env_worker:
       temperature: 1.0
 
 test_worker:
-  interval: 10
+  interval: 1
   num_cpus: 0
   num_gpus: 0.2
-  num_trajs: 15
+  num_trajs: 1
   planner:
     batch_size: 1
     dim_action: ${dim_action}

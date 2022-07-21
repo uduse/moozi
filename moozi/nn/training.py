@@ -399,6 +399,7 @@ def make_training_suite(
     num_unroll_steps: int,
     num_stacked_frames: int,
     target_update_period: int = 1,
+    consistency_loss_coef: float = 1.0,
 ) -> Tuple[NNModel, TrainingState, Callable]:
     model = make_model(nn_arch_cls, nn_spec)
     random_key = jax.random.PRNGKey(seed)
@@ -410,7 +411,7 @@ def make_training_suite(
         scalar_transform=nn_spec.scalar_transform,
         weight_decay=weight_decay,
         dim_action=nn_spec.dim_action,
-        consistency_loss_coef=1.0,
+        consistency_loss_coef=consistency_loss_coef,
     )
     optimizer = optax.chain(
         optax.clip_by_global_norm(5),
@@ -473,9 +474,7 @@ def make_target_from_traj(
     )
 
 
-def _make_frame(
-    traj: TrajectorySample, start_idx, num_stacked_frames
-):
+def _make_frame(traj: TrajectorySample, start_idx, num_stacked_frames):
     # num_stacked_frames frames + one extra frame for consistency loss
     frames = []
     first_frame_idx = start_idx - num_stacked_frames + 1

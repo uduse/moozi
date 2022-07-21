@@ -61,7 +61,7 @@ def get_model(config) -> NNModel:
     return make_model(nn_arch_cls, nn_spec)
 
 
-def make_env_worker_universe(config):
+def make_env_worker_universe(config, idx: int = 0):
     model = get_model(config)
     num_envs = config.env_worker.num_envs
     vec_env = make_vec_env(config.env.name, num_envs)
@@ -78,7 +78,8 @@ def make_env_worker_universe(config):
         **config.env_worker.planner,
     )
     if not config.debug:
-        planner = planner.jit(max_trace=10)
+        obs_processor = obs_processor.jit(max_trace=10, backend="gpu")
+        planner = planner.jit(max_trace=10, backend="gpu")
     traj_writer = make_traj_writer(num_envs)
 
     final_law = sequential(
@@ -86,17 +87,17 @@ def make_env_worker_universe(config):
             vec_env,
             obs_processor,
             planner,
-            make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
+            # make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
             traj_writer,
             make_steps_waiter(config.env_worker.num_steps),
         ]
     )
-    tape = make_tape(seed=config.seed)
+    tape = make_tape(seed=config.seed + idx)
     tape.update(final_law.malloc())
     return Universe(tape, final_law)
 
 
-def make_test_worker_universe(config):
+def make_test_worker_universe(config, idx: int = 0):
     model = get_model(config)
     vec_env = make_vec_env(config.env.name, 1)
     obs_processor = make_obs_processor(
@@ -121,12 +122,12 @@ def make_test_worker_universe(config):
             make_reward_terminator(config.test_worker.num_trajs),
         ]
     )
-    tape = make_tape(seed=config.seed)
+    tape = make_tape(seed=config.seed + 50 + idx)
     tape.update(final_law.malloc())
     return Universe(tape, final_law)
 
 
-def make_reanalyze_universe(config):
+def make_reanalyze_universe(config, idx: int = 0):
     model = get_model(config)
     batch_size = config.reanalyze.num_envs
     env_mocker = make_batch_env_mocker(batch_size)
@@ -155,7 +156,7 @@ def make_reanalyze_universe(config):
             make_output_buffer_waiter(batch_size),
         ]
     )
-    tape = make_tape(seed=config.seed)
+    tape = make_tape(seed=config.seed + 100 + idx)
     tape.update(final_law.malloc())
     return Universe(tape, final_law)
 
@@ -177,4 +178,5 @@ def training_suite_factory(config):
         num_unroll_steps=config.num_unroll_steps,
         num_stacked_frames=config.num_stacked_frames,
         target_update_period=config.train.target_update_period,
+        consistency_loss_coef=config.train.consistency_loss_coef
     )

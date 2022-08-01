@@ -133,6 +133,7 @@ def convert_tree_to_graph(
     tree: mctx.Tree,
     action_labels: Optional[Sequence[str]] = None,
     batch_index: int = 0,
+    show_only_expanded: bool = True,
 ) -> pygraphviz.AGraph:
     """Converts a search tree into a Graphviz graph.
     Args:
@@ -148,7 +149,7 @@ def convert_tree_to_graph(
     chex.assert_rank(tree.node_values, 2)
     batch_size = tree.node_values.shape[0]
     if action_labels is None:
-        action_labels = range(tree.num_actions)
+        action_labels = list(map(str, range(tree.num_actions)))
     elif len(action_labels) != tree.num_actions:
         raise ValueError(
             f"action_labels {action_labels} has the wrong number of actions "
@@ -183,7 +184,11 @@ def convert_tree_to_graph(
         for a_i in range(tree.num_actions):
             # Index of children, or -1 if not expanded
             children_i = tree.children_index[batch_index, node_i, a_i]
-            if children_i >= 0:
+            if show_only_expanded:
+                to_show = children_i >= 0
+            else:
+                to_show = True
+            if to_show:
                 graph.add_node(
                     children_i,
                     label=node_to_str(

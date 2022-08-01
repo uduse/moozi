@@ -1,4 +1,5 @@
 # %%
+import tree
 from acme.jax.utils import add_batch_dim
 from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from omegaconf import OmegaConf
@@ -28,7 +29,14 @@ from lib import (
 
 # %%
 jax.config.update("jax_disable_jit", False)
-config = get_config({"test_worker.planner.num_simulations": 10})
+config = get_config(
+    {
+        "test_worker.planner.num_simulations": 50,
+        "test_worker.planner.output_tree": True,
+        "test_worker.planner.limit_depth": True,
+    },
+    # path="/home/zeyi/miniconda3/envs/moozi/.guild/runs/450a45d648534b068cb86a8a4240e028/.guild/generated/wknjrz9s/config.yml",
+)
 print(OmegaConf.to_yaml(config))
 
 # %%
@@ -37,53 +45,41 @@ rb = ReplayBuffer(**config.replay.kwargs)
 vis = MinAtarVisualizer()
 
 # %%
-weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/581778ab7785429c9cba7921ae6df5a7/checkpoints/2183.pkl"
+weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/7c902602282e4fc1b4bd782c0a4069b5/checkpoints/7308.pkl"
 ps.restore(weights_path)
-
-# # %%
-# def make_test_worker_universe(config):
-#     vec_env = make_vec_env(config.env.name, 1)
-#     obs_processor = make_obs_processor(
-#         num_rows=config.env.num_rows,
-#         num_cols=config.env.num_cols,
-#         num_channels=config.env.num_channels,
-#         num_stacked_frames=config.num_stacked_frames,
-#         dim_action=config.dim_action,
-#     ).vmap(batch_size=1)
-
-#     planner = make_planner(model=model, **config.test_worker.planner)
-
-#     final_law = sequential(
-#         [
-#             vec_env,
-#             obs_processor,
-#             planner,
-#             make_min_atar_gif_recorder(n_channels=6, root_dir="test_worker_gifs"),
-#             # make_traj_writer(1),
-#             make_reward_terminator(30),
-#         ]
-#     )
-#     tape = make_tape(seed=config.seed)
-#     tape.update(final_law.malloc())
-#     return Universe(tape, final_law)
-
 
 # %%
 u = make_test_worker_universe(config)
+
+# %%
 u.tape["params"] = ps.get_params()
 u.tape["state"] = ps.get_state()
 counter = 0
 
+# %%
+hiddens = []
+labels = []
+actions = []
+images = []
 
 # %%
 u.tape["random_key"] = jax.random.PRNGKey(0)
+u.tape["is_last"] = np.array([True])
 
 # %%
 show_vis = True
-for i in range(332):
+for i in range(300):
     counter += 1
     print(counter)
     u.tick()
+    hidden = u.tape["tree"].embeddings[0, 0].ravel()
+    hiddens.append(hidden)
+
+    if u.tape["is_first"][0]:
+        actions.clear()
+    actions.append(int(u.tape["action"][0]))
+    label = "_".join(map(str, actions))
+    labels.append(label)
 
     if show_vis:
         image = vis.make_image(u.tape["frame"][0])
@@ -103,9 +99,47 @@ for i in range(332):
             action_labels=["Terminal", "Stay", "Left", "Right", "Fire"],
         )
         graph.draw(f"/tmp/graph_{counter}.dot", prog="dot")
+        images.append(image)
 
 # %%
-u.tape.keys()
+import math
+
+grid = int(math.sqrt(len(images))) + 1
+image_height = int(8192 / grid)  # tensorboard supports sprite images up to 8192 x 8192
+image_width = int(8192 / grid)
+
+big_image = Image.new(
+    mode="RGB", size=(image_width * grid, image_height * grid), color=(0, 0, 0)
+)  # fully transparent
+
+for i in range(len(images)):
+    row = int(i / grid)
+    col = int(i % grid)
+    img = images[i]
+    img = img.resize((image_height, image_width), Image.ANTIALIAS)
+    row_loc = row * image_height
+    col_loc = col * image_width
+    big_image.paste(
+        img, (col_loc, row_loc)
+    ) 
+    print(row_loc, col_loc)
+
+big_image.save("sprite.jpg")
+
+# %%
+image_height
+
+# %%
+with open("embed.tsv", "w") as f:
+    for hidden in hiddens:
+        f.write("\t".join(map(str, hidden.tolist())))
+        f.write("\n")
+
+# %%
+with open("label.tsv", "w") as f:
+    for i, label in enumerate(labels):
+        f.write(str(i))
+        f.write("\n")
 
 # %%
 traj = rb.get_trajs_batch(1)
@@ -127,7 +161,7 @@ for i in range(traj_len):
     value_diff = np.abs(target.n_step_return[0] - target.root_value[0])
     targets.append(target)
 
-# %%
+# %%gg
 t = targets[-1]
 
 # %%

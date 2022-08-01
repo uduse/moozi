@@ -1,5 +1,5 @@
 seed: 0
-discount: 0.99
+discount: 0.997
 num_unroll_steps: 5
 num_td_steps: 5
 # TODO: rename num_stakd_frames to history_len or something
@@ -14,22 +14,22 @@ env:
   num_channels: auto
 
 replay:
-  num_shards: 4
+  num_shards: 6
   kwargs:
     use_remote: true
-    max_trajs_size: 2_000
-    max_targets_size: 1_000_000
+    max_trajs_size: 1_000
+    max_targets_size: 100_000
     sampling_strategy: value_diff
     num_unroll_steps: ${num_unroll_steps}
     num_td_steps: ${num_td_steps}
     num_stacked_frames: ${num_stacked_frames}
     discount: ${discount}
-    decay: 0.97
+    decay: 0.90
     save_dir: ./replay/
 
 scalar_transform:
-  support_min: -3
-  support_max: 3
+  support_min: -30
+  support_max: 30
   eps: 1.0e-3
 
 param_opt:
@@ -47,29 +47,29 @@ nn:
     obs_channels: auto
     repr_rows: 10
     repr_cols: 10
-    repr_channels: 48
+    repr_channels: 16
     dim_action: ${dim_action}
     repr_tower_blocks: 6
-    repr_tower_dim: 48
+    repr_tower_dim: 16
     pred_tower_blocks: 1
-    pred_tower_dim: 48
+    pred_tower_dim: 16
     dyna_tower_blocks: 1
-    dyna_tower_dim: 48
+    dyna_tower_dim: 16
     dyna_state_blocks: 1
 
 train:
-  num_epochs: 1024
-  steps_to_update_once: 512
+  num_epochs: 500
+  update_step_ratio: 2
   batch_size: 1024
   lr: 3.0e-2
   weight_decay: 1.0e-4
-  target_update_period: 500
-  min_targets_to_train: 5_000
+  target_update_period: 1
+  min_targets_to_train: 1_000
   consistency_loss_coef: 2.0
 
 env_worker:
-  num_workers: 40
-  num_envs: 16
+  num_workers: 20
+  num_envs: 32
   num_cpus: 1
   num_gpus: 0.1
   num_steps: 50
@@ -78,37 +78,35 @@ env_worker:
     dim_action: ${dim_action}
     discount: ${discount}
     num_unroll_steps: ${num_unroll_steps}
-    num_simulations: 20
+    num_simulations: 50
     kwargs:
       dirichlet_alpha: 0.2
       dirichlet_fraction: 0.2
       temperature: 1.0
 
 test_worker:
-  interval: 1
+  interval: 5
   num_cpus: 0
   num_gpus: 0.2
-  num_trajs: 1
+  num_trajs: 5
   planner:
     batch_size: 1
     dim_action: ${dim_action}
     discount: ${discount}
     num_unroll_steps: ${num_unroll_steps}
     num_simulations: 50
-    output_tree: true
-    limit_depth: true
     kwargs:
       dirichlet_alpha: 0.1
       dirichlet_fraction: 0.1
       temperature: 0.25
 
 reanalyze:
-  num_workers: 0
-  num_envs: 64
+  num_workers: 20
+  num_envs: 32
   num_cpus: 1
-  num_gpus: 0.2
-  num_steps: 30
-  update_period: 5
+  num_gpus: 0.1
+  num_steps: 50
+  update_period: 10
   planner:
     dim_action: ${dim_action}
     discount: ${discount}

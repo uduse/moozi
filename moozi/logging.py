@@ -94,7 +94,7 @@ class Logger:
 class JAXBoardLoggerV2(Logger):
     def __init__(self, name="logger", log_dir=None, time_delta: float = 0.0):
         self._name = name
-        self._log_dir = log_dir or "./tensorboard_log/"
+        self._log_dir = log_dir or "./tb/"
         self._log_dir = str(Path(self._log_dir).resolve())
         self._time_delta = time_delta
         self._time = time.time()
@@ -119,20 +119,19 @@ class JAXBoardLoggerV2(Logger):
         self._steps = steps
 
     def _write_now_datum(self, datum: LogDatum, step: Optional[int] = None):
-        prefixed_key = self._name + "/" + datum.tag
         if step is None:
             step = self._steps
 
         if isinstance(datum, LogText):
-            self._writer.text(tag=prefixed_key, textdata=datum.text, step=step)
+            self._writer.text(tag=datum.tag, textdata=datum.text, step=step)
         elif isinstance(datum, LogImage):
-            self._writer.image(tag=prefixed_key, image=datum.image, step=step)
+            self._writer.image(tag=datum.tag, image=datum.image, step=step)
         elif isinstance(datum, LogScalar):
-            self._writer.scalar(tag=prefixed_key, value=datum.scalar, step=step)
+            self._writer.scalar(tag=datum.tag, value=datum.scalar, step=step)
         elif isinstance(datum, LogHistogram):
             num_bins = 50
             self._writer.histogram(
-                tag=prefixed_key,
+                tag=datum.tag,
                 values=datum.values,
                 bins=num_bins,
                 step=step,
@@ -158,7 +157,6 @@ class TerminalLogger(Logger):
 
     def write(self, data: Union[List[LogDatum], LogDatum, dict]):
         data_ready = LogDatum.from_any(data)
-
         # TODO: refactor if this time delta is used at least three times
         now = time.time()
         if (now - self._time) > self._time_delta:
@@ -169,12 +167,21 @@ class TerminalLogger(Logger):
         self._steps += 1
 
     def _write_now_datum(self, datum: LogDatum):
-        prefixed_key = self._name + "/" + datum.tag
         if isinstance(datum, LogText):
-            print(f"{prefixed_key} = {datum.text}")
+            print(f"{datum.tag} = {datum.text}")
         elif isinstance(datum, LogScalar):
-            print(f"{prefixed_key} = {datum.scalar}")
+            print(f"{datum.tag} = {datum.scalar}")
 
 
 JAXBoardLoggerRemote = ray.remote(num_cpus=0)(JAXBoardLoggerV2)
 TerminalLoggerRemote = ray.remote(num_cpus=0)(TerminalLogger)
+
+
+def describe_np_array(arr, name):
+    return {
+        name + "/size": np.size(arr),
+        name + "/min": np.min(arr),
+        name + "/mean": np.mean(arr),
+        name + "/max": np.max(arr),
+        name + "/std": np.std(arr),
+    }

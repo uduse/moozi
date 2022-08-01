@@ -1,4 +1,5 @@
 # %%
+import collections
 import random
 from loguru import logger
 import ray
@@ -25,12 +26,15 @@ ps = ray.remote(num_gpus=config.param_opt.num_gpus)(ParameterServer).remote(
     training_suite_factory=training_suite_factory(config), use_remote=True
 )
 rbs = [
-    ray.remote(ReplayBuffer).remote(**config.replay.kwargs)
+    ray.remote(ReplayBuffer).remote(**config.replay.kwargs, name=f"replay_{i}")
     for i in range(config.replay.num_shards)
 ]
 
+
 def get_rb():
-    return random.choice(rbs)
+    rb = random.choice(rbs)
+    return rb
+
 
 train_workers = [
     ray.remote(num_gpus=config.env_worker.num_gpus)(RolloutWorker).remote(
@@ -55,8 +59,7 @@ reanalyze_workers = [
 jb_logger = JAXBoardLoggerRemote.remote()
 terminal_logger = TerminalLoggerRemote.remote()
 start_training = False
-reanalyze_refilled_once = False
-train_targets: list = []
+# reanalyze_refilled_once = False
 num_steps_per_epoch = (
     config.env_worker.num_steps
     * config.env_worker.num_workers
@@ -65,26 +68,37 @@ num_steps_per_epoch = (
     * config.reanalyze.num_envs
     * config.reanalyze.num_steps
 )
-num_updates = int(num_steps_per_epoch / config.train.steps_to_update_once)
+num_updates = int(config.train.update_step_ratio * num_steps_per_epoch / config.train.batch_size)
+logger.info(f"Num steps per epoch: {num_steps_per_epoch}")
 logger.info(f"Num updates per epoch: {num_updates}")
+samples: list = []
 
 for w in train_workers + reanalyze_workers:
     w.set.remote("params", ps.get_params.remote())
     w.set.remote("state", ps.get_state.remote())
 
-for epoch in range(1, config.train.num_epochs + 1):
+for epoch in range(config.train.num_epochs):
     logger.info(f"epoch {epoch}")
 
-    # sync replay buffer and parameter server
-    num_targets_created = ray.get(get_rb().get_num_targets_created.remote())
-    num_training_steps = ray.get(ps.get_training_steps.remote())
+    # sync
+    ray.get(ps.log_tensorboard.remote())
     for rb in rbs:
+        rb.log_tensorboard.remote()
         rb.apply_decay.remote()
 
+    for sample in samples:
+        get_rb().add_trajs.remote(sample, from_env=True)
+
     if not start_training:
-        start_training = num_targets_created >= config.train.min_targets_to_train
-        if start_training:
-            logger.info(f"start training ...")
+        num_targets_sharded = [
+            ray.get(rb.get_num_targets_created.remote()) for rb in rbs
+        ]
+        if sum(num_targets_sharded) >= config.train.min_targets_to_train and all(
+            n > 10 for n in num_targets_sharded
+        ):
+            start_training = True
+            if start_training:
+                logger.info(f"start training ...")
 
     if (epoch % config.env_worker.update_period) == 0:
         for w in train_workers:
@@ -97,30 +111,31 @@ for epoch in range(1, config.train.num_epochs + 1):
             w.set.remote("state", ps.get_state.remote())
 
     if start_training:
-        batch = get_rb().get_train_targets_batch.remote(
-            batch_size=config.train.batch_size * num_updates
-        )
-        ps_update_result = ps.update.remote(batch, batch_size=config.train.batch_size)
-        terminal_logger.write.remote(ps_update_result)
+        updates_per_replay = int(num_updates / len(rbs) + 0.5)
+        for rb in rbs:
+            batch = rb.get_train_targets_batch.remote(
+                batch_size=config.train.batch_size * updates_per_replay
+            )
+            ps.update.remote(
+                batch, batch_size=config.train.batch_size
+            )
+        # terminal_logger.write.remote(ps_update_result)
 
-    # if start_training and config.reanalyze.num_workers > 0:
-    #     updated_trajs = []
-    #     for i, re_w in enumerate(reanalyze_workers):
-    #         reanalyze_refill_size = config.reanalyze.num_envs
-    #         if not reanalyze_refilled_once:
-    #             reanalyze_refill_size *= 2
-    #         trajs = rb.get_trajs_batch.remote(reanalyze_refill_size)
-    #         re_w.set.remote("trajs", trajs)
-    #         updated_trajs.append(re_w.run.remote())
-    #     for trajs in updated_trajs:
-    #         rb.add_trajs.remote(trajs, from_env=False)
-    #     reanalyze_refilled_once = True
+    if start_training and config.reanalyze.num_workers > 0:
+        updated_trajs = []
+        for re_w in reanalyze_workers:
+            reanalyze_refill_size = config.reanalyze.num_envs * 2
+            trajs = get_rb().get_trajs_batch.remote(reanalyze_refill_size)
+            re_w.set.remote("trajs", trajs)
+            updated_trajs.append(re_w.run.remote())
+        for trajs in updated_trajs:
+            get_rb().add_trajs.remote(trajs, from_env=False)
 
     # generate train targets
-    train_targets.clear()
+    samples.clear()
     for w in train_workers:
         sample = w.run.remote()
-        train_targets.append(get_rb().add_trajs.remote(sample, from_env=True))
+        samples.append(sample)
 
     if epoch % config.test_worker.interval == 0:
         # launch test
@@ -133,6 +148,4 @@ for epoch in range(1, config.train.num_epochs + 1):
     if epoch % config.param_opt.save_interval == 0:
         ps.save.remote()
 
-    ray.timeline(filename="/tmp/timeline.json")
-    ps.log_tensorboard.remote()
-    jb_logger.write.remote(rbs[0].get_stats.remote())
+ray.timeline(filename="/tmp/timeline.json")

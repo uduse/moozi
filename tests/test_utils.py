@@ -11,13 +11,26 @@ from moozi.core.utils import (
 from moozi.core.scalar_transform import make_scalar_transform
 
 
-def test_scalar_transform():
-    scalar_transform = make_scalar_transform(support_min=-10, support_max=10)
-
-    inputs = np.random.randn(5) ** 100
-    transformed = scalar_transform.transform(inputs)
-    outputs = scalar_transform.inverse_transform(transformed)
-    np.testing.assert_array_equalclose(inputs, outputs, atol=1e-3)
+@pytest.mark.parametrize(
+    "support_min,support_max",
+    [
+        (-10, 10),
+        (0, 30),
+        (-1, 1),
+    ],
+)
+def test_scalar_transform(support_min, support_max):
+    scalar_transform = make_scalar_transform(
+        support_min=support_min, support_max=support_max
+    )
+    scalars = np.random.uniform(
+        low=scalar_transform.scalar_min,
+        high=scalar_transform.scalar_max,
+        size=(100,),
+    )
+    scalar_probs = scalar_transform.transform(scalars)
+    outputs = scalar_transform.inverse_transform(scalar_probs)
+    np.testing.assert_allclose(scalars, outputs, rtol=0.05, atol=0.1)
 
 
 def test_make_action_planes():

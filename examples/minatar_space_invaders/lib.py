@@ -29,8 +29,10 @@ logger.remove()
 logger.add(sys.stderr, level="INFO")
 
 
-def get_config(overrides={}):
-    config = OmegaConf.load(Path(__file__).parent / "config.yml")
+def get_config(overrides={}, path=None):
+    if path is None:
+        path = Path(__file__).parent / "config.yml"
+    config = OmegaConf.load(path)
     if config.dim_action == "auto":
         _, env_spec = make_env_and_spec(config.env.name)
         config.dim_action = env_spec.actions.num_values + 1
@@ -77,18 +79,14 @@ def make_env_worker_universe(config, idx: int = 0):
         batch_size=num_envs,
         **config.env_worker.planner,
     )
+    policy = sequential([obs_processor, planner])
     if not config.debug:
-        obs_processor = obs_processor.jit(max_trace=10, backend="gpu")
-        planner = planner.jit(max_trace=10, backend="gpu")
-    traj_writer = make_traj_writer(num_envs)
-
+        policy = policy.jit(max_trace=1, backend="gpu")
     final_law = sequential(
         [
             vec_env,
-            obs_processor,
-            planner,
-            # make_min_atar_gif_recorder(n_channels=6, root_dir="env_worker_gifs"),
-            traj_writer,
+            policy,
+            make_traj_writer(num_envs),
             make_steps_waiter(config.env_worker.num_steps),
         ]
     )
@@ -107,14 +105,11 @@ def make_test_worker_universe(config, idx: int = 0):
         num_stacked_frames=config.num_stacked_frames,
         dim_action=config.dim_action,
     ).vmap(batch_size=1)
-    planner = make_planner(model=model, **config.test_worker.planner).jit(
-        backend="gpu", max_trace=10
-    )
+    planner = make_planner(model=model, **config.test_worker.planner)
     final_law = sequential(
         [
             vec_env,
-            obs_processor,
-            planner,
+            sequential([obs_processor, planner]).jit(backend="gpu"),
             make_min_atar_gif_recorder(
                 n_channels=config.env.num_channels,
                 root_dir="test_worker_gifs",
@@ -143,23 +138,26 @@ def make_reanalyze_universe(config, idx: int = 0):
         batch_size=batch_size,
         **config.reanalyze.planner,
     )
-    if not config.debug:
-        obs_processor = obs_processor.jit(backend="gpu", max_trace=10)
-        planner = planner.jit(backend="gpu", max_trace=10)
-    final_law = sequential(
+    policy = sequential(
         [
-            env_mocker,
             obs_processor,
             planner,
             Law.wrap(lambda next_action: {"action": next_action}),
+        ]
+    )
+    if not config.debug:
+        policy = policy.jit(max_trace=1, backend="gpu")
+    final_law = sequential(
+        [
+            env_mocker,
+            policy,
             make_traj_writer(batch_size),
-            make_output_buffer_waiter(batch_size),
+            make_steps_waiter(config.reanalyze.num_steps),
         ]
     )
     tape = make_tape(seed=config.seed + 100 + idx)
     tape.update(final_law.malloc())
     return Universe(tape, final_law)
-
 
 def training_suite_factory(config):
     scalar_transform = make_scalar_transform(**config.scalar_transform)
@@ -178,5 +176,6 @@ def training_suite_factory(config):
         num_unroll_steps=config.num_unroll_steps,
         num_stacked_frames=config.num_stacked_frames,
         target_update_period=config.train.target_update_period,
-        consistency_loss_coef=config.train.consistency_loss_coef
+        consistency_loss_coef=config.train.consistency_loss_coef,
     )
+

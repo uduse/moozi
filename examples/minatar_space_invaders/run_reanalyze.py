@@ -22,17 +22,14 @@ from lib import (
     make_test_worker_universe,
     make_reanalyze_universe,
     make_env_worker_universe,
-    config,
-    model,
-    scalar_transform,
+    get_config,
 )
 
 # %%
+config = get_config()
 ps = ParameterServer(training_suite_factory=training_suite_factory(config))
-rb = ReplayBuffer(**config.replay)
+rb = ReplayBuffer(**config.replay.kwargs)
 vis = MinAtarVisualizer()
-
-# %%
 
 # %%
 rollout_worker = RolloutWorker(
@@ -42,7 +39,7 @@ rollout_worker.set("params", ps.get_params())
 rollout_worker.set("state", ps.get_state())
 
 # %%
-weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/cdba7e5cdc7b4329b36b338749c4013f/checkpoints/1470.pkl"
+weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/596afa96e504462e9cb9c793cd91db6b/checkpoints/57222.pkl"
 ps.restore(weights_path)
 
 # %%
@@ -60,6 +57,8 @@ for i in range(2):
 rb.add_trajs(trajs)
 
 # %%
+config.reanalyze.num_envs
+# %%
 trajs = rb.get_trajs_batch(config.reanalyze.num_envs * 2)
 reanalyze_worker.set('trajs', trajs)
 
@@ -67,9 +66,15 @@ reanalyze_worker.set('trajs', trajs)
 new_trajs = reanalyze_worker.run()
 
 # %%
-new_trajs[0].frame.shape
+for i in range(len(trajs)):
+    print(i, trajs[i].frame.shape)
+
 # %%
-before = trajs[2]
+for i in range(len(new_trajs)):
+    print(i, new_trajs[i].frame.shape)
+
+# %%
+before = trajs[53]
 after = new_trajs[0]
 
 # %%
@@ -80,8 +85,20 @@ np.testing.assert_equal(before.is_last, after.is_last)
 np.testing.assert_equal(before.to_play, after.to_play)
 np.testing.assert_equal(before.action, after.action)
 np.testing.assert_equal(before.legal_actions_mask, after.legal_actions_mask)
+
+# %%
+root_value_update = np.abs(before.root_value - after.root_value)
+action_probs_update = np.abs(before.action_probs - after.action_probs)
 # %%
 np.testing.assert_equal(before.root_value, after.root_value)
 
 # %%
-after.root_value/
+make_target_from_traj(
+    before,
+    17,
+    config.discount,
+    config.num_unroll_steps,
+    config.num_td_steps,
+    config.num_stacked_frames
+)
+# %%

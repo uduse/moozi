@@ -137,7 +137,10 @@ class ParameterOptimizer:
 
 class ParameterServer:
     def __init__(
-        self, training_suite_factory, use_remote=False, save_dir: str = "checkpoints/"
+        self,
+        training_suite_factory,
+        use_remote=False,
+        save_dir: str = "checkpoints/",
     ):
         self.model: NNModel
         self.training_state: TrainingState
@@ -149,13 +152,14 @@ class ParameterServer:
         self._tb_logger = mz.logging.JAXBoardLoggerV2(
             name="param_server", time_delta=30
         )
-        self._last_step_data: List[LogDatum] = []
+        self._last_step_data: dict = {}
 
         jax.config.update("jax_debug_nans", True)
         logger.remove()
         logger.add(sys.stderr, level="SUCCESS")
         logger.add(f"logs/ps.debug.log", level="DEBUG")
         logger.add(f"logs/ps.info.log", level="INFO")
+        self._flog = logger
 
     def update(self, big_batch: TrainTarget, batch_size: int):
         if len(big_batch) == 0:
@@ -188,6 +192,8 @@ class ParameterServer:
     def log_tensorboard(self):
         log_datum = LogDatum.from_any(self._last_step_data)
         self._tb_logger.write(log_datum, self.training_state.steps)
+        if "loss" in self._last_step_data:
+            self._flog.info(f"loss: {self._last_step_data['loss']}")
         return log_datum
 
     def get_training_steps(self):

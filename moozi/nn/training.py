@@ -127,6 +127,7 @@ class MuZeroLossWithScalarTransform(LossFn):
     weight_decay: float = 1e-4
     consistency_loss_coef: float = 1.0
     value_loss_coef: float = 0.25
+    use_importance_sampling: bool = True
 
     def __call__(
         self,
@@ -266,10 +267,14 @@ class MuZeroLossWithScalarTransform(LossFn):
         )
 
         # apply importance sampling adjustment
-        # losses = tree.map_structure(
-        #     lambda x: x * batch.importance_sampling_ratio, losses
-        # )
-        # info["importance_sampling_ratio"] = batch.importance_sampling_ratio
+        if self.use_importance_sampling:
+            losses = tree.map_structure(
+                lambda x: x * batch.importance_sampling_ratio, losses
+            )
+            info["is_ratio/hist"] = batch.importance_sampling_ratio
+            info["is_ratio/mean"] = jnp.mean(batch.importance_sampling_ratio)
+            info["is_ratio/max"] = jnp.max(batch.importance_sampling_ratio)
+            info["is_ratio/min"] = jnp.min(batch.importance_sampling_ratio)
 
         # sum all losses
         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
@@ -377,9 +382,9 @@ def make_sgd_step_fn(
                 orig_state=orig_state,
                 new_state=new_state,
             )
-            step_data["prior_kl"] = prior_kl
+            step_data["info/prior_kl"] = prior_kl
 
-        step_data["update_size"] = sum(
+        step_data["info/update_size"] = sum(
             jnp.sum(jnp.abs(p)) for p in jax.tree_leaves(updates)
         )
 

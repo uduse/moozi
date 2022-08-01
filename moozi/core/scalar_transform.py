@@ -11,11 +11,13 @@ class ScalarTransform(NamedTuple):
     support_max: int
     dim: int
     epsilon: float
+    scalar_min: float
+    scalar_max: float
     transform: Callable[[chex.Array], chex.Array]
     inverse_transform: Callable[[chex.Array], chex.Array]
 
 
-def make_scalar_transform(support_min, support_max, eps=1e-3):
+def make_scalar_transform(support_min, support_max, eps=1e-3) -> ScalarTransform:
     support_dim = support_max - support_min + 1
 
     def _scalar_transform(scalar: float):
@@ -35,7 +37,7 @@ def make_scalar_transform(support_min, support_max, eps=1e-3):
         return probs
 
     def _inverse_scalar_transform(
-        probs: np.ndarray,
+        probs: chex.Array,
     ):
         chex.assert_shape(probs, (support_dim,))
         support_vals = jnp.arange(support_min, support_max + 1, dtype=jnp.float32)
@@ -48,11 +50,18 @@ def make_scalar_transform(support_min, support_max, eps=1e-3):
             - 1
         )
 
+    lower = jax.nn.one_hot(0, num_classes=support_dim, dtype=float)
+    scalar_min = _inverse_scalar_transform(lower)
+    upper = jax.nn.one_hot(support_dim - 1, num_classes=support_dim, dtype=float)
+    scalar_max = _inverse_scalar_transform(upper)
+
     return ScalarTransform(
         support_min,
         support_max,
         support_dim,
         eps,
+        scalar_min,
+        scalar_max,
         jax.vmap(_scalar_transform),
         jax.vmap(_inverse_scalar_transform),
     )

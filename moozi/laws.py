@@ -4,7 +4,18 @@ import inspect
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Deque,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Union,
+)
 
 import dm_env
 import jax
@@ -552,7 +563,11 @@ def make_steps_waiter(steps: int):
 
     def apply(curr_steps, output_buffer):
         if curr_steps >= steps:
-            return {"curr_steps": 0, "output": output_buffer}
+            return {
+                "curr_steps": 0,
+                "output": output_buffer,
+                "output_buffer": tuple(),
+            }
         else:
             return {"curr_steps": curr_steps + 1}
 
@@ -584,9 +599,9 @@ def make_reward_terminator(size: int):
 
         if reward_traj_count >= size:
             stats = {
-                "avr_episode_length": len(reward_records) / reward_traj_count,
-                "avr_reward_per_episode": sum(reward_records) / reward_traj_count,
-                "avr_reward_per_step": sum(reward_records) / len(reward_records),
+                "eval/episode_length": len(reward_records) / reward_traj_count,
+                "eval/episode_return": sum(reward_records) / reward_traj_count,
+                "eval/reward_per_step": sum(reward_records) / len(reward_records),
             }
             return {
                 "output": stats,
@@ -690,43 +705,6 @@ def make_env_mocker():
     )
 
 
-# def make_env_mocker_v2(num_envs):
-#     def malloc():
-#         return {
-#             "queued_trajs": tuple(),
-#             "running_trajs": {i: None for i in range(num_envs)},
-#             "curr_traj_index": {i: 0 for i in range(num_envs)},
-#         }
-
-#     def apply(queued_trajs, running_trajs, curr_traj_index):
-#         # refill envs
-#         # for key in running_trajs:
-#         #     if running_trajs[key] is None and
-
-#         chex.assert_rank(traj.frame, 4)
-#         ret = {
-#             "curr_traj_index": curr_traj_index + 1,
-#             "frame": traj.frame[curr_traj_index],
-#             "action": traj.action[curr_traj_index],
-#             "reward": traj.last_reward[curr_traj_index],
-#             "legal_actions_mask": traj.legal_actions_mask[curr_traj_index],
-#             "to_play": traj.to_play[curr_traj_index],
-#             "is_first": traj.is_first[curr_traj_index],
-#             "is_last": traj.is_last[curr_traj_index],
-#         }
-#         if traj.is_last[curr_traj_index]:
-#             ret["curr_traj_index"] = 0
-#             ret["traj"] = False
-#         return ret
-
-#     return Law(
-#         name="env_mocker",
-#         malloc=malloc,
-#         apply=link(apply),
-#         read=get_keys(apply),
-#     )
-
-
 def make_last_step_penalizer(penalty: float = 10.0):
     @Law.wrap
     def penalize_last_step(is_last, reward):
@@ -808,7 +786,7 @@ class MinAtarVisualizer:
             if n_step_return is not None:
                 content += f"G {n_step_return}\n"
             if root_value is not None:
-                content += f"V {root_value}\n"
+                content += f"V {root_value:.3f}\n"
             if prior_probs is not None:
                 content += f"P {prior_probs}\n"
             if visit_counts is not None:
@@ -891,9 +869,18 @@ def make_obs_processor(
             (num_stacked_frames,),
             dtype=jnp.int32,
         )
+        stacked_frame_planes = make_frame_planes(empty_frames)
+        stacked_action_planes = make_action_planes(
+            empty_actions, num_rows, num_cols, dim_action
+        )
+        empty_obs = jnp.concatenate(
+            [stacked_frame_planes, stacked_action_planes],
+            axis=-1,
+        )
         return {
             "history_frames": empty_frames,
             "history_actions": empty_actions,
+            "obs": empty_obs,
         }
 
     def apply(history_frames, history_actions, frame, action, is_first):
@@ -909,14 +896,19 @@ def make_obs_processor(
                 axis=-1,
             )
             return {
-                "obs": obs,
                 "history_frames": history_frames,
                 "history_actions": history_actions,
+                "obs": obs,
             }
 
         def _reset_then_make_obs(history_frames, history_actions, frame, action):
             ret = malloc()
-            return _make_obs(**ret, frame=frame, action=action)
+            return _make_obs(
+                history_frames=ret["history_frames"],
+                history_actions=ret["history_actions"],
+                frame=frame,
+                action=action,
+            )
 
         return jax.lax.cond(
             is_first,
@@ -945,7 +937,13 @@ def make_batch_env_mocker(batch_size):
         trajs: Tuple[TrajectorySample, ...],
     ):
         dispatcher.add_trajs(list(trajs))
-        dispatcher.refill()
+        try:
+            dispatcher.refill()
+        except ValueError:
+            logger.warning(
+                "Reanalyze early termination due to insufficient trajectory supply."
+            )
+            return {"dispatcher": dispatcher, "trajs": tuple(), "curr_step": 1000000}
         assert dispatcher.get_safe_buffer_refill_count() <= batch_size
         ret = dispatcher.step()
         return {"dispatcher": dispatcher, "trajs": tuple(), **ret}
@@ -960,12 +958,12 @@ def make_batch_env_mocker(batch_size):
 
 class TrajectoryDispatcher:
     def __init__(self, batch_size) -> None:
-        self._buffer: List[TrajectorySample] = []
+        self._buffer: Deque[TrajectorySample] = collections.deque(maxlen=batch_size * 2)
         self._mockers: Dict[int, Optional["TrajectoryMocker"]] = {
             i: None for i in range(batch_size)
         }
 
-    def add_trajs(self, trajs: List[TrajectorySample]) -> None:
+    def add_trajs(self, trajs: Sequence[TrajectorySample]) -> None:
         if trajs:
             self._buffer.extend(trajs)
             logger.debug(f"{len(trajs)} trajectories moved to buffer")

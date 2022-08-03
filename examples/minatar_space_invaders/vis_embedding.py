@@ -28,6 +28,7 @@ from lib import (
 )
 
 # %%
+
 jax.config.update("jax_disable_jit", False)
 config = get_config(
     {
@@ -35,7 +36,7 @@ config = get_config(
         "test_worker.planner.output_tree": True,
         "test_worker.planner.limit_depth": True,
     },
-    # path="/home/zeyi/miniconda3/envs/moozi/.guild/runs/450a45d648534b068cb86a8a4240e028/.guild/generated/wknjrz9s/config.yml",
+    path="/home/zeyi/miniconda3/envs/moozi/.guild/runs/8c066392ab9e4b4aa22598b2a93da050/.guild/sourcecode/examples/minatar_space_invaders/config.yml",
 )
 print(OmegaConf.to_yaml(config))
 
@@ -45,7 +46,7 @@ rb = ReplayBuffer(**config.replay.kwargs)
 vis = MinAtarVisualizer()
 
 # %%
-weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/8c066392ab9e4b4aa22598b2a93da050/checkpoints/25200.pkl"
+weights_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/8c066392ab9e4b4aa22598b2a93da050/checkpoints/42840.pkl"
 ps.restore(weights_path)
 
 # %%
@@ -61,45 +62,28 @@ traj_counter = 0
 hiddens = []
 labels = []
 images = []
+last_actions = []
 
 # %%
 u.tape["random_key"] = jax.random.PRNGKey(0)
 u.tape["is_last"] = np.array([True])
 
 # %%
-show_vis = True
-for i in range(5000):
+for i in range(10000):
     counter += 1
     print(counter)
     u.tick()
     hidden = u.tape["tree"].embeddings[0, 0].ravel()
     hiddens.append(hidden)
 
+    last_actions.append(int(u.tape['action'][0]))
     if u.tape["is_first"][0]:
         traj_counter += 1
     labels.append(traj_counter)
 
-    if show_vis:
-        image = vis.make_image(u.tape["frame"][0])
-        image = vis.add_descriptions(
-            image,
-            # action=u.tape["action"][0],
-            # q_values=u.tape["q_values"][0],
-            # action_probs=u.tape["action_probs"][0],
-            # prior_probs=u.tape["prior_probs"][0],
-            # root_value=u.tape["root_value"][0],
-            # reward=u.tape["reward"][0],
-            # visit_counts=u.tape["visit_counts"][0],
-        )
-        # display(image)
-        # graph = convert_tree_to_graph(
-        #     u.tape["tree"],
-        #     action_labels=["Terminal", "Stay", "Left", "Right", "Fire"],
-        # )
-        # graph.draw(f"/tmp/graph_{counter}.dot", prog="dot")
-        images.append(image)
+    image = vis.make_image(u.tape["frame"][0])
+    images.append(image)
 
-# %%
 # %%
 import math
 
@@ -107,9 +91,9 @@ grid = int(math.sqrt(len(images))) + 1
 image_height = int(8192 / grid)  # tensorboard supports sprite images up to 8192 x 8192
 image_width = int(8192 / grid)
 
-big_image = Image.new(
+sprite = Image.new(
     mode="RGB", size=(image_width * grid, image_height * grid), color=(0, 0, 0)
-)  # fully transparent
+) 
 
 for i in range(len(images)):
     row = int(i / grid)
@@ -118,16 +102,15 @@ for i in range(len(images)):
     img = img.resize((image_height, image_width), Image.ANTIALIAS)
     row_loc = row * image_height
     col_loc = col * image_width
-    big_image.paste(
+    sprite.paste(
         img, (col_loc, row_loc)
     ) 
     print(row_loc, col_loc)
 
-big_image.save("sprite.jpg")
+sprite.save("sprite.jpg")
 
 # %%
-image_height
-
+print(f"{image_width=}")
 
 # %%
 with open("embed.tsv", "w") as f:
@@ -137,38 +120,15 @@ with open("embed.tsv", "w") as f:
 
 # %%
 with open("label.tsv", "w") as f:
-    f.write("index\tlabel\tframe\n")
+    f.write("index\tepisode\tframe\taction\n")
     last_label = labels[0]
     counter = 0
-    for i, label in enumerate(labels):
+    for i, (label, action) in enumerate(zip(labels, last_actions)):
         if last_label != label:
             counter = 0
-        f.write(f"{i}\t{label}\t{counter}")
+        f.write(f"{i}\t{label}\t{counter}\t{action}")
         f.write("\n")
         counter += 1
         last_label = label
-
-# %%
-traj = rb.get_trajs_batch(1)
-# %%
-traj = traj[0]
-
-# %%
-targets = []
-traj_len = traj.action.shape[0]
-for i in range(traj_len):
-    target = make_target_from_traj(
-        traj,
-        start_idx=i,
-        discount=rb.discount,
-        num_unroll_steps=rb.num_unroll_steps,
-        num_td_steps=rb.num_td_steps,
-        num_stacked_frames=rb.num_stacked_frames,
-    )
-    value_diff = np.abs(target.n_step_return[0] - target.root_value[0])
-    targets.append(target)
-
-# %%gg
-t = targets[-1]
 
 # %%

@@ -419,7 +419,7 @@ def make_training_suite(
         consistency_loss_coef=consistency_loss_coef,
     )
     optimizer = optax.chain(
-        optax.clip_by_global_norm(5),
+        optax.clip_by_global_norm(1),
         optax.adam(learning_rate=lr),
     )
     training_state = TrainingState(

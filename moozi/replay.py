@@ -68,7 +68,7 @@ class ReplayBuffer:
         self._tb_logger = mz.logging.JAXBoardLoggerV2(
             name=self.name,
             time_delta=30,
-            log_dir="./tb/replay/",
+            log_dir="./tb/",
         )
         logger.remove()
         logger.add(f"logs/replay/{self.name}.log", level="DEBUG")

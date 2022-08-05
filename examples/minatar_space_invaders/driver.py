@@ -143,9 +143,10 @@ for epoch in range(config.train.num_epochs):
         test_worker.set.remote("state", ps.get_state.remote())
         test_result = test_worker.run.remote()
         terminal_logger.write.remote(test_result)
-        jb_logger.write.remote(test_result)
+        test_done = jb_logger.write.remote(test_result)
 
     if epoch % config.param_opt.save_interval == 0:
         ps.save.remote()
 
-ray.timeline(filename="/tmp/timeline.json")
+# ray.timeline(filename="/tmp/timeline.json")
+ray.get(test_done)

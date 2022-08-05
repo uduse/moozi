@@ -134,7 +134,7 @@ class ResNetArchitecture(NNArchitecture):
             hidden_state, (None, self.spec.repr_rows, self.spec.repr_cols, tower_dim)
         )
 
-        hidden_state = ConvBlock(self.spec.repr_channels)(hidden_state, is_training)
+        # hidden_state = ConvBlock(self.spec.repr_channels)(hidden_state, is_training)
         chex.assert_shape(
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
@@ -159,6 +159,7 @@ class ResNetArchitecture(NNArchitecture):
             (None, self.spec.repr_rows, self.spec.repr_cols, trunk_tower_dim),
         )
 
+        # TODO: use 1 channel conv?
         pred_trunk_flat = pred_trunk.reshape((pred_trunk.shape[0], -1))
         chex.assert_shape(
             pred_trunk_flat,
@@ -235,9 +236,9 @@ class ResNetArchitecture(NNArchitecture):
         next_hidden_state = ResTower(
             num_blocks=self.spec.dyna_state_blocks,
         )(dyna_trunk, is_training)
-        next_hidden_state = ConvBlock(self.spec.repr_channels)(
-            next_hidden_state, is_training
-        )
+        # next_hidden_state = ConvBlock(self.spec.repr_channels)(
+        #     next_hidden_state, is_training
+        # )
         chex.assert_shape(
             next_hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
@@ -270,6 +271,6 @@ def normalize_hidden_state(hidden_state):
     batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)
     batch_max = jnp.max(hidden_state, axis=(1, 2, 3), keepdims=True)
     hidden_state = (hidden_state - batch_min) / (
-        batch_max - batch_min + jnp.array(1e-10)
+        batch_max - batch_min + jnp.array(1e-12)
     )
     return hidden_state

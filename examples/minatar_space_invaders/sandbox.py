@@ -308,3 +308,16 @@ display(image)
 # print(f"{nn_out2.value.tolist()=}")
 # print(f"{nn_out2.reward.tolist()=}")
 # print("\n")
+
+# %% 
+
+pb_c_init = 1.25
+pb_c_base = 19000
+visit_counts = np.array([20, 0])
+node_visit = sum(visit_counts)
+prior_probs = np.array([0.9, 0.1])
+pb_c = pb_c_init + jnp.log((node_visit + pb_c_base + 1.) / pb_c_base)
+policy_score = jnp.sqrt(node_visit) * pb_c * prior_probs / (visit_counts + 1)
+print(policy_score)
+# print(policy_score[0] / policy_score[1])
+# %%

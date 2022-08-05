@@ -11,6 +11,8 @@ from moozi.core.link import link
 from moozi.nn import NNModel, RootFeatures, TransitionFeatures
 from moozi.laws import Law, get_keys
 
+from mctx._src import tree as tree_lib
+
 
 def make_paritial_recurr_fn(model, state, discount):
     def recurr_fn(params, random_key, action, hidden_state):
@@ -28,6 +30,41 @@ def make_paritial_recurr_fn(model, state, discount):
         return rnn_output, nn_output.hidden_state
 
     return recurr_fn
+
+
+def qtransform_by_parent_and_siblings_inherit(
+    tree: tree_lib.Tree,
+    node_index: chex.Numeric,
+    *,
+    epsilon: chex.Numeric = 1e-8,
+) -> chex.Array:
+    """Returns qvalues normalized by min, max over V(node) and qvalues.
+
+    Args:
+      tree: _unbatched_ MCTS tree state.
+      node_index: scalar index of the parent node.
+      epsilon: the minimum denominator for the normalization.
+
+    Returns:
+      Q-values normalized to be from the [0, 1] interval. The unvisited actions
+      will have zero Q-value. Shape `[num_actions]`.
+    """
+    chex.assert_shape(node_index, ())
+    qvalues = tree.qvalues(node_index)
+    visit_counts = tree.children_visits[node_index]
+    chex.assert_rank([qvalues, visit_counts, node_index], [1, 1, 0])
+    node_value = tree.node_values[node_index]
+    safe_qvalues = jnp.where(visit_counts > 0, qvalues, node_value)
+    chex.assert_equal_shape([safe_qvalues, qvalues])
+    min_value = jnp.minimum(node_value, jnp.min(safe_qvalues, axis=-1))
+    max_value = jnp.maximum(node_value, jnp.max(safe_qvalues, axis=-1))
+
+    completed_by_parent = jnp.where(visit_counts > 0, qvalues, node_value)
+    normalized = (completed_by_parent - min_value) / (
+        jnp.maximum(max_value - min_value, epsilon)
+    )
+    chex.assert_equal_shape([normalized, qvalues])
+    return normalized
 
 
 def make_planner(
@@ -88,6 +125,7 @@ def make_planner(
                 num_simulations=num_simulations,
                 max_depth=num_unroll_steps if limit_depth else None,
                 invalid_actions=invalid_actions,
+                qtransform=qtransform_by_parent_and_siblings_inherit,
                 **kwargs,
             )
 

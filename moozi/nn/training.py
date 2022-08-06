@@ -174,8 +174,8 @@ class MuZeroLossWithScalarTransform(LossFn):
         for i in range(self.num_unroll_steps):
             hidden_state = scale_gradient(network_output.hidden_state, 0.5)
 
-            if "hidden_state" not in info:
-                info["hidden_state"] = hidden_state
+            if i == 0 or i == 1:
+                info[f"hidden_state_{i}"] = hidden_state
             trans_feats = TransitionFeatures(
                 hidden_state=hidden_state,
                 action=batch.action.take(i + self.num_stacked_frames, axis=1),
@@ -247,13 +247,13 @@ class MuZeroLossWithScalarTransform(LossFn):
                 curr_projection, state = model.projection_inference(
                     params, state, network_output.hidden_state, is_training
                 )
-                next_projection, state = model.projection_inference(
-                    params, state, next_hidden_state, is_training
-                )
+                # next_projection, state = model.projection_inference(
+                #     params, state, next_hidden_state, is_training
+                # )
                 losses[f"loss/consistency_{str(i + 1)}"] = (
                     optax.cosine_distance(
                         curr_projection.reshape((batch_size, -1)),
-                        next_projection.reshape((batch_size, -1)),
+                        next_hidden_state.reshape((batch_size, -1)),
                     )
                     * transition_loss_scale
                     * self.consistency_loss_coef
@@ -350,10 +350,18 @@ def make_sgd_step_fn(
             target_update_period,
         )
 
+        target_state = rlax.periodic_update(
+            new_state,
+            training_state.state,
+            new_steps,
+            target_update_period,
+        )
+
         new_training_state = TrainingState(
             params=new_params,
             target_params=target_params,
             state=new_state,
+            target_state=target_state,
             opt_state=new_opt_state,
             steps=new_steps,
             rng_key=new_key,
@@ -426,6 +434,7 @@ def make_training_suite(
         params=params,
         target_params=params,
         state=state,
+        target_state=state,
         opt_state=optimizer.init(params),
         steps=0,
         rng_key=random_key,

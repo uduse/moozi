@@ -201,7 +201,7 @@ class ParameterServer:
 
     def get_params(self):
         logger.debug("getting params")
-        ret = self.training_state.params
+        ret = self.training_state.target_params
         if self.use_remote:
             return ray.put(ret)
         else:
@@ -209,7 +209,7 @@ class ParameterServer:
 
     def get_state(self):
         logger.debug("getting state")
-        ret = self.training_state.state
+        ret = self.training_state.target_state
         if self.use_remote:
             return ray.put(ret)
         else:

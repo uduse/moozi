@@ -105,6 +105,7 @@ class TrainingState(typing.NamedTuple):
     params: hk.Params
     target_params: hk.Params
     state: hk.State
+    target_state: hk.State
     opt_state: optax.OptState
     steps: int
     rng_key: jax.random.KeyArray

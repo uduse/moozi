@@ -38,7 +38,7 @@ def get_rb():
 
 train_workers = [
     ray.remote(num_gpus=config.env_worker.num_gpus)(RolloutWorker).remote(
-        partial(make_env_worker_universe, config), name=f"rollout_worker_{i}"
+        partial(make_env_worker_universe, config, i), name=f"rollout_worker_{i}"
     )
     for i in range(config.env_worker.num_workers)
 ]
@@ -50,7 +50,7 @@ test_worker = ray.remote(num_gpus=config.test_worker.num_gpus)(RolloutWorker).re
 reanalyze_workers = [
     ray.remote(num_gpus=config.reanalyze.num_gpus, num_cpus=config.reanalyze.num_cpus)(
         RolloutWorker
-    ).remote(partial(make_reanalyze_universe, config), name=f"reanalyze_worker_{i}")
+    ).remote(partial(make_reanalyze_universe, config, i), name=f"reanalyze_worker_{i}")
     for i in range(config.reanalyze.num_workers)
 ]
 

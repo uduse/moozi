@@ -193,7 +193,7 @@ class ReplayBuffer:
             ranking_weights = self._compute_ranking_weights()
             freq_weights = self._compute_freq_weights()
             weights = ranking_weights + freq_weights
-            weights += np.mean(weights)
+            weights = np.sqrt(weights)
             weights /= np.sum(weights)
         else:
             raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")

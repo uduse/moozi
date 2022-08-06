@@ -18,13 +18,13 @@ from moozi.core.utils import make_action_planes
 
 @dataclass
 class ResNetSpec(NNSpec):
-    repr_tower_blocks: int = 2
+    repr_tower_blocks: int = 6
     repr_tower_dim: int = 8
-    pred_tower_blocks: int = 2
+    pred_tower_blocks: int = 1
     pred_tower_dim: int = 8
-    dyna_tower_blocks: int = 2
+    dyna_tower_blocks: int = 1
     dyna_tower_dim: int = 8
-    dyna_state_blocks: int = 2
+    dyna_state_blocks: int = 1
 
 
 def conv_1x1(num_channels):
@@ -46,7 +46,7 @@ def conv_3x3(num_channels):
 
 
 def bn():
-    return hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)
+    return hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.99)
 
 
 @dataclass
@@ -54,7 +54,7 @@ class ConvBlock(hk.Module):
     num_channels: int
 
     def __call__(self, x, is_training):
-        x = bn()(x, is_training=is_training)
+        # x = bn()(x, is_training=is_training)
         # x = jax.nn.relu(x)
         x = conv_1x1(self.num_channels)(x)
         return x
@@ -104,7 +104,7 @@ class ResBlockV2(hk.Module):
 @dataclass
 class ResTower(hk.Module):
     num_blocks: int
-    block_cls: Type[hk.Module] = ResBlockV2
+    block_cls: Type[hk.Module] = ResBlock
 
     def __call__(self, x, is_training):
         for _ in range(self.num_blocks):
@@ -160,7 +160,8 @@ class ResNetArchitecture(NNArchitecture):
 
         chex.assert_shape(x, (None, self.spec.repr_rows, self.spec.repr_cols, None))
 
-        hidden_state = ConvBlock(tower_dim)(x, is_training)
+        # hidden_state = ConvBlock(tower_dim)(x, is_training)
+        hidden_state = conv_1x1(tower_dim)(x)
         hidden_state = ResTower(
             num_blocks=self.spec.repr_tower_blocks,
         )(hidden_state, is_training)
@@ -184,7 +185,8 @@ class ResNetArchitecture(NNArchitecture):
 
         # pred trunk
         trunk_tower_dim = self.spec.pred_tower_dim
-        hidden_state = ConvBlock(trunk_tower_dim)(hidden_state, is_training)
+        # hidden_state = ConvBlock(trunk_tower_dim)(hidden_state, is_training)
+        hidden_state = conv_1x1(trunk_tower_dim)(hidden_state)
         pred_trunk = ResTower(
             num_blocks=self.spec.pred_tower_blocks,
         )(hidden_state, is_training)

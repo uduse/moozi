@@ -88,8 +88,8 @@ def make_env_worker_universe(config, idx: int = 0):
             root_dir="env_worker_gifs",
         )
     else:
-        recorder = Law.wrap(lambda x: x)
-            
+        recorder = Law.wrap(lambda: {})
+
     final_law = sequential(
         [
             vec_env,
@@ -168,6 +168,7 @@ def make_reanalyze_universe(config, idx: int = 0):
     tape.update(final_law.malloc())
     return Universe(tape, final_law)
 
+
 def training_suite_factory(config):
     scalar_transform = make_scalar_transform(**config.scalar_transform)
     nn_arch_cls = eval(config.nn.arch_cls)
@@ -187,4 +188,3 @@ def training_suite_factory(config):
         target_update_period=config.train.target_update_period,
         consistency_loss_coef=config.train.consistency_loss_coef,
     )
-

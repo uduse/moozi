@@ -112,6 +112,7 @@ class JAXBoardLoggerV2(Logger):
             for datum in data_ready:
                 self._write_now_datum(datum, step)
             self._time = now
+            self._writer.flush()
 
         self._steps += 1
 

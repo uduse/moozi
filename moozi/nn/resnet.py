@@ -1,4 +1,5 @@
 from functools import partial
+from typing import Type
 import jax
 import jax.numpy as jnp
 import chex
@@ -26,6 +27,15 @@ class ResNetSpec(NNSpec):
     dyna_state_blocks: int = 2
 
 
+def conv_1x1(num_channels):
+    return hk.Conv2D(
+        num_channels,
+        (1, 1),
+        padding="same",
+        with_bias=False,
+    )
+
+
 def conv_3x3(num_channels):
     return hk.Conv2D(
         num_channels,
@@ -36,7 +46,7 @@ def conv_3x3(num_channels):
 
 
 def bn():
-    return hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.999)
+    return hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.9)
 
 
 @dataclass
@@ -44,9 +54,9 @@ class ConvBlock(hk.Module):
     num_channels: int
 
     def __call__(self, x, is_training):
-        x = conv_3x3(self.num_channels)(x)
         x = bn()(x, is_training=is_training)
-        x = jax.nn.relu(x)
+        # x = jax.nn.relu(x)
+        x = conv_1x1(self.num_channels)(x)
         return x
 
 
@@ -69,12 +79,36 @@ class ResBlock(hk.Module):
 
 
 @dataclass
+class ResBlockV2(hk.Module):
+    def __call__(self, x, is_training):
+        identity = x
+        num_channels = x.shape[-1]
+
+        x = bn()(x, is_training)
+        x = jax.nn.relu(x)
+        x = conv_1x1(num_channels)(x)
+
+        x = bn()(x, is_training)
+        x = jax.nn.relu(x)
+        x = conv_3x3(num_channels)(x)
+
+        x = bn()(x, is_training)
+        x = jax.nn.relu(x)
+        x = conv_1x1(num_channels)(x)
+
+        x = x + identity
+
+        return x
+
+
+@dataclass
 class ResTower(hk.Module):
     num_blocks: int
+    block_cls: Type[hk.Module] = ResBlockV2
 
     def __call__(self, x, is_training):
         for _ in range(self.num_blocks):
-            x = ResBlock()(x, is_training)
+            x = self.block_cls()(x, is_training)
         return x
 
 
@@ -226,7 +260,6 @@ class ResNetArchitecture(NNArchitecture):
         dyna_trunk = ResTower(num_blocks=self.spec.dyna_tower_blocks)(
             dyna_trunk, is_training
         )
-        dyna_trunk_flat = dyna_trunk.reshape((dyna_trunk.shape[0], -1))
         chex.assert_shape(
             dyna_trunk,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.dyna_tower_dim),
@@ -245,6 +278,7 @@ class ResNetArchitecture(NNArchitecture):
         )
 
         # reward head
+        dyna_trunk_flat = dyna_trunk.reshape((dyna_trunk.shape[0], -1))
         r_head = hk.Linear(128)(dyna_trunk_flat)
         r_head = bn()(r_head, is_training)
         r_head = jax.nn.relu(r_head)
@@ -263,7 +297,7 @@ class ResNetArchitecture(NNArchitecture):
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
-        projected = ResBlock()(hidden_state, is_training)
+        projected = ResTower(1)(hidden_state, is_training)
         return projected
 
 

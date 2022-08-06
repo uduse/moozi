@@ -192,7 +192,8 @@ class ReplayBuffer:
         elif self.sampling_strategy == "hybrid":
             ranking_weights = self._compute_ranking_weights()
             freq_weights = self._compute_freq_weights()
-            weights = np.log(ranking_weights) * np.log(freq_weights)
+            weights = ranking_weights + freq_weights
+            weights += np.mean(weights)
             weights /= np.sum(weights)
         else:
             raise ValueError(f"Unknown sampling strategy: {self.sampling_strategy}")

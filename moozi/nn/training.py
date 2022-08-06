@@ -262,10 +262,6 @@ class MuZeroLossWithScalarTransform(LossFn):
         # all batched losses should be the shape of (batch_size,)
         tree.map_structure(lambda x: chex.assert_shape(x, (batch_size,)), losses)
 
-        losses["loss/l2"] = jnp.reshape(
-            params_l2_loss(params) * self.weight_decay, (1,)
-        )
-
         # apply importance sampling adjustment
         if self.use_importance_sampling:
             losses = tree.map_structure(
@@ -275,6 +271,10 @@ class MuZeroLossWithScalarTransform(LossFn):
             info["is_ratio/mean"] = jnp.mean(batch.importance_sampling_ratio)
             info["is_ratio/max"] = jnp.max(batch.importance_sampling_ratio)
             info["is_ratio/min"] = jnp.min(batch.importance_sampling_ratio)
+
+        losses["loss/l2"] = jnp.reshape(
+            params_l2_loss(params) * self.weight_decay, (1,)
+        )
 
         # sum all losses
         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
@@ -419,7 +419,7 @@ def make_training_suite(
         consistency_loss_coef=consistency_loss_coef,
     )
     optimizer = optax.chain(
-        optax.clip_by_global_norm(1),
+        optax.clip_by_global_norm(5),
         optax.adam(learning_rate=lr),
     )
     training_state = TrainingState(

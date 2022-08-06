@@ -32,107 +32,107 @@ class LoggerActor:
         self.logger.write(data)
 
 
-class ParameterOptimizer:
-    model: mz.nn.NNModel = field(init=False)
-    training_state: TrainingState = field(init=False)
-    sgd_step_fn: Callable = field(init=False)
-    use_remote: bool = False
+# class ParameterOptimizer:
+#     model: mz.nn.NNModel = field(init=False)
+#     training_state: TrainingState = field(init=False)
+#     sgd_step_fn: Callable = field(init=False)
+#     use_remote: bool = False
 
-    loggers: List[mz.logging.Logger] = field(default_factory=list)
+#     loggers: List[mz.logging.Logger] = field(default_factory=list)
 
-    _last_step_data: List[LogDatum] = field(default_factory=list)
-    _num_updates: int = 0
+#     _last_step_data: List[LogDatum] = field(default_factory=list)
+#     _num_updates: int = 0
 
-    def __post_init__(self):
-        logger.remove()
-        logger.add(sys.stderr, level="ERROR")
-        logger.add("logs/param_opt.log", level="DEBUG")
-        logger.info(f"Parameter optimizer created, {vars(self)}")
+#     def __post_init__(self):
+#         logger.remove()
+#         logger.add(sys.stderr, level="ERROR")
+#         logger.add("logs/param_opt.log", level="DEBUG")
+#         logger.info(f"Parameter optimizer created, {vars(self)}")
 
-    def setup(
-        self,
-        seed: int,
-        nn_arch_cls: NNArchitecture,
-        nn_spec: NNSpec,
-        weight_decay: float,
-        lr: float,
-        num_unroll_steps: int,
-    ):
-        self.model, self.trainig_state, self.sgd_step_fn = make_training_suite(
-            seed, nn_arch_cls, nn_spec, weight_decay, lr, num_unroll_steps
-        )
+#     def setup(
+#         self,
+#         seed: int,
+#         nn_arch_cls: NNArchitecture,
+#         nn_spec: NNSpec,
+#         weight_decay: float,
+#         lr: float,
+#         num_unroll_steps: int,
+#     ):
+#         self.model, self.trainig_state, self.sgd_step_fn = make_training_suite(
+#             seed, nn_arch_cls, nn_spec, weight_decay, lr, num_unroll_steps
+#         )
 
-    def update(self, big_batch: TrainTarget, batch_size: int):
-        if len(big_batch) == 0:
-            logger.error("Batch is empty, update() skipped.")
-            return
+#     def update(self, big_batch: TrainTarget, batch_size: int):
+#         if len(big_batch) == 0:
+#             logger.error("Batch is empty, update() skipped.")
+#             return
 
-        train_targets: List[TrainTarget] = unstack_sequence_fields(
-            big_batch, big_batch[0].shape[0]
-        )
-        if len(train_targets) % batch_size != 0:
-            logger.warning(
-                f"Batch size {batch_size} is not a divisor of the batch size {len(train_targets)}"
-            )
+#         train_targets: List[TrainTarget] = unstack_sequence_fields(
+#             big_batch, big_batch[0].shape[0]
+#         )
+#         if len(train_targets) % batch_size != 0:
+#             logger.warning(
+#                 f"Batch size {batch_size} is not a divisor of the batch size {len(train_targets)}"
+#             )
 
-        logger.debug(
-            f"updating with {len(train_targets)} samples, batch size {batch_size}"
-        )
+#         logger.debug(
+#             f"updating with {len(train_targets)} samples, batch size {batch_size}"
+#         )
 
-        for i in range(0, len(train_targets) - len(train_targets), batch_size):
-            batch_slice = train_targets[i : i + batch_size]
-            if len(batch_slice) != batch_size:
-                break
-            batch = stack_sequence_fields(batch_slice)
-            self.training_state, extra = self.sgd_step_fn(self.training_state, batch)
-            self._num_updates += 1
-            self._last_step_data = extra["step_data"]
+#         for i in range(0, len(train_targets) - len(train_targets), batch_size):
+#             batch_slice = train_targets[i : i + batch_size]
+#             if len(batch_slice) != batch_size:
+#                 break
+#             batch = stack_sequence_fields(batch_slice)
+#             self.training_state, extra = self.sgd_step_fn(self.training_state, batch)
+#             self._num_updates += 1
+#             self._last_step_data = extra["step_data"]
 
-        logger.debug(self.get_stats())
+#         logger.debug(self.get_stats())
 
-    def get_params_and_state(self) -> Union[ray.ObjectRef, Tuple[hk.Params, hk.State]]:
-        logger.debug("getting params and state")
-        ret = self.training_state.params, self.training_state.state
-        if self.use_remote:
-            return ray.put(ret)
-        else:
-            return ret
+#     def get_params_and_state(self) -> Union[ray.ObjectRef, Tuple[hk.Params, hk.State]]:
+#         logger.debug("getting params and state")
+#         ret = self.training_state.params, self.training_state.state
+#         if self.use_remote:
+#             return ray.put(ret)
+#         else:
+#             return ret
 
-    def get_model(self):
-        logger.debug("getting model")
-        return self.model
+#     def get_model(self):
+#         logger.debug("getting model")
+#         return self.model
 
-    def save(self, path):
-        logger.debug(f"saving model to {path}")
-        with open(path, "wb") as f:
-            cloudpickle.dump((self.training_state, self.model, self.n), f)
+#     def save(self, path):
+#         logger.debug(f"saving model to {path}")
+#         with open(path, "wb") as f:
+#             cloudpickle.dump((self.training_state, self.model, self.n), f)
 
-    def restore(self, path):
-        logger.debug(f"restoring model from {path}")
-        with open(path, "rb") as f:
-            self.training_state, self.model, self.sgd_step_fn = cloudpickle.load(f)
+#     def restore(self, path):
+#         logger.debug(f"restoring model from {path}")
+#         with open(path, "rb") as f:
+#             self.training_state, self.model, self.sgd_step_fn = cloudpickle.load(f)
 
-    def make_loggers(self, loggers_factory: Callable[[], List[mz.logging.Logger]]):
-        self.loggers = loggers_factory()
-        logging.info("setting loggers" + str(self.loggers))
+#     def make_loggers(self, loggers_factory: Callable[[], List[mz.logging.Logger]]):
+#         self.loggers = loggers_factory()
+#         logging.info("setting loggers" + str(self.loggers))
 
-    def get_stats(self):
-        return dict(num_updates=self._num_updates)
+#     def get_stats(self):
+#         return dict(num_updates=self._num_updates)
 
-    def log(self):
-        for logger in self.loggers:
-            if isinstance(logger, mz.logging.JAXBoardLoggerV2):
-                logger.write(
-                    LogDatum.from_any(self.get_stats())
-                    + LogDatum.from_any(self._last_step_data)
-                )
-            elif isinstance(logger, mz.logging.TerminalLogger):
-                logger.write(self.get_stats())
+#     def log(self):
+#         for logger in self.loggers:
+#             if isinstance(logger, mz.logging.JAXBoardLoggerV2):
+#                 logger.write(
+#                     LogDatum.from_any(self.get_stats())
+#                     + LogDatum.from_any(self._last_step_data)
+#                 )
+#             elif isinstance(logger, mz.logging.TerminalLogger):
+#                 logger.write(self.get_stats())
 
-    def close(self):
-        for logger in self.loggers:
-            if isinstance(logger, mz.logging.JAXBoardLoggerV2):
-                logger.close()
+#     def close(self):
+#         for logger in self.loggers:
+#             if isinstance(logger, mz.logging.JAXBoardLoggerV2):
+#                 logger.close()
 
 
 class ParameterServer:
@@ -214,6 +214,10 @@ class ParameterServer:
             return ray.put(ret)
         else:
             return ret
+
+    def set_state(self, state):
+        logger.debug("setting state")
+        self.training_state.state = state
 
     def get_model(self):
         logger.debug("getting model")

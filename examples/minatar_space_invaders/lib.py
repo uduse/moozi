@@ -82,11 +82,20 @@ def make_env_worker_universe(config, idx: int = 0):
     policy = sequential([obs_processor, planner])
     if not config.debug:
         policy = policy.jit(max_trace=1, backend="gpu")
+    if idx == 0:
+        recorder = make_min_atar_gif_recorder(
+            n_channels=config.env.num_channels,
+            root_dir="env_worker_gifs",
+        )
+    else:
+        recorder = Law.wrap(lambda x: x)
+            
     final_law = sequential(
         [
             vec_env,
             policy,
             make_traj_writer(num_envs),
+            recorder,
             make_steps_waiter(config.env_worker.num_steps),
         ]
     )

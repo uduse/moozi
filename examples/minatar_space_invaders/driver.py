@@ -68,7 +68,9 @@ num_steps_per_epoch = (
     * config.reanalyze.num_envs
     * config.reanalyze.num_steps
 )
-num_updates = int(config.train.update_step_ratio * num_steps_per_epoch / config.train.batch_size)
+num_updates = int(
+    config.train.update_step_ratio * num_steps_per_epoch / config.train.batch_size
+)
 logger.info(f"Num steps per epoch: {num_steps_per_epoch}")
 logger.info(f"Num updates per epoch: {num_updates}")
 samples: list = []
@@ -81,9 +83,9 @@ for epoch in range(config.train.num_epochs):
     logger.info(f"epoch {epoch}")
 
     # sync
-    ray.get(ps.log_tensorboard.remote())
+    ray.get(ps.log_tensorboard.remote(epoch))
     for rb in rbs:
-        rb.log_tensorboard.remote()
+        rb.log_tensorboard.remote(epoch)
         rb.apply_decay.remote()
 
     for sample in samples:
@@ -116,9 +118,7 @@ for epoch in range(config.train.num_epochs):
             batch = rb.get_train_targets_batch.remote(
                 batch_size=config.train.batch_size * updates_per_replay
             )
-            ps.update.remote(
-                batch, batch_size=config.train.batch_size
-            )
+            ps.update.remote(batch, batch_size=config.train.batch_size)
         # terminal_logger.write.remote(ps_update_result)
 
     if start_training and config.reanalyze.num_workers > 0:

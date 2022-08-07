@@ -249,6 +249,8 @@ class ReplayBuffer:
         with open(path, "rb") as f:
             self.__dict__ = cloudpickle.load(f)
 
-    def log_tensorboard(self):
+    def log_tensorboard(self, step: Optional[int] = None):
         log_datum = LogDatum.from_any(self.get_stats())
-        self._tb_logger.write(log_datum, step=self._steps)
+        if step is None:
+            step = self._steps
+        self._tb_logger.write(log_datum, step=step)

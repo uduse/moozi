@@ -189,9 +189,11 @@ class ParameterServer:
             ret = {"loss": extra["loss"]}
         return ret
 
-    def log_tensorboard(self):
+    def log_tensorboard(self, step: Optional[int] = None):
         log_datum = LogDatum.from_any(self._last_step_data)
-        self._tb_logger.write(log_datum, self.training_state.steps)
+        if step is None:
+            step = self.training_state.steps
+        self._tb_logger.write(log_datum, step=step)
         if "loss" in self._last_step_data:
             self._flog.info(f"loss: {self._last_step_data['loss']}")
         return log_datum

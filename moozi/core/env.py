@@ -17,6 +17,7 @@ from acme.wrappers import (
     AtariWrapper,
     GymAtariAdapter,
     GymWrapper,
+    StepLimitWrapper,
     wrap_all,
 )
 from acme.specs import make_environment_spec
@@ -123,12 +124,16 @@ def make_atari_env(level) -> dm_env.Environment:
     return wrap_all(env, wrapper_list)
 
 
-def make_minatar_env(level) -> dm_env.Environment:
-    env = gym.make("MinAtar/" + level)
+def make_minatar_env(level, **kwargs) -> dm_env.Environment:
+    env = gym.make("MinAtar/" + level, sticky_action_prob=0.0)
 
+    max_episode_len = 108000
     wrapper_list = [
         GymWrapper,
-        SinglePrecisionWrapper,
+        functools.partial(
+            StepLimitWrapper,
+            step_limit=max_episode_len,
+        ),
     ]
 
     return wrap_all(env, wrapper_list)

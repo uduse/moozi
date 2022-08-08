@@ -12,20 +12,6 @@
         - exclude:
             dir: local_deps
 
-- model: seaquest
-  operations:
-    train:
-      default: true
-      main: examples.minatar_seaquest.main
-      output-scalars: off
-      flags-dest: config:examples/minatar_seaquest/config.yml
-      flags-import: all
-      sourcecode:
-        - "*.py"
-        - "*.yml"
-        - exclude:
-            dir: local_deps
-
 - model: space_invaders
   operations:
     train:
@@ -84,70 +70,22 @@
       flags:
         env.name: MinAtar:Seaquest-v1
 
-    # tune:
-
-    #   description: tune catch
-    #   steps:
-    #     - run: run
-    #       tag: tune
-    #       maximize: "actor:rolling_reward"
-    #       max-trials: 50
-    #       optimizer: gbrt
-    #       flags:
-    #         batch_size: 2048
-    #         dim_repr: [1, 2, 4, 8, 16]
-    #         lr: loguniform[1e-4:5e-2]
-    #         max_replay_size: loguniform[1e3:1e7]
-    #         num_steps: 500_000
-    #         obs_ratio: loguniform[1e2:1e4]
-    #         weight_decay: loguniform[1e-5:1e-2]
-    #         entropy_reg: loguniform[5e-2:2]
-#   default: true
-#   operations:
-#     run:
-#       # default: true
-#       main: scripts.main
-#       output-scalars: off
-#       flags-import: all
-#       sourcecode:
-#         - "*.py"
-#         - "*.yml"
-#         - exclude:
-#             dir: local_deps
-
-# - model: pg
-#   descript: Policy Gradient method on the game of Catch
-#   operations:
-#     run:
-#       default: true
-#       main: scripts.policy_gradient
-#       output-scalars: off
-#       flags-import: all
-#       # plugins: all
-#     sanity:
-#       description: sanity check
-#       steps:
-#         - run: run
-#           flags:
-#             batch_size: 10
-#             min_observations: 10
-#             num_steps: 100
-#             platform: cpu
-#             use_log: false
-#     tune:
-#       description: tune PG
-#       steps:
-#         - run: run
-#           tag: tune
-#           maximize: "actor:rolling_reward"
-#           max-trials: 50
-#           optimizer: gbrt
-#           flags:
-#             batch_size: 2048
-#             dim_repr: [1, 2, 4, 8, 16]
-#             lr: loguniform[1e-4:5e-2]
-#             max_replay_size: loguniform[1e3:1e7]
-#             num_steps: 500_000
-#             obs_ratio: loguniform[1e2:1e4]
-#             weight_decay: loguniform[1e-5:1e-2]
-#             entropy_reg: loguniform[5e-2:2]
+- model: freeway
+  operations:
+    train:
+      default: true
+      main: examples.minatar_space_invaders.driver
+      output-scalars: off
+      flags-dest: config:examples/minatar_space_invaders/config.yml
+      flags-import: all
+      requires:
+        - file: courier.ttf
+        - file: .env
+        - file: examples/minatar_space_invaders/lib.py
+      sourcecode:
+        - "*.py"
+        - "*.yml"
+        - exclude:
+            dir: local_deps
+      flags:
+        env.name: MinAtar:Freeway-v1

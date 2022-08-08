@@ -47,14 +47,14 @@ nn:
     obs_channels: auto
     repr_rows: 10
     repr_cols: 10
-    repr_channels: 48
+    repr_channels: 32
     dim_action: ${dim_action}
     repr_tower_blocks: 6
-    repr_tower_dim: 48
+    repr_tower_dim: 32
     pred_tower_blocks: 1
-    pred_tower_dim: 48
+    pred_tower_dim: 32
     dyna_tower_blocks: 1
-    dyna_tower_dim: 48
+    dyna_tower_dim: 32
     dyna_state_blocks: 1
 
 train:
@@ -78,7 +78,7 @@ env_worker:
     dim_action: ${dim_action}
     discount: ${discount}
     num_unroll_steps: ${num_unroll_steps}
-    num_simulations: 50
+    num_simulations: 25
     kwargs:
       dirichlet_alpha: 0.2
       dirichlet_fraction: 0.2
@@ -86,16 +86,16 @@ env_worker:
       pb_c_init: 2.25
 
 test_worker:
-  interval: 10
+  interval: 1
   num_cpus: 0
   num_gpus: 0.1
-  num_trajs: 10
+  num_trajs: 1
   planner:
     batch_size: 1
     dim_action: ${dim_action}
     discount: ${discount}
     num_unroll_steps: ${num_unroll_steps}
-    num_simulations: 50
+    num_simulations: 40
     kwargs:
       dirichlet_alpha: 0.1
       dirichlet_fraction: 0.1

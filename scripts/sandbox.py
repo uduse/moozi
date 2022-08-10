@@ -22,7 +22,7 @@ df = pd.DataFrame(columns=["Method", "Frames", "Average Return", "Game"])
 
 # %%
 # breakout
-x = [
+my_breakout_no_sticky = [
     0.8666666666666667,
     2.466666666666667,
     6.866666666666666,
@@ -59,7 +59,9 @@ for fname in ["f99.csv", "447.csv"]:
                 result[fname][int(float(line["step"]) * step_size)] = float(
                     line["value"]
                 )
-for xx, step in zip(x, [step for step, val in result["447.csv"].items()]):
+for xx, step in zip(
+    my_breakout_no_sticky, [step for step, val in result["447.csv"].items()]
+):
     df = pd.concat(
         [df, pd.DataFrame([["MooZi", step, xx, "Breakout"]], columns=df.columns)]
     )
@@ -190,6 +192,7 @@ with open("/home/zeyi/assets/asterix_train.json") as f:
 
 # %%
 # plot
+sns.set(font_scale=2)
 df = df.reset_index(drop=True)
 fig, axs = plt.subplots(
     nrows=4,
@@ -207,7 +210,7 @@ kwargs = dict(
     alpha=0.7,
 )
 fig.tight_layout()
-plt.subplots_adjust(hspace=0.2)
+plt.subplots_adjust(hspace=0.3)
 for i, game in enumerate(["Breakout", "SpaceInvaders", "Freeway", "Asterix"]):
     sns.lineplot(**kwargs, data=df[df["Game"] == game], ax=axs[i])
     axs[i].set_title(game)
@@ -336,18 +339,112 @@ df = df.drop(df[df["Num Simulations"] == 0].index)
 df["Num Simulations"] = df["Num Simulations"].astype("category")
 
 # %%
+sns.set(font_scale=2)
 sns.relplot(
     x="Frames",
     y="Average Return",
     hue="Num Simulations",
     data=df,
-    palette=sns.color_palette("ch:start=.2,rot=-.3", n_colors=6),
+    palette=sns.color_palette("ch:start=0.2,rot=-.3", n_colors=6),
     kind="line",
     height=6,
     aspect=20 / 9,
     linewidth=3,
-    alpha=0.7,
+    alpha=0.5,
 )
 
 # %%
-df["Num Simulations"]
+# Sticky with Non-Sticky
+df2 = pd.DataFrame(
+    columns=[
+        "Method",
+        "Frames",
+        "Average Return",
+        "With Sticky Actions",
+    ]
+)
+
+step_size = int(1e7 / 18)
+with open("/home/zeyi/447.csv") as f:
+    reader = csv.DictReader(f)
+    result = {}
+    for i, line in enumerate(reader):
+        if "return" in line["metric"]:
+            step = int(float(line["step"]))
+            print(step)
+            value = float(line["value"])
+            print(value)
+            df2 = pd.concat(
+                [
+                    df2,
+                    pd.DataFrame(
+                        [
+                            [
+                                "MooZi",
+                                int(step_size * step),
+                                float(value),
+                                "Yes",
+                            ]
+                        ],
+                        columns=df2.columns,
+                    ),
+                ]
+            )
+# %%
+df2
+
+# %%
+for xx, step in zip(
+    my_breakout_no_sticky, [step for step, val in result["447.csv"].items()]
+):
+    df2 = pd.concat(
+        [df2, pd.DataFrame([["MooZi", step, xx, "No"]], columns=df2.columns)]
+    )
+# %%
+
+for _, step in zip(
+    my_breakout_no_sticky, [step for step, val in result["447.csv"].items()]
+):
+    df2 = pd.concat([df2, pd.DataFrame([["PPO", step, 28, "No"]], columns=df2.columns)])
+df2 = pd.concat([df2, pd.DataFrame([["PPO", int(1e7), 28, "No"]], columns=df2.columns)])
+# %%
+
+for _, step in zip(
+    my_breakout_no_sticky, [step for step, val in result["447.csv"].items()]
+):
+    df2 = pd.concat([df2, pd.DataFrame([["AC", step, 18, "Yes"]], columns=df2.columns)])
+df2 = pd.concat([df2, pd.DataFrame([["AC", int(1e7), 18, "Yes"]], columns=df2.columns)])
+# %%
+
+# plot
+sns.set(font_scale=2.5)
+df2 = df2.reset_index(drop=True)
+fig, axs = plt.subplots(
+    nrows=2,
+    figsize=(16, 16),
+    sharey=True,
+    sharex=True,
+)
+
+kwargs = dict(
+    x="Frames",
+    y="Average Return",
+    hue="Method",
+    hue_order=df2["Method"].unique(),
+    linewidth=5,
+    alpha=0.7,
+)
+fig.tight_layout()
+plt.subplots_adjust(hspace=0.2)
+sns.lineplot(**kwargs, data=df2[df2["With Sticky Actions"] == "Yes"], ax=axs[0])
+sns.lineplot(**kwargs, data=df2[df2["With Sticky Actions"] == "No"], ax=axs[1])
+axs[0].set_title('With Sticky Actions')
+axs[1].set_title('Without Sticky Actions')
+handles, labels = axs[-1].get_legend_handles_labels()
+axs[0].legend().remove()
+axs[1].legend().remove()
+leg = fig.legend(handles, labels, loc='upper right')
+for line in leg.get_lines():
+    line.set_linewidth(4.0)
+    line.set_alpha(0.7)
+# %%

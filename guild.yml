@@ -89,3 +89,23 @@
             dir: local_deps
       flags:
         env.name: MinAtar:Freeway-v1
+
+- model: asterix
+  operations:
+    train:
+      default: true
+      main: examples.minatar_space_invaders.driver
+      output-scalars: off
+      flags-dest: config:examples/minatar_space_invaders/config.yml
+      flags-import: all
+      requires:
+        - file: courier.ttf
+        - file: .env
+        - file: examples/minatar_space_invaders/lib.py
+      sourcecode:
+        - "*.py"
+        - "*.yml"
+        - exclude:
+            dir: local_deps
+      flags:
+        env.name: MinAtar:Asterix-v1

@@ -68,10 +68,16 @@ num_steps_per_epoch = (
     * config.reanalyze.num_envs
     * config.reanalyze.num_steps
 )
+num_env_steps_per_epoch = (
+    config.env_worker.num_steps
+    * config.env_worker.num_workers
+    * config.env_worker.num_envs
+)
 num_updates = int(
     config.train.update_step_ratio * num_steps_per_epoch / config.train.batch_size
 )
 logger.info(f"Num steps per epoch: {num_steps_per_epoch}")
+logger.info(f"Num env steps per epoch: {num_env_steps_per_epoch}")
 logger.info(f"Num updates per epoch: {num_updates}")
 samples: list = []
 
@@ -79,7 +85,9 @@ for w in train_workers + reanalyze_workers:
     w.set.remote("params", ps.get_params.remote())
     w.set.remote("state", ps.get_state.remote())
 
-for epoch in range(config.train.num_epochs):
+# num_epochs = config.train.num_epochs
+num_epochs = int(1e7 / num_env_steps_per_epoch + 0.5)
+for epoch in range(num_epochs):
     logger.info(f"epoch {epoch}")
 
     # sync

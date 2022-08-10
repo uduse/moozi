@@ -230,7 +230,7 @@ class ReplayBuffer:
     def _compute_value_diff_weights(self):
         priorities = np.array([item.priority for item in self._train_targets])
         weights = priorities
-        weights += 0.1
+        weights += 0.001
         weights /= np.sum(weights)
         return weights
 

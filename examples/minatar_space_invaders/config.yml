@@ -14,7 +14,7 @@ env:
   num_channels: auto
 
 replay:
-  num_shards: 6
+  num_shards: 4
   kwargs:
     use_remote: true
     max_trajs_size: 5_000
@@ -68,8 +68,8 @@ train:
   consistency_loss_coef: 2.0
 
 env_worker:
-  num_workers: 30
-  num_envs: 16
+  num_workers: 24
+  num_envs: 24
   num_cpus: 1
   num_gpus: 0.1
   num_steps: 100

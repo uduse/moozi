@@ -127,7 +127,7 @@ def make_atari_env(level) -> dm_env.Environment:
 def make_minatar_env(level, **kwargs) -> dm_env.Environment:
     env = gym.make("MinAtar/" + level, sticky_action_prob=0.0)
 
-    max_episode_len = 108000
+    max_episode_len = 7200
     wrapper_list = [
         GymWrapper,
         functools.partial(

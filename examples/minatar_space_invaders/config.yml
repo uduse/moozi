@@ -17,7 +17,7 @@ replay:
   num_shards: 4
   kwargs:
     use_remote: true
-    max_trajs_size: 5_000
+    max_trajs_size: 2_000
     max_targets_size: 500_000
     sampling_strategy: hybrid
     num_unroll_steps: ${num_unroll_steps}
@@ -68,8 +68,8 @@ train:
   consistency_loss_coef: 2.0
 
 env_worker:
-  num_workers: 24
-  num_envs: 24
+  num_workers: 20
+  num_envs: 32
   num_cpus: 1
   num_gpus: 0.1
   num_steps: 100
@@ -86,35 +86,35 @@ env_worker:
       pb_c_init: 2.25
 
 test_worker:
-  interval: 1
+  interval: 10
   num_cpus: 0
   num_gpus: 0.1
-  num_trajs: 1
+  num_trajs: 10
   planner:
     batch_size: 1
     dim_action: ${dim_action}
     discount: ${discount}
     num_unroll_steps: ${num_unroll_steps}
-    num_simulations: 40
+    num_simulations: 50
     kwargs:
       dirichlet_alpha: 0.1
       dirichlet_fraction: 0.1
       temperature: 0.25
-      pb_c_init: 2.5
+      pb_c_init: 1.75
 
 reanalyze:
   num_workers: 0
   num_envs: 32
   num_cpus: 1
   num_gpus: 0.1
-  num_steps: 50
-  update_period: 10
+  num_steps: 100
+  update_period: 1
   planner:
     dim_action: ${dim_action}
     discount: ${discount}
     num_unroll_steps: ${num_unroll_steps}
-    num_simulations: 50
+    num_simulations: 25
     kwargs:
-      dirichlet_alpha: 0.2
-      dirichlet_fraction: 0.2
+      dirichlet_alpha: 0.1
+      dirichlet_fraction: 0.1
       pb_c_init: 1.75

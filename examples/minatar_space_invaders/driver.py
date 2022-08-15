@@ -87,6 +87,7 @@ for w in train_workers + reanalyze_workers:
 
 # num_epochs = config.train.num_epochs
 num_epochs = int(1e7 / num_env_steps_per_epoch + 0.5)
+print(f"Num Epochs: {num_epochs}")
 for epoch in range(num_epochs):
     logger.info(f"epoch {epoch}")
 

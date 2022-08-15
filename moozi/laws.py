@@ -683,7 +683,7 @@ def make_env_mocker():
         ret = {
             "curr_traj_index": curr_traj_index + 1,
             "frame": np.expand_dims(traj.frame[curr_traj_index], axis=0),
-            "next_action": np.expand_dims(traj.action[curr_traj_index], axis=0),
+            "action": np.expand_dims(traj.action[curr_traj_index], axis=0),
             "reward": np.expand_dims(traj.last_reward[curr_traj_index], axis=0),
             "legal_actions_mask": np.expand_dims(
                 traj.legal_actions_mask[curr_traj_index], axis=0
@@ -1034,7 +1034,7 @@ class TrajectoryMocker:
 
         ret = {
             "frame": curr_slice.frame,
-            "next_action": curr_slice.action,
+            "action": curr_slice.action,
             "reward": curr_slice.last_reward,
             "legal_actions_mask": curr_slice.legal_actions_mask,
             "to_play": curr_slice.to_play,

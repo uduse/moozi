@@ -142,6 +142,7 @@ def make_reanalyze_universe(config, idx: int = 0):
         num_stacked_frames=config.num_stacked_frames,
         dim_action=config.dim_action,
     ).vmap(batch_size)
+    config.reanalyze.planner.output_action = False
     planner = make_planner(
         model=model,
         batch_size=batch_size,
@@ -151,7 +152,6 @@ def make_reanalyze_universe(config, idx: int = 0):
         [
             obs_processor,
             planner,
-            Law.wrap(lambda next_action: {"action": next_action}),
         ]
     )
     if not config.debug:

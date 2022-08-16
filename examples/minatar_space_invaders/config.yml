@@ -17,7 +17,7 @@ replay:
   num_shards: 4
   kwargs:
     use_remote: true
-    max_trajs_size: 2_000
+    max_trajs_size: 4_000
     max_targets_size: 500_000
     sampling_strategy: hybrid
     num_unroll_steps: ${num_unroll_steps}

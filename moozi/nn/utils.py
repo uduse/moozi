@@ -50,7 +50,7 @@ def make_param_opt_properties(config):
     frame_shape = env_spec.observations.observation.shape
     stacked_frame_shape = (config.num_stacked_frames,) + frame_shape
     nn_spec = mz.nn.NNSpec(
-        obs_rows=stacked_frame_shape,
+        frame_rows=stacked_frame_shape,
         dim_repr=config.dim_repr,
         dim_action=dim_action,
         repr_net_sizes=(128, 128),

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Callable, NamedTuple, Tuple, Type, Union
 
 import chex
+from flax import struct
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -35,24 +36,37 @@ class NNOutput(NamedTuple):
     hidden_state: Union[np.ndarray, jnp.ndarray]
 
 
-class RootFeatures(NamedTuple):
+# class RootFeatures(NamedTuple):
+#     """Features used in :any:`root_inference`."""
+
+#     #: (batch_size?, obs_rows, obs_cols, obs_channels)
+#     obs: Union[np.ndarray, jnp.ndarray]
+
+#     #: (batch_size?, 1)
+#     player: Union[np.ndarray, jnp.ndarray]
+
+
+class RootFeatures(struct.PyTreeNode):
     """Features used in :any:`root_inference`."""
 
-    #: (batch_size?, obs_rows, obs_cols, obs_channels)
-    obs: Union[np.ndarray, jnp.ndarray]
+    #: (batch_size?, H, W, L * C_e)
+    frames: chex.Array
+
+    #: (batch_size?, L)
+    actions: chex.Array
 
     #: (batch_size?, 1)
-    player: Union[np.ndarray, jnp.ndarray]
+    player: chex.Array
 
 
-class TransitionFeatures(NamedTuple):
+class TransitionFeatures(struct.PyTreeNode):
     """Features used in :any:`trans_inference`."""
 
     #: (batch_size?, repr_rows, repr_cols, repr_channels)
-    hidden_state: Union[np.ndarray, jnp.ndarray]
+    hidden_state: chex.Array
 
     #: (batch_size?, 1)
-    action: Union[np.ndarray, jnp.ndarray]
+    action: chex.Array
 
 
 @dataclass
@@ -68,16 +82,17 @@ class NNSpec:
     This base class includes essential information about the shapes of inputs and outputs of the three MuZero functions.
     Other architecture-specific information could be defined in the derived classes.
     """
+    dim_action: int
+    num_players: int
+    history_length: int
 
-    obs_rows: int
-    obs_cols: int
-    obs_channels: int
+    frame_rows: int
+    frame_cols: int
+    frame_channels: int
 
     repr_rows: int
     repr_cols: int
     repr_channels: int
-
-    dim_action: int
 
     scalar_transform: ScalarTransform
 
@@ -93,16 +108,13 @@ class NNArchitecture(hk.Module):
         super().__init__()
         self.spec = spec
 
-    def _repr_net(self, obs: jnp.ndarray, is_training: bool):
-        # TODO: add player info
+    def _repr_net(self, feats: RootFeatures, is_training: bool):
         raise NotImplementedError
 
     def _pred_net(self, hidden_state: jnp.ndarray, is_training: bool):
         raise NotImplementedError
 
-    def _dyna_net(
-        self, hidden_state: jnp.ndarray, action: jnp.ndarray, is_training: bool
-    ):
+    def _dyna_net(self, feats: TransitionFeatures, is_training: bool):
         raise NotImplementedError
 
     def _proj_net(self, hidden_state: jnp.ndarray, is_training: bool):
@@ -110,7 +122,7 @@ class NNArchitecture(hk.Module):
 
     def root_inference(self, root_feats: RootFeatures, is_training: bool):
         """Uses the representation function and the prediction function."""
-        hidden_state = self._repr_net(root_feats.obs, is_training)
+        hidden_state = self._repr_net(root_feats, is_training)
         value_logits, policy_logits = self._pred_net(hidden_state, is_training)
         reward_logits = jnp.zeros_like(value_logits)
 
@@ -136,11 +148,7 @@ class NNArchitecture(hk.Module):
 
     def trans_inference(self, trans_feats: TransitionFeatures, is_training: bool):
         """Uses the dynamics function and the prediction function."""
-        next_hidden_state, reward_logits = self._dyna_net(
-            trans_feats.hidden_state,
-            trans_feats.action,
-            is_training,
-        )
+        next_hidden_state, reward_logits = self._dyna_net(trans_feats, is_training)
         value_logits, policy_logits = self._pred_net(next_hidden_state, is_training)
         chex.assert_rank(
             [value_logits, reward_logits, policy_logits, next_hidden_state],
@@ -275,23 +283,25 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
     hk_transformed = hk.multi_transform_with_state(multi_transform_target)
 
     def init_params_and_state(random_key):
-        batch = 1
-        obs_shape = (batch, spec.obs_rows, spec.obs_cols, spec.obs_channels)
+        B = 1  # batch axis
+        frames_shape = (B, spec.history_length, spec.frame_rows, spec.frame_cols, spec.frame_channels)
+        actions_shape = (B, spec.history_length)
 
         root_feats = RootFeatures(
-            obs=jax.random.normal(random_key, shape=obs_shape),
-            player=jnp.zeros((batch,)),
+            frames=jnp.ones(shape=frames_shape, dtype=jnp.float32),
+            actions=jnp.ones(shape=actions_shape, dtype=jnp.int32),
+            player=jnp.zeros((B,), dtype=jnp.int32),
         )
 
-        hidden_state_shape = (batch, spec.repr_rows, spec.repr_cols, spec.repr_channels)
+        hidden_state_shape = (B, spec.repr_rows, spec.repr_cols, spec.repr_channels)
         trans_feats = TransitionFeatures(
-            hidden_state=jax.random.normal(random_key, hidden_state_shape),
-            action=jnp.zeros((batch,)),
+            hidden_state=jnp.ones(hidden_state_shape, dtype=jnp.float32),
+            action=jnp.zeros((B,), dtype=jnp.int32),
         )
         params, state = hk_transformed.init(
             random_key, root_feats, trans_feats, is_training=True
         )
-        
+
         # initialize with a random normal distribution to workaround
         # https://github.com/deepmind/dm-haiku/issues/361
         nn_out, state = hk_transformed.apply[0](

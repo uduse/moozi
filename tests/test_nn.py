@@ -14,6 +14,8 @@ from moozi.nn import (
     make_model,
     NNModel,
     ResNetSpec,
+    ResNetV2Architecture,
+    ResNetV2Spec
 )
 from moozi.nn.mlp import MLPSpec
 from moozi.nn.naive import NaiveArchitecture
@@ -25,8 +27,9 @@ from moozi.nn.naive import NaiveArchitecture
         (NaiveArchitecture, NNSpec),
         (MLPArchitecture, MLPSpec),
         (ResNetArchitecture, ResNetSpec),
+        (ResNetV2Architecture, ResNetV2Spec),
     ],
-    ids=["naive", "mlp", "resnet"],
+    ids=["naive", "mlp", "resnet", "resnet_v2"],
 )
 def model(env_spec, num_stacked_frames, request):
     arch_cls, spec_cls = request.param
@@ -40,9 +43,9 @@ def model(env_spec, num_stacked_frames, request):
     return make_model(
         arch_cls,
         spec_cls(
-            obs_rows=obs_rows,
-            obs_cols=obs_cols,
-            obs_channels=obs_channels,
+            frame_rows=obs_rows,
+            frame_cols=obs_cols,
+            frame_channels=obs_channels,
             repr_rows=obs_rows,
             repr_cols=obs_cols,
             repr_channels=2,

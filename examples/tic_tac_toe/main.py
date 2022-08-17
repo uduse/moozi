@@ -69,9 +69,9 @@ obs_rows, obs_cols, obs_channels = env_spec.observations.observation.shape
 
 # %%
 config.nn_spec = mz.nn.ResNetSpec(
-    obs_rows=obs_rows,
-    obs_cols=obs_cols,
-    obs_channels=obs_channels,
+    frame_rows=obs_rows,
+    frame_cols=obs_cols,
+    frame_channels=obs_channels,
     repr_rows=obs_rows,
     repr_cols=obs_cols,
     repr_channels=repr_channels,

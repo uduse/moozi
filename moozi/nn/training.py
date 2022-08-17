@@ -14,7 +14,7 @@ import tree
 from jax import vmap
 from moozi import ScalarTransform, TrainingState, TrainTarget
 from moozi.core.types import TrainingState, TrajectorySample
-from moozi.core.utils import make_action_planes, make_frame_planes
+from moozi.core.utils import make_one_hot_planes, make_frame_planes
 from moozi.laws import concat_stacked_to_obs, make_stacker
 from moozi.nn import (
     NNArchitecture,
@@ -102,7 +102,7 @@ def _make_obs_from_train_target(
     history_frames = batch.frame[:, step : step + num_stacked_frames, ...]
     stacked_frames = vmap(make_frame_planes)(history_frames)
     history_actions = batch.action[:, step : step + num_stacked_frames, ...]
-    stacked_actions = vmap(make_action_planes, in_axes=[0, None, None, None])(
+    stacked_actions = vmap(make_one_hot_planes, in_axes=[0, None, None, None])(
         history_actions, num_rows, num_cols, dim_action
     )
     obs = jnp.concatenate([stacked_frames, stacked_actions], axis=-1)

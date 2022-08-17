@@ -3,7 +3,7 @@ import pytest
 import jax
 
 from moozi.core.utils import (
-    make_action_planes,
+    make_one_hot_planes,
     make_frame_planes,
     push_and_rotate_out,
     push_and_rotate_out_planes,
@@ -34,7 +34,7 @@ def test_scalar_transform(support_min, support_max):
 
 
 def test_make_action_planes():
-    action_planes = make_action_planes(np.array([0, 1, 2]), 2, 2, 3)
+    action_planes = make_one_hot_planes(np.array([0, 1, 2]), 2, 2, 3)
     np.testing.assert_almost_equal(action_planes[0, 0, :3], [1 / 3, 0, 0])
     np.testing.assert_almost_equal(action_planes[0, 0, 3:6], [0, 1 / 3, 0])
     np.testing.assert_almost_equal(action_planes[0, 0, 6:9], [0, 0, 1 / 3])

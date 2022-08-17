@@ -1,4 +1,5 @@
 from typing import Optional, Sequence
+from flax import struct
 import mctx
 import chex
 import jax.numpy as jnp
@@ -239,3 +240,91 @@ def convert_tree_to_graph(
                 graph.add_edge(node_i, children_i, label=edge_to_str(node_i, a_i))
 
     return graph
+
+
+class Planner(struct.PyTreeNode):
+    batch_size: int
+    dim_action: int
+    model: NNModel = struct.field(pytree_node=False)
+    discount: float = 1.0
+    num_unroll_steps: int = struct.field(pytree_node=False, default=5)
+    num_simulations: int = struct.field(pytree_node=False, default=10)
+    limit_depth: bool = struct.field(pytree_node=False, default=True)
+    use_gumbel: bool = struct.field(pytree_node=False, default=True)
+
+    class PlannerFeed(struct.PyTreeNode):
+        params: hk.Params
+        state: hk.State
+        root_feats: RootFeatures
+        legal_actions: chex.Array
+        random_key: chex.PRNGKey
+
+    class PlannerOut(struct.PyTreeNode):
+        action: Optional[chex.ArrayDevice]
+        action_probs: chex.Array
+        tree: Optional[mctx.Tree]
+        prior_probs: chex.Array
+        visit_counts: chex.Array
+        q_values: chex.Array
+        root_value: chex.Array
+
+    def run(self, feed: "PlannerFeed") -> "PlannerOut":
+        is_training = False
+        nn_output, _ = self.model.root_inference(
+            feed.params, feed.state, feed.root_feats, is_training
+        )
+        root = mctx.RootFnOutput(
+            prior_logits=nn_output.policy_logits,
+            value=nn_output.value,
+            embedding=nn_output.hidden_state,
+        )
+        invalid_actions = jnp.logical_not(feed.legal_actions)
+
+        if self.use_gumbel:
+            mctx_out = mctx.gumbel_muzero_policy(
+                params=feed.params,
+                rng_key=feed.random_key,
+                root=root,
+                recurrent_fn=make_paritial_recurr_fn(
+                    self.model, feed.state, self.discount
+                ),
+                num_simulations=self.num_simulations,
+                max_depth=self.num_unroll_steps if self.limit_depth else None,
+                invalid_actions=invalid_actions,
+                max_num_considered_actions=16,
+            )
+        else:
+            mctx_out = mctx.muzero_policy(
+                params=feed.params,
+                rng_key=feed.random_key,
+                root=root,
+                recurrent_fn=make_paritial_recurr_fn(
+                    self.model, feed.state, self.discount
+                ),
+                num_simulations=self.num_simulations,
+                max_depth=self.num_unroll_steps if self.limit_depth else None,
+                invalid_actions=invalid_actions,
+                qtransform=qtransform_by_parent_and_siblings_inherit,
+            )
+
+        action = mctx_out.action
+        stats = mctx_out.search_tree.summary()
+        prior_probs = jax.nn.softmax(nn_output.policy_logits)
+        visit_counts = stats.visit_counts
+        action_probs = mctx_out.action_weights
+        q_values = stats.qvalues
+        root_value = stats.value
+        # if self.output_tree:
+        tree = mctx_out.search_tree
+        # else:
+        #     tree = None
+
+        return self.PlannerOut(
+            action=action,
+            action_probs=action_probs,
+            tree=tree,
+            prior_probs=prior_probs,
+            visit_counts=visit_counts,
+            q_values=q_values,
+            root_value=root_value,
+        )

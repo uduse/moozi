@@ -1,13 +1,15 @@
-from dataclasses import dataclass
-import jax
+import functools
+import time
 import os
 import random
-import functools
+from dataclasses import dataclass
+from pathlib import Path
 
 import acme.jax.variable_utils
 import anytree
 import chex
 import dm_env
+import jax
 import numpy as np
 from anytree.exporter import DotExporter, UniqueDotExporter
 
@@ -46,23 +48,6 @@ def frame_to_str_gen(frame):
 
 def frame_to_str(frame):
     return "".join(frame_to_str_gen(frame))
-
-
-def as_coroutine(func):
-    import inspect
-
-    if inspect.iscoroutinefunction(func):
-        return func
-    else:
-
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        return wrapper
-
-
-import time
 
 
 @dataclass(repr=False)
@@ -133,3 +118,7 @@ def is_notebook():
             return False  # Other type (?)
     except NameError:
         return False  # Probably standard Python interpreter
+
+
+def get_project_root() -> Path:
+    return Path(__file__).parent.parent

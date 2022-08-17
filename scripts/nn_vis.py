@@ -17,7 +17,7 @@ dim_repr = 2
 dim_action = 3
 network = mz.nn.get_network(
     mz.nn.NNSpec(
-        obs_rows=dim_image,
+        frame_rows=dim_image,
         dim_repr=dim_repr,
         dim_action=dim_action,
         repr_net_sizes=(2,),

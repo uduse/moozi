@@ -32,7 +32,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from moozi.core import BASE_PLAYER, PolicyFeed, StepSample
 from moozi.core.utils import (
     make_frame_planes,
-    make_action_planes,
+    make_one_hot_planes,
     push_and_rotate_out_planes,
     push_and_rotate_out,
 )
@@ -870,7 +870,7 @@ def make_obs_processor(
             dtype=jnp.int32,
         )
         stacked_frame_planes = make_frame_planes(empty_frames)
-        stacked_action_planes = make_action_planes(
+        stacked_action_planes = make_one_hot_planes(
             empty_actions, num_rows, num_cols, dim_action
         )
         empty_obs = jnp.concatenate(
@@ -888,7 +888,7 @@ def make_obs_processor(
             history_frames = push_and_rotate_out(history_frames, frame)
             history_actions = push_and_rotate_out(history_actions, action)
             stacked_frame_planes = make_frame_planes(history_frames)
-            stacked_action_planes = make_action_planes(
+            stacked_action_planes = make_one_hot_planes(
                 history_actions, num_rows, num_cols, dim_action
             )
             obs = jnp.concatenate(
@@ -1057,3 +1057,4 @@ class TrajectoryMocker:
     @property
     def is_done(self):
         return self.idx == -1
+        

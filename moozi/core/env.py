@@ -1,9 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import pyspiel
+import chex
 import numpy as np
 import jax.numpy as jnp
 import functools
 from typing import List
-from acme.utils.tree_utils import stack_sequence_fields
+from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from loguru import logger
 import uuid
 import gym
@@ -20,9 +22,10 @@ from acme.wrappers import (
     StepLimitWrapper,
     wrap_all,
 )
-from acme.specs import make_environment_spec
+from acme.specs import make_environment_spec, EnvironmentSpec
 import open_spiel
 from absl import logging
+from moozi.core import BASE_PLAYER
 
 
 class TransformFrameWrapper(EnvironmentWrapper):
@@ -91,8 +94,15 @@ def make_openspiel_env_and_spec(env_name):
         def transform_frame(frame):
             return frame.reshape((board_size, board_size, 4))
 
+    elif raw_env.name == "breakthrough":
+
+        target_shape = raw_env.game.observation_tensor_shape()
+
+        def transform_frame(frame):
+            return np.moveaxis(frame.reshape(target_shape), 0, -1)
+
     else:
-        raise ValueError(f"Unknown OpenSpiel environment: {raw_env.name}")
+        raise ValueError(f"Game not support by MooZi: {raw_env.name}")
 
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
@@ -180,3 +190,127 @@ def make_env(env_name):
 @functools.lru_cache(maxsize=None)
 def make_spec(env_name):
     return make_env_and_spec(env_name)[1]
+
+
+@chex.dataclass
+class GIIEnvFeed:
+    action: np.ndarray
+    reset: np.ndarray
+
+
+@chex.dataclass
+class GIIEnvOut:
+    frame: np.ndarray
+    is_first: np.ndarray
+    is_last: np.ndarray
+    to_play: np.ndarray
+    reward: np.ndarray
+    legal_actions: np.ndarray
+
+    def cast(self):
+        return GIIEnvOut(
+            frame=np.asarray(self.frame, dtype=np.float32),
+            is_first=np.asarray(self.is_first, dtype=np.bool8),
+            is_last=np.asarray(self.is_last, dtype=np.bool8),
+            to_play=np.asarray(self.to_play, dtype=np.int32),
+            reward=np.asarray(self.reward, dtype=np.float32),
+            legal_actions=np.asarray(self.legal_actions, dtype=np.int32),
+        )
+
+# def slice_player(data, to_play, player: int):
+#     return tree.map_structure(lambda x: x[jnp.where(data, to_play.to_play == player)], data, to_play)
+
+
+@dataclass
+class GIIEnv:
+    name: str
+    num_players: int = field(init=False)
+    spec: EnvironmentSpec = field(init=False)
+
+    _backend: dm_env.Environment = field(init=False)
+
+    def __post_init__(self):
+        self._backend, self.spec = make_env_and_spec(self.name)
+        self.num_players = self._backend.num_players
+
+    @property
+    def dim_action(self):
+        return self.spec.actions.num_values + 1
+
+    def init(self) -> GIIEnvFeed:
+        return GIIEnvFeed(action=0, reset=True)
+
+    def step(self, input_: GIIEnvFeed) -> GIIEnvOut:
+        if input_.reset:
+            timestep = self._backend.reset()
+        else:
+            # action 0 is reserved for termination
+            timestep = self._backend.step([input_.action - 1])
+
+        to_play = self._backend.current_player
+        frame = self._get_frame(timestep, to_play)
+        reward = self._get_reward(timestep, to_play)
+        legal_actions = self._get_legal_actions(timestep, to_play)
+        return GIIEnvOut(
+            frame=frame,
+            is_first=timestep.first(),
+            is_last=timestep.last(),
+            to_play=to_play,
+            reward=reward,
+            legal_actions=legal_actions,
+        ).cast()
+
+    @staticmethod
+    def _get_reward(timestep: dm_env.TimeStep, to_play: int):
+        if to_play == pyspiel.PlayerId.TERMINAL:
+            return 0.0
+        elif timestep.reward is None:
+            return 0.0
+        elif isinstance(timestep.reward, np.ndarray):
+            return timestep.reward[BASE_PLAYER]
+        else:
+            raise ValueError
+
+    @staticmethod
+    def _get_frame(timestep: dm_env.TimeStep, to_play: int):
+        if to_play == pyspiel.PlayerId.TERMINAL:
+            return timestep.observation[0].observation
+        else:
+            return timestep.observation[to_play].observation
+
+    @staticmethod
+    def _get_legal_actions(timestep: dm_env.TimeStep, to_play: int):
+        assert isinstance(timestep.observation, list)
+        if to_play == pyspiel.PlayerId.TERMINAL:
+            la = np.zeros_like(timestep.observation[0].legal_actions)
+            return np.insert(la, 0, [1])
+        else:
+            la = timestep.observation[to_play].legal_actions
+            return np.insert(la, 0, [0])
+
+
+# TODO: extra dummy action handling into a class
+
+
+@dataclass
+class GIIVecEnv:
+    name: str
+    num_envs: int
+    num_players: int = field(init=False)
+
+    envs: List[GIIEnv] = field(init=False)
+
+    def __post_init__(self):
+        assert self.num_envs >= 1
+        self.envs = [GIIEnv(self.name) for i in range(self.num_envs)]
+        self.num_players = self.envs[0].num_players
+
+    def init(self) -> GIIEnvFeed:
+        return stack_sequence_fields([env.init() for env in self.envs])
+
+    def step(self, input_: GIIEnvFeed) -> GIIEnvOut:
+        input_list = unstack_sequence_fields(input_, self.num_envs)
+        output_list = tree.map_structure_with_path(
+            lambda path, env: env.step(input_list[path[0]]), self.envs
+        )
+        return stack_sequence_fields(output_list)

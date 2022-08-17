@@ -58,9 +58,9 @@ def model(env_spec, num_stacked_frames):
     obs_rows, obs_cols = single_frame_shape[0:2]
     obs_channels = num_stacked_frames * single_frame_shape[-1]
     nn_spec = mz.nn.NNSpec(
-        obs_rows=obs_rows,
-        obs_cols=obs_cols,
-        obs_channels=obs_channels,
+        frame_rows=obs_rows,
+        frame_cols=obs_cols,
+        frame_channels=obs_channels,
         repr_rows=obs_rows,
         repr_cols=obs_cols,
         repr_channels=2,

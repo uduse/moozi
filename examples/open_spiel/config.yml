@@ -1,0 +1,119 @@
+seed: 0
+discount: 1
+num_unroll_steps: 5
+num_td_steps: 1000
+history_length: 4
+dim_action: auto
+debug: false
+
+env:
+  name: OpenSpiel:breakthrough(rows=5,columns=6)
+  num_rows: auto
+  num_cols: auto
+  num_channels: auto
+  num_players: 2
+
+replay:
+  num_shards: 4
+  kwargs:
+    use_remote: true
+    max_trajs_size: 4_000
+    max_targets_size: 500_000
+    sampling_strategy: hybrid
+    num_unroll_steps: ${num_unroll_steps}
+    num_td_steps: ${num_td_steps}
+    history_length: ${history_length}
+    discount: ${discount}
+    decay: 0.99
+    save_dir: ./replay/
+
+scalar_transform:
+  support_min: -30
+  support_max: 30
+  eps: 1.0e-3
+
+param_opt:
+  use_remote: true
+  num_gpus: 0.6
+  save_interval: 10
+  save_dir: ./checkpoints/
+
+nn:
+  arch_cls: moozi.nn.ResNetV2Architecture
+  spec_cls: moozi.nn.ResNetV2Spec
+  spec_kwargs:
+    history_length: ${history_length}
+    num_players: ${env.num_players}
+    frame_rows: ${env.num_rows}
+    frame_cols: ${env.num_cols}
+    frame_channels: ${env.num_channels}
+    dim_action: ${dim_action}
+    repr_rows: ${env.num_rows}
+    repr_cols: ${env.num_cols}
+    repr_channels: 32
+    repr_tower_blocks: 6
+    pred_tower_blocks: 2
+    dyna_tower_blocks: 2
+    dyna_state_blocks: 2
+
+train:
+  num_epochs: 500
+  update_step_ratio: 4
+  batch_size: 1024
+  lr: 1.0e-2
+  weight_decay: 1.0e-4
+  target_update_period: 500
+  min_targets_to_train: 5_000
+  consistency_loss_coef: 2.0
+
+env_worker:
+  num_workers: 20
+  num_envs: 32
+  num_cpus: 1
+  num_gpus: 0.1
+  num_steps: 100
+  update_period: 10
+  planner:
+    dim_action: ${dim_action}
+    discount: ${discount}
+    num_unroll_steps: ${num_unroll_steps}
+    num_simulations: 25
+    kwargs:
+      dirichlet_alpha: 0.2
+      dirichlet_fraction: 0.2
+      temperature: 1.0
+      pb_c_init: 2.25
+
+test_worker:
+  interval: 10
+  num_cpus: 0
+  num_gpus: 0.1
+  num_trajs: 10
+  planner:
+    batch_size: 1
+    dim_action: ${dim_action}
+    discount: ${discount}
+    num_unroll_steps: ${num_unroll_steps}
+    num_simulations: 50
+    kwargs:
+      dirichlet_alpha: 0.1
+      dirichlet_fraction: 0.1
+      temperature: 0.25
+      pb_c_init: 1.75
+
+reanalyze:
+  num_workers: 0
+  num_envs: 32
+  num_cpus: 1
+  num_gpus: 0.1
+  num_steps: 100
+  update_period: 1
+  planner:
+    dim_action: ${dim_action}
+    discount: ${discount}
+    num_unroll_steps: ${num_unroll_steps}
+    num_simulations: 25
+    kwargs:
+      dirichlet_alpha: 0.1
+      dirichlet_fraction: 0.1
+      pb_c_init: 1.75

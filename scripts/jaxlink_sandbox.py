@@ -212,9 +212,9 @@ num_actions = 3
 model = mz.nn.make_model(
     mz.nn.MLPArchitecture,
     mz.nn.MLPSpec(
-        obs_rows=6,
-        obs_cols=6,
-        obs_channels=num_stacked_frames,
+        frame_rows=6,
+        frame_cols=6,
+        frame_channels=num_stacked_frames,
         repr_rows=6,
         repr_cols=6,
         repr_channels=1,

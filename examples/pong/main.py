@@ -78,9 +78,9 @@ dim_action = env_spec.actions.num_values
 
 # %%
 config.nn_spec = mz.nn.ResNetSpec(
-    obs_rows=obs_rows,
-    obs_cols=obs_cols,
-    obs_channels=obs_channels,
+    frame_rows=obs_rows,
+    frame_cols=obs_cols,
+    frame_channels=obs_channels,
     repr_rows=6,
     repr_cols=6,
     repr_channels=repr_channels,

@@ -13,17 +13,14 @@ from moozi.nn import (
     TransitionFeatures,
     NNArchitecture,
 )
-from moozi.core.utils import make_one_hot_planes
+from moozi.core.utils import make_frame_planes, make_one_hot_planes
 
 
 @dataclass
-class ResNetSpec(NNSpec):
+class ResNetV2Spec(NNSpec):
     repr_tower_blocks: int = 6
-    repr_tower_dim: int = 8
     pred_tower_blocks: int = 1
-    pred_tower_dim: int = 8
     dyna_tower_blocks: int = 1
-    dyna_tower_dim: int = 8
     dyna_state_blocks: int = 1
 
 
@@ -45,54 +42,25 @@ def conv_3x3(num_channels):
     )
 
 
-def bn():
-    return hk.BatchNorm(create_scale=True, create_offset=True, decay_rate=0.99)
-
-
-@dataclass
-class ConvBlock(hk.Module):
-    num_channels: int
-
-    def __call__(self, x, is_training):
-        # x = bn()(x, is_training=is_training)
-        # x = jax.nn.relu(x)
-        x = conv_1x1(self.num_channels)(x)
-        return x
-
-
-@dataclass
-class ResBlock(hk.Module):
-    def __call__(self, x, is_training):
-        identity = x
-        num_channels = x.shape[-1]
-
-        x = conv_3x3(num_channels)(x)
-        x = bn()(x, is_training)
-        x = jax.nn.relu(x)
-
-        x = conv_3x3(num_channels)(x)
-        x = bn()(x, is_training)
-        x = x + identity
-        x = jax.nn.relu(x)
-
-        return x
+def ln() -> hk.LayerNorm:
+    return hk.LayerNorm(axis=-1, param_axis=-1, create_scale=True, create_offset=True)
 
 
 @dataclass
 class ResBlockV2(hk.Module):
-    def __call__(self, x, is_training):
+    def __call__(self, x):
         identity = x
         num_channels = x.shape[-1]
 
-        x = bn()(x, is_training)
+        x = ln()(x)
         x = jax.nn.relu(x)
         x = conv_1x1(num_channels)(x)
 
-        x = bn()(x, is_training)
+        x = ln()(x)
         x = jax.nn.relu(x)
         x = conv_3x3(num_channels)(x)
 
-        x = bn()(x, is_training)
+        x = ln()(x)
         x = jax.nn.relu(x)
         x = conv_1x1(num_channels)(x)
 
@@ -104,21 +72,20 @@ class ResBlockV2(hk.Module):
 @dataclass
 class ResTower(hk.Module):
     num_blocks: int
-    block_cls: Type[hk.Module] = ResBlock
 
-    def __call__(self, x, is_training):
+    def __call__(self, x):
         for _ in range(self.num_blocks):
-            x = self.block_cls()(x, is_training)
+            x = ResBlockV2()(x)
         return x
 
 
-class ResNetArchitecture(NNArchitecture):
-    def __init__(self, spec: ResNetSpec):
+class ResNetV2Architecture(NNArchitecture):
+    def __init__(self, spec: ResNetV2Spec):
         super().__init__(spec)
-        assert isinstance(self.spec, ResNetSpec), "spec must be of type ResNetSpec"
-        self.spec: ResNetSpec
+        assert isinstance(self.spec, ResNetV2Spec), "spec must be of type ResNetV2Spec"
+        self.spec: ResNetV2Spec
 
-    def _repr_net(self, obs: jnp.ndarray, is_training: bool):
+    def _repr_net(self, feats: RootFeatures, is_training: bool):
         """
 
         Downsampling described in the paper:
@@ -138,38 +105,65 @@ class ResNetArchitecture(NNArchitecture):
             The kernel size is 3 x 3 for all operations.
 
         """
-        tower_dim = self.spec.repr_tower_dim
+
         chex.assert_shape(
-            obs,
-            (None, self.spec.frame_rows, self.spec.frame_cols, self.spec.frame_channels),
+            feats.frames,
+            (
+                None,
+                self.spec.history_length,
+                self.spec.frame_rows,
+                self.spec.frame_cols,
+                self.spec.frame_channels,
+            ),
         )
+        chex.assert_shape(feats.actions, (None, self.spec.history_length))
+        chex.assert_shape(feats.player, (None,))
 
-        x = obs
-
+        x_frames = jax.vmap(make_frame_planes)(feats.frames)
         # downsample
         obs_resolution = (self.spec.frame_rows, self.spec.frame_cols)
         repr_resolution = (self.spec.repr_rows, self.spec.repr_cols)
-        if obs_resolution != repr_resolution:
-            x = hk.Conv2D(128, (3, 3), stride=2, padding="SAME")(x)
-            x = ResTower(2)(x, is_training)
-            x = hk.Conv2D(256, (3, 3), stride=2, padding="SAME")(x)
-            x = ResTower(3)(x, is_training)
-            x = hk.AvgPool(window_shape=(3, 3, 1), strides=(2, 2, 1), padding="SAME")(x)
-            x = ResTower(3)(x, is_training)
-            x = hk.AvgPool(window_shape=(3, 3, 1), strides=(2, 2, 1), padding="SAME")(x)
-
-        chex.assert_shape(x, (None, self.spec.repr_rows, self.spec.repr_cols, None))
-
-        # hidden_state = ConvBlock(tower_dim)(x, is_training)
-        hidden_state = conv_1x1(tower_dim)(x)
-        hidden_state = ResTower(
-            num_blocks=self.spec.repr_tower_blocks,
-        )(hidden_state, is_training)
+        while obs_resolution != repr_resolution:
+            x_frames = hk.Conv2D(
+                self.spec.repr_channels, (2, 2), stride=1, padding="VALID"
+            )(x_frames)
+            x_frames = ResBlockV2()(x_frames)
+            x_frames = hk.AvgPool(
+                window_shape=(3, 3, 1), strides=(2, 2, 1), padding="SAME"
+            )(x_frames)
         chex.assert_shape(
-            hidden_state, (None, self.spec.repr_rows, self.spec.repr_cols, tower_dim)
+            x_frames, (None, self.spec.repr_rows, self.spec.repr_cols, None)
         )
 
-        # hidden_state = ConvBlock(self.spec.repr_channels)(hidden_state, is_training)
+        action_planes_maker = jax.vmap(
+            partial(
+                make_one_hot_planes,
+                num_rows=self.spec.repr_rows,
+                num_cols=self.spec.repr_cols,
+                num_classes=self.spec.dim_action,
+            )
+        )
+        x_actions = action_planes_maker(feats.actions)
+
+        player_planes_maker = jax.vmap(
+            partial(
+                make_one_hot_planes,
+                num_rows=self.spec.repr_rows,
+                num_cols=self.spec.repr_cols,
+                num_classes=self.spec.num_players,
+            )
+        )
+        x_player = player_planes_maker(feats.player.reshape(-1, 1))
+
+        stacked = jnp.concatenate([x_frames, x_actions, x_player], axis=-1)
+
+        hidden_state = conv_1x1(self.spec.repr_channels)(stacked)
+        hidden_state = ResTower(self.spec.repr_tower_blocks)(hidden_state)
+        chex.assert_shape(
+            hidden_state,
+            (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
+        )
+
         chex.assert_shape(
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
@@ -184,27 +178,24 @@ class ResNetArchitecture(NNArchitecture):
         )
 
         # pred trunk
-        trunk_tower_dim = self.spec.pred_tower_dim
-        # hidden_state = ConvBlock(trunk_tower_dim)(hidden_state, is_training)
-        hidden_state = conv_1x1(trunk_tower_dim)(hidden_state)
         pred_trunk = ResTower(
-            num_blocks=self.spec.pred_tower_blocks,
-        )(hidden_state, is_training)
+            self.spec.pred_tower_blocks,
+        )(hidden_state)
         chex.assert_shape(
             pred_trunk,
-            (None, self.spec.repr_rows, self.spec.repr_cols, trunk_tower_dim),
+            (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
 
         # TODO: use 1 channel conv?
         pred_trunk_flat = pred_trunk.reshape((pred_trunk.shape[0], -1))
         chex.assert_shape(
             pred_trunk_flat,
-            [None, self.spec.repr_rows * self.spec.repr_cols * trunk_tower_dim],
+            [None, self.spec.repr_rows * self.spec.repr_cols * self.spec.repr_channels],
         )
 
         # value head
         v_head = hk.Linear(128)(pred_trunk_flat)
-        v_head = bn()(v_head, is_training)
+        v_head = ln()(v_head)
         v_head = jax.nn.relu(v_head)
         v_head = hk.Linear(
             self.spec.scalar_transform.dim,
@@ -215,7 +206,7 @@ class ResNetArchitecture(NNArchitecture):
 
         # policy head
         p_head = hk.Linear(128)(pred_trunk_flat)
-        p_head = bn()(p_head, is_training)
+        p_head = ln()(p_head)
         p_head = jax.nn.relu(p_head)
         p_head = hk.Linear(
             self.spec.dim_action,
@@ -226,7 +217,9 @@ class ResNetArchitecture(NNArchitecture):
 
         return v_head, p_head
 
-    def _dyna_net(self, hidden_state, action, is_training):
+    def _dyna_net(self, feats: TransitionFeatures, is_training: bool):
+        hidden_state = feats.hidden_state
+        action = feats.action
         chex.assert_shape(
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
@@ -239,41 +232,23 @@ class ResNetArchitecture(NNArchitecture):
                 make_one_hot_planes,
                 num_rows=self.spec.repr_rows,
                 num_cols=self.spec.repr_cols,
-                dim_action=self.spec.dim_action,
+                num_classes=self.spec.dim_action,
             )
         )
         action_planes = action_planes_maker(action.reshape((-1, 1)))
-        chex.assert_equal_shape_prefix([hidden_state, action_planes], prefix_len=3)
-
-        state_action_repr = jnp.concatenate((hidden_state, action_planes), axis=-1)
-        # [B, H, W, A + C]
-        chex.assert_shape(
-            state_action_repr,
-            (
-                None,
-                self.spec.repr_rows,
-                self.spec.repr_cols,
-                self.spec.repr_channels + self.spec.dim_action,
-            ),
-        )
+        action_planes = conv_1x1(self.spec.repr_channels)(action_planes)
+        chex.assert_equal_shape([hidden_state, action_planes])
 
         # dyna trunk
-        dyna_trunk = ConvBlock(self.spec.dyna_tower_dim)(state_action_repr, is_training)
-        dyna_trunk = ResTower(num_blocks=self.spec.dyna_tower_blocks)(
-            dyna_trunk, is_training
-        )
+        dyna_trunk = hidden_state + action_planes
+        dyna_trunk = ResTower(self.spec.dyna_tower_blocks)(dyna_trunk)
         chex.assert_shape(
             dyna_trunk,
-            (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.dyna_tower_dim),
+            (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
 
         # hidden state head
-        next_hidden_state = ResTower(
-            num_blocks=self.spec.dyna_state_blocks,
-        )(dyna_trunk, is_training)
-        # next_hidden_state = ConvBlock(self.spec.repr_channels)(
-        #     next_hidden_state, is_training
-        # )
+        next_hidden_state = ResTower(self.spec.dyna_state_blocks)(dyna_trunk)
         chex.assert_shape(
             next_hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
@@ -282,7 +257,7 @@ class ResNetArchitecture(NNArchitecture):
         # reward head
         dyna_trunk_flat = dyna_trunk.reshape((dyna_trunk.shape[0], -1))
         r_head = hk.Linear(128)(dyna_trunk_flat)
-        r_head = bn()(r_head, is_training)
+        r_head = ln()(r_head)
         r_head = jax.nn.relu(r_head)
         r_head = hk.Linear(
             self.spec.scalar_transform.dim,
@@ -299,7 +274,7 @@ class ResNetArchitecture(NNArchitecture):
             hidden_state,
             (None, self.spec.repr_rows, self.spec.repr_cols, self.spec.repr_channels),
         )
-        projected = ResTower(1)(hidden_state, is_training)
+        projected = ResTower(1)(hidden_state)
         return projected
 
 

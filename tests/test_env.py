@@ -29,3 +29,18 @@ def test_vec_env(env_name):
     tape = make_tape()
     tape.update(vec_env.malloc())
     link(vec_env.apply)(tape)
+
+def test_gii_breakthrough():
+    env = GIIEnv("OpenSpiel:breakthrough(rows=5,columns=6)")
+    num_rows, num_cols = env._backend.observation_spec().observation.shape[:2]
+    vis = BreakthroughVisualizer(num_rows, num_cols)
+
+    feed = env.init()
+    imgs = []
+    for i in range(100):
+        env_out = env.step(feed)
+        feed.action = np.random.choice(np.argwhere(env_out.legal_actions).ravel())
+        feed.reset = env_out.is_last
+        img = vis.make_image(env_out.frame)
+        imgs.append(img)
+    save_gif(imgs)

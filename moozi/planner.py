@@ -7,26 +7,36 @@ import jax
 import numpy as np
 import haiku as hk
 import pygraphviz
+from moozi import BASE_PLAYER
 from moozi.core.link import link
 
 from moozi.nn import NNModel, RootFeatures, TransitionFeatures
 from moozi.laws import Law, get_keys
 
 
-def make_paritial_recurr_fn(model, state, discount):
-    def recurr_fn(params, random_key, action, hidden_state):
+def _view_from_player(scalar: chex.Array, to_play: chex.Array):
+    return jax.lax.select(to_play == BASE_PLAYER, scalar, -scalar)
+
+
+def _next_player(player: chex.Array):
+    return jnp.logical_not(player).astype(player.dtype)
+
+
+def make_paritial_recurr_fn(model: NNModel, state: hk.State, discount: float):
+    def recurr_fn(params, random_key, action, embedding):
+        hidden_state, to_play = embedding
         trans_feats = TransitionFeatures(hidden_state, action)
         is_training = False
         nn_output, _ = model.trans_inference(params, state, trans_feats, is_training)
         chex.assert_shape(nn_output.reward, (None,))
         chex.assert_shape(nn_output.value, (None,))
         rnn_output = mctx.RecurrentFnOutput(
-            reward=nn_output.reward,
+            reward=_view_from_player(nn_output.reward, to_play),
             discount=jnp.full_like(nn_output.reward, fill_value=discount),
             prior_logits=nn_output.policy_logits,
-            value=nn_output.value,
+            value=_view_from_player(nn_output.value, to_play),
         )
-        return rnn_output, nn_output.hidden_state
+        return rnn_output, (nn_output.hidden_state, _next_player(to_play))
 
     return recurr_fn
 
@@ -273,8 +283,8 @@ class Planner(struct.PyTreeNode):
         )
         root = mctx.RootFnOutput(
             prior_logits=nn_output.policy_logits,
-            value=nn_output.value,
-            embedding=nn_output.hidden_state,
+            value=_view_from_player(nn_output.value, feed.root_feats.to_play),
+            embedding=(nn_output.hidden_state, feed.root_feats.to_play),
         )
         invalid_actions = jnp.logical_not(feed.legal_actions)
 
@@ -312,10 +322,7 @@ class Planner(struct.PyTreeNode):
         action_probs = mctx_out.action_weights
         q_values = stats.qvalues
         root_value = stats.value
-        # if self.output_tree:
         tree = mctx_out.search_tree
-        # else:
-        #     tree = None
 
         return self.PlannerOut(
             action=action,

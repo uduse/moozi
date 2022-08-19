@@ -1,4 +1,5 @@
 import jax
+from typing import Union
 from dataclasses import dataclass
 from flax import struct
 import chex
@@ -50,57 +51,6 @@ def push_and_rotate_out(history, new_item):
     new_history = jnp.append(history, jnp.expand_dims(new_item, axis=0), axis=0)
     new_history = new_history[1:, ...]
     return new_history
-
-
-@chex.dataclass
-class HistoryStacker:
-    num_rows: int
-    num_cols: int
-    num_channels: int
-    history_length: int
-    dim_action: int
-
-    @chex.dataclass
-    class StackerState:
-        frames: chex.Array
-        actions: chex.Array
-
-    def init(self) -> "StackerState":
-        empty_frames = jnp.zeros(
-            (self.history_length, self.num_rows, self.num_cols, self.num_channels),
-            dtype=jnp.float32,
-        )
-        empty_actions = jnp.zeros(
-            (self.history_length,),
-            dtype=jnp.int32,
-        )
-        return self.StackerState(
-            frames=empty_frames,
-            actions=empty_actions,
-        )
-
-    def apply(self, state: "StackerState", frame, action, is_first):
-        assert frame.shape == (self.num_rows, self.num_cols, self.num_channels)
-
-        def _update_state(state, frame, action):
-            frames = push_and_rotate_out(state.frames, frame)
-            actions = push_and_rotate_out(state.actions, action)
-            return self.StackerState(frames=frames, actions=actions)
-
-        def _reset_and_update_state(state, frame, action):
-            state = self.init()
-            for _ in range(self.history_length):
-                state = _update_state(state, frame, action)
-            return state
-
-        return jax.lax.cond(
-            is_first,
-            _reset_and_update_state,
-            _update_state,
-            state,
-            frame,
-            action,
-        )
 
 
 #
@@ -276,36 +226,3 @@ def tree_map(f):
         return tree.map_structure(f, *structures)
 
     return mapped_f
-
-
-@dataclass
-class EloPlayer:
-    name: str
-    elo: float = 1300.0
-
-
-def expected(a: EloPlayer, b: EloPlayer):
-    """
-    Calculate expected score of A in a match against B
-    :param A: Elo rating for player A
-    :param B: Elo rating for player B
-    """
-    return 1 / (1 + 10 ** ((b.elo - a.elo) / 400))
-
-
-def elo(old, exp, score, k=32):
-    """
-    Calculate the new Elo rating for a player
-    :param old: The previous Elo rating
-    :param exp: The expected score for this match
-    :param score: The actual score for this match
-    :param k: The k-factor for Elo (default: 32)
-    """
-    return old + k * (score - exp)
-
-
-def update(a: EloPlayer, b: EloPlayer, result: float, k=32):
-    a.elo, b.elo = (
-        elo(a.elo, expected(a, b), result, k=k),
-        elo(b.elo, expected(b, a), -result, k=k),
-    )

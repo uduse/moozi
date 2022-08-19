@@ -15,7 +15,6 @@ from loguru import logger
 from moozi.core import make_env_and_spec
 from moozi.core.scalar_transform import ScalarTransform, make_scalar_transform
 from moozi.core.tape import exclude, include, make_tape
-from moozi.laws import *
 from moozi.laws import MinAtarVisualizer
 from moozi.nn.nn import NNModel, make_model
 from moozi.nn.training import make_training_suite
@@ -38,7 +37,7 @@ def get_config(overrides={}, path=None):
         config.dim_action = env_spec.actions.num_values + 1
     try:
         num_rows, num_cols, num_channels = env_spec.observations.shape
-    except: 
+    except:
         num_rows, num_cols, num_channels = env_spec.observations.observation.shape
     if config.env.num_rows == "auto":
         config.env.num_rows = num_rows
@@ -46,10 +45,6 @@ def get_config(overrides={}, path=None):
         config.env.num_cols = num_cols
     if config.env.num_channels == "auto":
         config.env.num_channels = num_channels
-    # if config.nn.spec_kwargs.obs_channels == "auto":
-    #     config.nn.spec_kwargs.obs_channels = config.history_length * (
-    #         config.env.num_channels + config.dim_action
-    #     )
     for key, value in overrides.items():
         OmegaConf.update(config, key, value)
     OmegaConf.resolve(config)
@@ -67,6 +62,7 @@ def get_model(config) -> NNModel:
 
 
 def training_suite_factory(config):
+
     scalar_transform = make_scalar_transform(**config.scalar_transform)
     nn_arch_cls = eval(config.nn.arch_cls)
     nn_spec = eval(config.nn.spec_cls)(
@@ -81,9 +77,7 @@ def training_suite_factory(config):
         weight_decay=config.train.weight_decay,
         lr=config.train.lr,
         num_unroll_steps=config.num_unroll_steps,
-        num_stacked_frames=config.num_stacked_frames,
+        history_length=config.history_length,
         target_update_period=config.train.target_update_period,
         consistency_loss_coef=config.train.consistency_loss_coef,
     )
-
-# %%

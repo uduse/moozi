@@ -7,7 +7,7 @@ dim_action: auto
 debug: false
 
 env:
-  name: OpenSpiel:breakthrough(rows=5,columns=6)
+  name: OpenSpiel:breakthrough(rows=4,columns=4)
   num_rows: auto
   num_cols: auto
   num_channels: auto
@@ -28,8 +28,8 @@ replay:
     save_dir: ./replay/
 
 scalar_transform:
-  support_min: -30
-  support_max: 30
+  support_min: -2
+  support_max: 2
   eps: 1.0e-3
   contract: false
 

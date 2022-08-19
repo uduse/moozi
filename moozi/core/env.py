@@ -1,11 +1,11 @@
 from dataclasses import dataclass, field
+from flax import struct
 import pyspiel
 import chex
 import numpy as np
 import jax.numpy as jnp
 import functools
 from typing import List
-from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from loguru import logger
 import uuid
 import gym
@@ -26,6 +26,10 @@ from acme.specs import make_environment_spec, EnvironmentSpec
 import open_spiel
 from absl import logging
 from moozi.core import BASE_PLAYER
+from moozi.core.utils import (
+    stack_sequence_fields_pytree,
+    unstack_sequence_fields_pytree,
+)
 
 
 class TransformFrameWrapper(EnvironmentWrapper):
@@ -192,14 +196,12 @@ def make_spec(env_name):
     return make_env_and_spec(env_name)[1]
 
 
-@chex.dataclass
-class GIIEnvFeed:
+class GIIEnvFeed(struct.PyTreeNode):
     action: np.ndarray
     reset: np.ndarray
 
 
-@chex.dataclass
-class GIIEnvOut:
+class GIIEnvOut(struct.PyTreeNode):
     frame: np.ndarray
     is_first: np.ndarray
     is_last: np.ndarray
@@ -217,21 +219,24 @@ class GIIEnvOut:
             legal_actions=np.asarray(self.legal_actions, dtype=np.int32),
         )
 
-# def slice_player(data, to_play, player: int):
-#     return tree.map_structure(lambda x: x[jnp.where(data, to_play.to_play == player)], data, to_play)
 
-
-@dataclass
-class GIIEnv:
+class GIIEnv(struct.PyTreeNode):
     name: str
-    num_players: int = field(init=False)
-    spec: EnvironmentSpec = field(init=False)
+    num_players: int
+    spec: EnvironmentSpec
+    backend: dm_env.Environment = struct.field(pytree_node=False)
 
-    _backend: dm_env.Environment = field(init=False)
-
-    def __post_init__(self):
-        self._backend, self.spec = make_env_and_spec(self.name)
-        self.num_players = self._backend.num_players
+    @staticmethod
+    def new(env_name):
+        """Smart constructor."""
+        backend, spec = make_env_and_spec(env_name)
+        num_players = backend.num_players
+        return GIIEnv(
+            name=env_name,
+            num_players=num_players,
+            spec=spec,
+            backend=backend,
+        )
 
     @property
     def dim_action(self):
@@ -242,12 +247,12 @@ class GIIEnv:
 
     def step(self, input_: GIIEnvFeed) -> GIIEnvOut:
         if input_.reset:
-            timestep = self._backend.reset()
+            timestep = self.backend.reset()
         else:
             # action 0 is reserved for termination
-            timestep = self._backend.step([input_.action - 1])
+            timestep = self.backend.step([input_.action - 1])
 
-        to_play = self._backend.current_player
+        to_play = self.backend.current_player
         frame = self._get_frame(timestep, to_play)
         reward = self._get_reward(timestep, to_play)
         legal_actions = self._get_legal_actions(timestep, to_play)
@@ -290,25 +295,30 @@ class GIIEnv:
 # TODO: extra dummy action handling into a class
 
 
-@dataclass
-class GIIVecEnv:
+class GIIVecEnv(struct.PyTreeNode):
     name: str
     num_envs: int
-    num_players: int = field(init=False)
+    num_players: int
+    envs: List[GIIEnv] = struct.field(pytree_node=False)
 
-    envs: List[GIIEnv] = field(init=False)
-
-    def __post_init__(self):
-        assert self.num_envs >= 1
-        self.envs = [GIIEnv(self.name) for i in range(self.num_envs)]
-        self.num_players = self.envs[0].num_players
+    @staticmethod
+    def new(env_name: str, num_envs: int):
+        assert num_envs >= 1
+        envs = [GIIEnv.new(env_name) for _ in range(num_envs)]
+        num_players = envs[0].num_players
+        return GIIVecEnv(
+            name=env_name,
+            num_envs=num_envs,
+            num_players=num_players,
+            envs=envs,
+        )
 
     def init(self) -> GIIEnvFeed:
-        return stack_sequence_fields([env.init() for env in self.envs])
+        return stack_sequence_fields_pytree([env.init() for env in self.envs])
 
     def step(self, input_: GIIEnvFeed) -> GIIEnvOut:
-        input_list = unstack_sequence_fields(input_, self.num_envs)
+        input_list = unstack_sequence_fields_pytree(input_, self.num_envs)
         output_list = tree.map_structure_with_path(
             lambda path, env: env.step(input_list[path[0]]), self.envs
         )
-        return stack_sequence_fields(output_list)
+        return stack_sequence_fields_pytree(output_list)

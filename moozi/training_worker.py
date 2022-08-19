@@ -1,6 +1,6 @@
 from typing import Optional, Type, List
 import jax
-from moozi.core.gii import GII
+from moozi.gii import GII
 from moozi.core.vis import Visualizer
 from moozi.core import TrajectorySample
 from moozi.nn import NNModel
@@ -34,7 +34,7 @@ class TrainingWorker:
         random_key = jax.random.PRNGKey(self.seed)
         model_key, agent_key = jax.random.split(random_key, 2)
         params, state = model.init_params_and_state(model_key)
-        self.aei = GII(
+        self.gii = GII(
             env_name=env_name,
             stacker=stacker,
             planner=planner,
@@ -48,6 +48,6 @@ class TrainingWorker:
         self.traj_collector = TrajectoryCollector(num_envs)
 
     def run(self) -> List[TrajectorySample]:
-        samples = [self.aei.tick() for _ in range(self.num_steps)]
+        samples = [self.gii.tick() for _ in range(self.num_steps)]
         self.traj_collector.add_step_samples(samples)
         return self.traj_collector.flush()

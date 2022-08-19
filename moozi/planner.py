@@ -176,78 +176,22 @@ def make_planner(
     )
 
 
-def convert_tree_to_graph(
-    tree: mctx.Tree,
-    action_labels: Optional[Sequence[str]] = None,
-    batch_index: int = 0,
-    show_only_expanded: bool = True,
-) -> pygraphviz.AGraph:
-    """Converts a search tree into a Graphviz graph.
-    Args:
-      tree: A `Tree` containing a batch of search data.
-      action_labels: Optional labels for edges, defaults to the action index.
-      batch_index: Index of the batch element to plot.
-    Returns:
-      A Graphviz graph representation of `tree`.
+class PlannerFeed(struct.PyTreeNode):
+    params: hk.Params
+    state: hk.State
+    root_feats: RootFeatures
+    legal_actions: chex.Array
+    random_key: chex.PRNGKey
 
-    Copy-pasted from mctx library examples.
-    https://github.com/deepmind/mctx/blob/main/examples/visualization_demo.py
-    """
-    chex.assert_rank(tree.node_values, 2)
-    batch_size = tree.node_values.shape[0]
-    if action_labels is None:
-        action_labels = list(map(str, range(tree.num_actions)))
-    elif len(action_labels) != tree.num_actions:
-        raise ValueError(
-            f"action_labels {action_labels} has the wrong number of actions "
-            f"({len(action_labels)}). "
-            f"Expecting {tree.num_actions}."
-        )
 
-    def node_to_str(node_i, reward=0, discount=1):
-        return (
-            f"{node_i}\n"
-            f"R: {reward:.2f}\n"
-            f"d: {discount:.2f}\n"
-            f"V: {tree.node_values[batch_index, node_i]:.2f}\n"
-            f"N: {tree.node_visits[batch_index, node_i]}\n"
-        )
-
-    def edge_to_str(node_i, a_i):
-        node_index = jnp.full([batch_size], node_i)
-        probs = jax.nn.softmax(tree.children_prior_logits[batch_index, node_i])
-        return (
-            f"{action_labels[a_i]}\n"
-            f"Q: {tree.qvalues(node_index)[batch_index, a_i]:.2f}\n"
-            f"p: {probs[a_i]:.2f}\n"
-        )
-
-    graph = pygraphviz.AGraph(directed=True)
-
-    # Add root
-    graph.add_node(0, label=node_to_str(node_i=0), color="green")
-    # Add all other nodes and connect them up.
-    for node_i in range(tree.num_simulations):
-        for a_i in range(tree.num_actions):
-            # Index of children, or -1 if not expanded
-            children_i = tree.children_index[batch_index, node_i, a_i]
-            if show_only_expanded:
-                to_show = children_i >= 0
-            else:
-                to_show = True
-            if to_show:
-                graph.add_node(
-                    children_i,
-                    label=node_to_str(
-                        node_i=children_i,
-                        reward=tree.children_rewards[batch_index, node_i, a_i],
-                        discount=tree.children_discounts[batch_index, node_i, a_i],
-                    ),
-                    color="red",
-                )
-                graph.add_edge(node_i, children_i, label=edge_to_str(node_i, a_i))
-
-    return graph
+class PlannerOut(struct.PyTreeNode):
+    action: Optional[chex.ArrayDevice]
+    action_probs: chex.Array
+    tree: Optional[mctx.Tree]
+    prior_probs: chex.Array
+    visit_counts: chex.Array
+    q_values: chex.Array
+    root_value: chex.Array
 
 
 class Planner(struct.PyTreeNode):
@@ -259,22 +203,6 @@ class Planner(struct.PyTreeNode):
     num_simulations: int = struct.field(pytree_node=False, default=10)
     limit_depth: bool = struct.field(pytree_node=False, default=True)
     use_gumbel: bool = struct.field(pytree_node=False, default=True)
-
-    class PlannerFeed(struct.PyTreeNode):
-        params: hk.Params
-        state: hk.State
-        root_feats: RootFeatures
-        legal_actions: chex.Array
-        random_key: chex.PRNGKey
-
-    class PlannerOut(struct.PyTreeNode):
-        action: Optional[chex.ArrayDevice]
-        action_probs: chex.Array
-        tree: Optional[mctx.Tree]
-        prior_probs: chex.Array
-        visit_counts: chex.Array
-        q_values: chex.Array
-        root_value: chex.Array
 
     def run(self, feed: "PlannerFeed") -> "PlannerOut":
         is_training = False
@@ -324,7 +252,7 @@ class Planner(struct.PyTreeNode):
         root_value = stats.value
         tree = mctx_out.search_tree
 
-        return self.PlannerOut(
+        return PlannerOut(
             action=action,
             action_probs=action_probs,
             tree=tree,

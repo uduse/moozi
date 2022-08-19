@@ -9,11 +9,9 @@ import pyspiel
 from flax import struct
 from moozi.core import StepSample
 from moozi.core.env import GIIEnvOut, GIIVecEnv
-from moozi.core.utils import (
-    HistoryStacker,
-)
+from moozi.core.history_stacker import HistoryStacker
 from moozi.nn import NNModel, RootFeatures
-from moozi.planner import Planner
+from moozi.planner import Planner, PlannerOut, PlannerFeed
 
 
 class PolicyFeed(struct.PyTreeNode):
@@ -30,7 +28,7 @@ class PolicyFeed(struct.PyTreeNode):
 
 class PolicyOut(struct.PyTreeNode):
     stacker_state: HistoryStacker.StackerState
-    planner_out: Planner.PlannerOut
+    planner_out: PlannerOut
 
 
 PolicyType = Callable[[PolicyFeed], PolicyOut]
@@ -50,7 +48,7 @@ def policy(
         actions=stacker_state.actions,
         to_play=policy_feed.env_out.to_play,
     )
-    planner_feed = Planner.PlannerFeed(
+    planner_feed = PlannerFeed(
         params=policy_feed.params,
         state=policy_feed.state,
         root_feats=root_feats,
@@ -72,10 +70,10 @@ class GII:
         random_key: chex.PRNGKey,
         num_envs: int = 1,
     ):
-        self.env = GIIVecEnv(env_name, num_envs=num_envs)
+        self.env = GIIVecEnv.new(env_name=env_name, num_envs=num_envs)
         self.env_feed = self.env.init()
         self.env_out: Optional[GIIEnvOut] = None
-        self.planner_out: Optional[Planner.PlannerOut] = None
+        self.planner_out: Optional[PlannerOut] = None
 
         self.stacker = stacker
         self.stacker_state = jax.vmap(stacker.init, axis_size=num_envs)()
@@ -110,10 +108,14 @@ class GII:
 
     def tick(self) -> StepSample:
         env_out = self.env.step(self.env_feed)
-        to_play = int(env_out.to_play)
-
-        params, state = self._select_params_and_state(to_play)
-        planner = self._select_planner(to_play)
+        if self.env.num_envs == 1:
+            # multiplexing only supported for 1 env
+            to_play = int(env_out.to_play)
+            params, state = self._select_params_and_state(to_play)
+            planner = self._select_planner(to_play)
+        else:
+            params, state = self._select_params_and_state(0)
+            planner = self._select_planner(0)
 
         policy_feed = PolicyFeed(
             params=params,

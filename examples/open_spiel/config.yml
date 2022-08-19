@@ -1,6 +1,6 @@
 seed: 0
 discount: 1
-num_unroll_steps: 5
+num_unroll_steps: 2
 num_td_steps: 1000
 history_length: 4
 dim_action: auto
@@ -14,7 +14,7 @@ env:
   num_players: 2
 
 replay:
-  num_shards: 4
+  num_shards: 1
   kwargs:
     use_remote: true
     max_trajs_size: 4_000
@@ -31,6 +31,7 @@ scalar_transform:
   support_min: -30
   support_max: 30
   eps: 1.0e-3
+  contract: false
 
 param_opt:
   use_remote: true

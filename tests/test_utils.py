@@ -11,6 +11,7 @@ from moozi.core.utils import (
 from moozi.core.scalar_transform import make_scalar_transform
 
 
+@pytest.mark.parametrize("contract", [True, False])
 @pytest.mark.parametrize(
     "support_min,support_max",
     [
@@ -19,9 +20,11 @@ from moozi.core.scalar_transform import make_scalar_transform
         (-1, 1),
     ],
 )
-def test_scalar_transform(support_min, support_max):
+def test_scalar_transform(support_min, support_max, contract):
     scalar_transform = make_scalar_transform(
-        support_min=support_min, support_max=support_max
+        support_min=support_min,
+        support_max=support_max,
+        contract=contract,
     )
     scalars = np.random.uniform(
         low=scalar_transform.scalar_min,

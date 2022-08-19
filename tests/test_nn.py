@@ -62,7 +62,7 @@ def test_model_basic_inferences(
     if use_jit:
         model = model.with_jit()
     root_feats = RootFeatures(
-        obs=policy_feed.stacked_frames, player=np.array(policy_feed.to_play)
+        obs=policy_feed.stacked_frames, to_play=np.array(policy_feed.to_play)
     )
     is_training = False
     out, _ = model.root_inference_unbatched(params, state, root_feats, is_training)

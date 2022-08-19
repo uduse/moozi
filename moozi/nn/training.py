@@ -13,7 +13,7 @@ import rlax
 import tree
 from jax import vmap
 from moozi import ScalarTransform, TrainingState, TrainTarget
-from moozi.core.types import TrainingState, TrajectorySample
+from moozi.core.types import BASE_PLAYER, TrainingState, TrajectorySample
 from moozi.core.utils import make_one_hot_planes, make_frame_planes
 from moozi.laws import concat_stacked_to_obs, make_stacker
 from moozi.nn import (
@@ -53,18 +53,19 @@ def scale_gradient(x, scale):
 
 def _compute_prior_kl(
     model: NNModel,
-    obs,
     orig_params,
-    new_params,
     orig_state,
+    orig_feats,
+    new_params,
     new_state,
+    new_feats,
 ):
     is_training = False
 
     orig_out, _ = model.root_inference(
         orig_params,
         orig_state,
-        RootFeatures(obs=obs, player=jnp.array(0)),
+        orig_feats,
         is_training,
     )
     orig_logits = orig_out.policy_logits
@@ -72,7 +73,7 @@ def _compute_prior_kl(
     new_out, _ = model.root_inference(
         new_params,
         new_state,
-        RootFeatures(obs=obs, player=jnp.array(0)),
+        new_feats,
         is_training,
     )
     new_logits = new_out.policy_logits
@@ -84,7 +85,7 @@ def _compute_prior_kl(
 def _make_obs_from_train_target(
     batch: TrainTarget,
     step: int,
-    num_stacked_frames: int,
+    history_length: int,
     num_unroll_steps: int,
     dim_action: int,
 ):
@@ -97,11 +98,11 @@ def _make_obs_from_train_target(
     ) = batch.frame.shape
 
     assert 0 <= step <= num_unroll_steps
-    assert num_frames == (num_stacked_frames + 1)
+    assert num_frames == (history_length + 1)
 
-    history_frames = batch.frame[:, step : step + num_stacked_frames, ...]
+    history_frames = batch.frame[:, step : step + history_length, ...]
     stacked_frames = vmap(make_frame_planes)(history_frames)
-    history_actions = batch.action[:, step : step + num_stacked_frames, ...]
+    history_actions = batch.action[:, step : step + history_length, ...]
     stacked_actions = vmap(make_one_hot_planes, in_axes=[0, None, None, None])(
         history_actions, num_rows, num_cols, dim_action
     )
@@ -112,15 +113,31 @@ def _make_obs_from_train_target(
             batch_size,
             num_rows,
             num_cols,
-            num_stacked_frames * (num_channels + dim_action),
+            history_length * (num_channels + dim_action),
         ),
     )
     return obs
 
 
+def _slice_frames(
+    batch: TrainTarget,
+    step: int,
+    history_length: int,
+):
+    return batch.frame[:, step : step + history_length, ...]
+
+
+def _slice_actions(
+    batch: TrainTarget,
+    step: int,
+    history_length: int,
+):
+    return batch.action[:, step : step + history_length, ...]
+
+
 @dataclass
 class MuZeroLossWithScalarTransform(LossFn):
-    num_stacked_frames: int
+    history_length: int
     num_unroll_steps: int
     scalar_transform: ScalarTransform
     dim_action: int
@@ -139,14 +156,11 @@ class MuZeroLossWithScalarTransform(LossFn):
         self._check_shapes(batch)
         batch_size = batch.frame.shape[0]
 
-        obs = _make_obs_from_train_target(
-            batch,
-            step=0,
-            num_stacked_frames=self.num_stacked_frames,
-            num_unroll_steps=self.num_unroll_steps,
-            dim_action=self.dim_action,
+        init_inf_features = RootFeatures(
+            frames=_slice_frames(batch, 0, self.history_length),
+            actions=_slice_actions(batch, 0, self.history_length),
+            to_play=batch.to_play,
         )
-        init_inf_features = RootFeatures(obs=obs, player=jnp.zeros((batch_size,)))
         is_training = True
         network_output, state = model.root_inference(
             params, state, init_inf_features, is_training
@@ -178,7 +192,7 @@ class MuZeroLossWithScalarTransform(LossFn):
                 info[f"hidden_state_{i}"] = hidden_state
             trans_feats = TransitionFeatures(
                 hidden_state=hidden_state,
-                action=batch.action.take(i + self.num_stacked_frames, axis=1),
+                action=batch.action.take(i + self.history_length, axis=1),
             )
             network_output, state = model.trans_inference(
                 params, state, trans_feats, is_training
@@ -227,15 +241,13 @@ class MuZeroLossWithScalarTransform(LossFn):
             )
 
             if self.consistency_loss_coef > 0.0 and i == 0:
-                # consistency loss
-                next_obs = _make_obs_from_train_target(
-                    batch,
-                    step=i + 1,
-                    num_stacked_frames=self.num_stacked_frames,
-                    num_unroll_steps=self.num_unroll_steps,
-                    dim_action=self.dim_action,
+                # flip player
+                next_player = jnp.logical_not(batch.to_play).astype(jnp.int32)
+                next_feats = RootFeatures(
+                    frames=_slice_frames(batch, 1, self.history_length),
+                    actions=_slice_actions(batch, 1, self.history_length),
+                    to_play=next_player,
                 )
-                next_feats = RootFeatures(obs=next_obs, player=jnp.zeros((batch_size,)))
 
                 next_network_output, state = model.root_inference(
                     params, state, next_feats, is_training
@@ -277,6 +289,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         )
 
         # sum all losses
+        # TODO: sum loss per batch, then mean across batch
         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
 
         losses["loss"] = loss
@@ -321,7 +334,7 @@ def make_sgd_step_fn(
     loss_fn: LossFn,
     optimizer,
     num_unroll_steps: int,
-    num_stacked_frames: int,
+    history_length: int,
     dim_action: int,
     target_update_period: int = 1,
     include_prior_kl: bool = True,
@@ -375,20 +388,27 @@ def make_sgd_step_fn(
                 step_data[name] = weights
 
         if include_prior_kl:
-            obs = _make_obs_from_train_target(
-                batch,
-                step=0,
-                num_stacked_frames=num_stacked_frames,
-                num_unroll_steps=num_unroll_steps,
-                dim_action=dim_action,
+            orig_feats = RootFeatures(
+                frames=_slice_frames(batch, 0, history_length),
+                actions=_slice_actions(batch, 0, history_length),
+                to_play=batch.to_play,
             )
+
+            next_player = jnp.logical_not(batch.to_play).astype(jnp.int32)
+            new_feats = RootFeatures(
+                frames=_slice_frames(batch, 1, history_length),
+                actions=_slice_actions(batch, 1, history_length),
+                to_play=next_player,
+            )
+
             prior_kl = _compute_prior_kl(
                 model=model,
-                obs=obs,
                 orig_params=orig_params,
-                new_params=new_params,
                 orig_state=orig_state,
+                orig_feats=orig_feats,
                 new_state=new_state,
+                new_params=new_params,
+                new_feats=new_feats,
             )
             step_data["info/prior_kl"] = prior_kl
 
@@ -410,7 +430,7 @@ def make_training_suite(
     weight_decay: float,
     lr: float,
     num_unroll_steps: int,
-    num_stacked_frames: int,
+    history_length: int,
     target_update_period: int = 1,
     consistency_loss_coef: float = 1.0,
 ) -> Tuple[NNModel, TrainingState, Callable]:
@@ -419,7 +439,7 @@ def make_training_suite(
     random_key, new_key = jax.random.split(random_key)
     params, state = model.init_params_and_state(new_key)
     loss_fn = MuZeroLossWithScalarTransform(
-        num_stacked_frames=num_stacked_frames,
+        history_length=history_length,
         num_unroll_steps=num_unroll_steps,
         scalar_transform=nn_spec.scalar_transform,
         weight_decay=weight_decay,
@@ -443,7 +463,7 @@ def make_training_suite(
         model=model,
         loss_fn=loss_fn,
         optimizer=optimizer,
-        num_stacked_frames=num_stacked_frames,
+        history_length=history_length,
         num_unroll_steps=num_unroll_steps,
         dim_action=nn_spec.dim_action,
         target_update_period=target_update_period,
@@ -457,15 +477,18 @@ def make_target_from_traj(
     discount,
     num_unroll_steps,
     num_td_steps,
-    num_stacked_frames,
+    history_length,
 ) -> TrainTarget:
+    # TODO: make a JIT-able version of this
+
     # assert not batched
     assert len(traj.last_reward.shape) == 1
     assert sum(traj.is_last) == 1
     assert traj.is_last[-1] == True
 
-    frame = _make_frame(traj, start_idx, num_stacked_frames)
-    action = _make_action(traj, start_idx, num_stacked_frames, num_unroll_steps)
+    frame = _make_frame(traj, start_idx, history_length)
+    action = _make_action(traj, start_idx, history_length, num_unroll_steps)
+    to_play = _make_to_play(traj, start_idx)
 
     unrolled_data = []
     for curr_idx in range(start_idx, start_idx + num_unroll_steps + 1):
@@ -484,14 +507,23 @@ def make_target_from_traj(
         last_reward=unrolled_data_stacked[1],
         action_probs=unrolled_data_stacked[2],
         root_value=unrolled_data_stacked[3],
+        to_play=to_play,
         importance_sampling_ratio=np.array(1),
     )
 
 
-def _make_frame(traj: TrajectorySample, start_idx, num_stacked_frames):
-    # num_stacked_frames frames + one extra frame for consistency loss
+def _make_to_play(traj: TrajectorySample, start_idx) -> np.ndarray:
+    last_step_idx = traj.frame.shape[0] - 1
+    if start_idx >= last_step_idx:
+        return np.array(BASE_PLAYER)
+    else:
+        return traj.to_play[start_idx]
+
+
+def _make_frame(traj: TrajectorySample, start_idx, history_length):
+    # history_length frames + one extra frame for consistency loss
     frames = []
-    first_frame_idx = start_idx - num_stacked_frames + 1
+    first_frame_idx = start_idx - history_length + 1
     last_frame_idx = start_idx + 1
     for i in range(first_frame_idx, last_frame_idx + 1):
         if i < 0 or i >= traj.frame.shape[0]:
@@ -501,10 +533,8 @@ def _make_frame(traj: TrajectorySample, start_idx, num_stacked_frames):
     return stack_sequence_fields(frames)
 
 
-def _make_action(
-    traj: TrajectorySample, start_idx, num_stacked_frames, num_unroll_steps
-):
-    first_frame_idx = start_idx - num_stacked_frames
+def _make_action(traj: TrajectorySample, start_idx, history_length, num_unroll_steps):
+    first_frame_idx = start_idx - history_length
     last_frame_idx = start_idx + num_unroll_steps - 1
     last_step_idx = traj.action.shape[0] - 1
     actions = []
@@ -514,6 +544,10 @@ def _make_action(
         elif i < traj.action.shape[0]:
             actions.append(traj.action[i])
     return stack_sequence_fields(actions)
+
+
+# def _make_to_play(traj: TrajectorySample, start_idx):
+#     return traj.to_play[start_idx]
 
 
 def _make_n_step_return(

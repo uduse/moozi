@@ -1,15 +1,15 @@
-import tree
-from dataclasses import asdict
 import typing
-from typing import NamedTuple, List
-from flax import struct
+from dataclasses import asdict
+from typing import List, NamedTuple
 
 import haiku as hk
 import jax
 import numpy as np
 import optax
+import tree
+from flax import struct
 
-from .utils import stack_sequence_fields
+from .utils import stack_sequence_fields_pytree
 
 
 class PolicyFeed(struct.PyTreeNode):
@@ -59,7 +59,7 @@ class StepSample(struct.PyTreeNode):
 class TrajectorySample(StepSample):
     @staticmethod
     def from_step_samples(step_samples: List[StepSample]) -> "TrajectorySample":
-        stacked = stack_sequence_fields(step_samples)
+        stacked = stack_sequence_fields_pytree(step_samples)
         return TrajectorySample(**asdict(stacked))
 
 
@@ -85,6 +85,9 @@ class TrainTarget(NamedTuple):
     # root value after the search
     root_value: np.ndarray
 
+    # player of the target
+    to_play: np.ndarray
+
     # importance sampling (IS) ratio
     # 1.0 if uniform sampling
     # if a sample is twice more likely to be sampled, it should have a IS ratio of 0.5
@@ -98,6 +101,7 @@ class TrainTarget(NamedTuple):
             last_reward=np.asarray(self.last_reward, dtype=np.float32),
             action_probs=np.asarray(self.action_probs, dtype=np.float32),
             root_value=np.asarray(self.root_value, dtype=np.float32),
+            to_play=np.asarray(self.to_play, dtype=np.int32),
             importance_sampling_ratio=np.asarray(
                 self.importance_sampling_ratio, dtype=np.float32
             ),

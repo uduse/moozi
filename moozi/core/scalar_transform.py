@@ -17,12 +17,31 @@ class ScalarTransform(NamedTuple):
     inverse_transform: Callable[[chex.Array], chex.Array]
 
 
-def make_scalar_transform(support_min, support_max, eps=1e-3) -> ScalarTransform:
+def _phi(scalar, eps):
+    return jnp.sign(scalar) * (jnp.sqrt(jnp.abs(scalar) + 1) - 1) + eps * scalar
+
+
+def _inverse_phi(scalar, eps):
+    return jnp.sign(scalar) * (
+        jnp.power(
+            ((jnp.sqrt(1 + 4 * eps * (jnp.abs(scalar) + 1 + eps)) - 1) / (2 * eps)),
+            2,
+        )
+        - 1
+    )
+
+
+def make_scalar_transform(
+    support_min: int,
+    support_max: int,
+    eps: float = 1e-3,
+    contract: bool = True,
+) -> ScalarTransform:
     support_dim = support_max - support_min + 1
 
     def _scalar_transform(scalar: float):
-        scalar = jnp.sign(scalar) * (jnp.sqrt(jnp.abs(scalar) + 1) - 1) + eps * scalar
-        support_dim = support_max - support_min + 1
+        if contract:
+            scalar = _phi(scalar, eps)
         scalar = jnp.clip(scalar, support_min, support_max)
         lower_val = jnp.floor(scalar).astype(jnp.int32)
         upper_val = jnp.ceil(scalar + np.finfo(np.float32).eps).astype(jnp.int32)
@@ -41,14 +60,10 @@ def make_scalar_transform(support_min, support_max, eps=1e-3) -> ScalarTransform
     ):
         chex.assert_shape(probs, (support_dim,))
         support_vals = jnp.arange(support_min, support_max + 1, dtype=jnp.float32)
-        val = jnp.sum(probs * support_vals)
-        return jnp.sign(val) * (
-            jnp.power(
-                ((jnp.sqrt(1 + 4 * eps * (jnp.abs(val) + 1 + eps)) - 1) / (2 * eps)),
-                2,
-            )
-            - 1
-        )
+        scalar = jnp.sum(probs * support_vals)
+        if contract:
+            scalar = _inverse_phi(scalar, eps)
+        return scalar
 
     lower = jax.nn.one_hot(0, num_classes=support_dim, dtype=float)
     scalar_min = _inverse_scalar_transform(lower)

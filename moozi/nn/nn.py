@@ -24,16 +24,16 @@ class NNOutput(NamedTuple):
     """
 
     #: (batch_size?, 1)
-    value: Union[np.ndarray, jnp.ndarray]
+    value: chex.Array
 
     #: (batch_size?, 1)
-    reward: Union[np.ndarray, jnp.ndarray]
+    reward: chex.Array
 
     #: (batch_size?, num_actions)
-    policy_logits: Union[np.ndarray, jnp.ndarray]
+    policy_logits: chex.Array
 
     #: (batch_size?, repr_rows, repr_cols, repr_channels)
-    hidden_state: Union[np.ndarray, jnp.ndarray]
+    hidden_state: chex.Array
 
 
 # class RootFeatures(NamedTuple):
@@ -56,7 +56,7 @@ class RootFeatures(struct.PyTreeNode):
     actions: chex.Array
 
     #: (batch_size?, 1)
-    player: chex.Array
+    to_play: chex.Array
 
 
 class TransitionFeatures(struct.PyTreeNode):
@@ -290,7 +290,7 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
         root_feats = RootFeatures(
             frames=jnp.ones(shape=frames_shape, dtype=jnp.float32),
             actions=jnp.ones(shape=actions_shape, dtype=jnp.int32),
-            player=jnp.zeros((B,), dtype=jnp.int32),
+            to_play=jnp.zeros((B,), dtype=jnp.int32),
         )
 
         hidden_state_shape = (B, spec.repr_rows, spec.repr_cols, spec.repr_channels)

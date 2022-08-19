@@ -41,7 +41,7 @@ class ReplayBuffer:
 
     num_unroll_steps: int = 5
     num_td_steps: int = 5
-    num_stacked_frames: int = 4
+    history_length: int = 4
     discount: float = 0.997
     decay: float = 0.9
     save_dir: str = "./replay/"
@@ -100,7 +100,7 @@ class ReplayBuffer:
                     discount=self.discount,
                     num_unroll_steps=self.num_unroll_steps,
                     num_td_steps=num_td_step,
-                    num_stacked_frames=self.num_stacked_frames,
+                    history_length=self.history_length,
                 )
                 value_diff = np.abs(target.n_step_return[0] - target.root_value[0])
                 self._root_n_step_return.append(target.n_step_return[0])

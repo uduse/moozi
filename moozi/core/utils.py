@@ -1,4 +1,6 @@
 import jax
+from dataclasses import dataclass
+from flax import struct
 import chex
 import jax.numpy as jnp
 
@@ -101,9 +103,9 @@ class HistoryStacker:
         )
 
 
-# 
+#
 # Copied from acme framework
-# 
+#
 """Tensor framework-agnostic utilities for manipulating nested structures."""
 
 from typing import Sequence, List, TypeVar, Any
@@ -121,6 +123,16 @@ def fast_map_structure(func, *structure):
     # Arbitrarily choose one of the structures of the original sequence (the last)
     # to match the structure for the flattened sequence.
     return tree.unflatten_as(structure[-1], [func(*x) for x in entries])
+
+
+def stack_sequence_fields_pytree(pytree: struct.PyTreeNode):
+    return jax.tree_util.tree_map(lambda *values: jnp.stack(values), *pytree)
+
+
+def unstack_sequence_fields_pytree(pytree: struct.PyTreeNode, batch_size):
+    return [
+        jax.tree_util.tree_map(lambda x, i=i: x[i], pytree) for i in range(batch_size)
+    ]
 
 
 def stack_sequence_fields(sequence: Sequence[ElementType]) -> ElementType:
@@ -264,3 +276,36 @@ def tree_map(f):
         return tree.map_structure(f, *structures)
 
     return mapped_f
+
+
+@dataclass
+class EloPlayer:
+    name: str
+    elo: float = 1300.0
+
+
+def expected(a: EloPlayer, b: EloPlayer):
+    """
+    Calculate expected score of A in a match against B
+    :param A: Elo rating for player A
+    :param B: Elo rating for player B
+    """
+    return 1 / (1 + 10 ** ((b.elo - a.elo) / 400))
+
+
+def elo(old, exp, score, k=32):
+    """
+    Calculate the new Elo rating for a player
+    :param old: The previous Elo rating
+    :param exp: The expected score for this match
+    :param score: The actual score for this match
+    :param k: The k-factor for Elo (default: 32)
+    """
+    return old + k * (score - exp)
+
+
+def update(a: EloPlayer, b: EloPlayer, result: float, k=32):
+    a.elo, b.elo = (
+        elo(a.elo, expected(a, b), result, k=k),
+        elo(b.elo, expected(b, a), -result, k=k),
+    )

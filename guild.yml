@@ -109,3 +109,8 @@
             dir: local_deps
       flags:
         env.name: MinAtar:Asterix-v1
+        
+# - remotes:
+#   localhost:
+#     type: ssh
+#     host: localhost

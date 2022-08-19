@@ -117,7 +117,8 @@ class ResNetV2Architecture(NNArchitecture):
             ),
         )
         chex.assert_shape(feats.actions, (None, self.spec.history_length))
-        chex.assert_shape(feats.player, (None,))
+        chex.assert_shape(feats.to_play, (None,))
+        chex.assert_type(feats.to_play, jnp.int32)
 
         x_frames = jax.vmap(make_frame_planes)(feats.frames)
         # downsample
@@ -153,7 +154,7 @@ class ResNetV2Architecture(NNArchitecture):
                 num_classes=self.spec.num_players,
             )
         )
-        x_player = player_planes_maker(feats.player.reshape(-1, 1))
+        x_player = player_planes_maker(feats.to_play.reshape(-1, 1))
 
         stacked = jnp.concatenate([x_frames, x_actions, x_player], axis=-1)
 

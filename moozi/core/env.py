@@ -262,9 +262,7 @@ class GIIEnv:
 
     @staticmethod
     def _get_reward(timestep: dm_env.TimeStep, to_play: int):
-        if to_play == pyspiel.PlayerId.TERMINAL:
-            return 0.0
-        elif timestep.reward is None:
+        if timestep.reward is None:
             return 0.0
         elif isinstance(timestep.reward, np.ndarray):
             return timestep.reward[BASE_PLAYER]

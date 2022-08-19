@@ -163,7 +163,7 @@ for i in range(traj_len):
         discount=rb.discount,
         num_unroll_steps=rb.num_unroll_steps,
         num_td_steps=rb.num_td_steps,
-        num_stacked_frames=rb.num_stacked_frames,
+        num_stacked_frames=rb.history_length,
     )
     value_diff = np.abs(target.n_step_return[0] - target.root_value[0])
     targets.append(target)

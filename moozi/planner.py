@@ -12,8 +12,6 @@ from moozi.core.link import link
 from moozi.nn import NNModel, RootFeatures, TransitionFeatures
 from moozi.laws import Law, get_keys
 
-from mctx._src import tree as tree_lib
-
 
 def make_paritial_recurr_fn(model, state, discount):
     def recurr_fn(params, random_key, action, hidden_state):
@@ -34,7 +32,7 @@ def make_paritial_recurr_fn(model, state, discount):
 
 
 def qtransform_by_parent_and_siblings_inherit(
-    tree: tree_lib.Tree,
+    tree: mctx.Tree,
     node_index: chex.Numeric,
     *,
     epsilon: chex.Numeric = 1e-8,
@@ -102,7 +100,7 @@ def make_planner(
         is_training = False
         batch_size = obs.shape[0]
         root_feats = RootFeatures(
-            obs=obs, player=np.zeros((batch_size,), dtype=jnp.int32)
+            obs=obs, to_play=np.zeros((batch_size,), dtype=jnp.int32)
         )
         nn_output, _ = model.root_inference(params, state, root_feats, is_training)
         root = mctx.RootFnOutput(
@@ -199,10 +197,10 @@ def convert_tree_to_graph(
     def node_to_str(node_i, reward=0, discount=1):
         return (
             f"{node_i}\n"
-            f"Reward: {reward:.2f}\n"
-            f"Discount: {discount:.2f}\n"
-            f"Value: {tree.node_values[batch_index, node_i]:.2f}\n"
-            f"Visits: {tree.node_visits[batch_index, node_i]}\n"
+            f"R: {reward:.2f}\n"
+            f"d: {discount:.2f}\n"
+            f"V: {tree.node_values[batch_index, node_i]:.2f}\n"
+            f"N: {tree.node_visits[batch_index, node_i]}\n"
         )
 
     def edge_to_str(node_i, a_i):

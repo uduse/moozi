@@ -1,4 +1,5 @@
 # %%
+import ray
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -34,8 +35,10 @@ stacker = HistoryStacker(
 vis = BreakthroughVisualizer(num_rows=config.env.num_rows, num_cols=config.env.num_cols)
 
 # %%
-rb = ReplayBuffer(**config.replay.kwargs)
-ps = ParameterServer(training_suite_factory(config))
+rb = ray.remote(ReplayBuffer).remote(**config.replay.kwargs)
+ps = ray.remote(num_gpus=config.param_opt.num_gpus)(ParameterServer).remote(
+    training_suite_factory(config), use_remote=True
+)
 tw = TrainingWorker(
     index=0,
     env_name=config.env.name,
@@ -100,6 +103,20 @@ gii = GII(
 )
 
 # %%
+# candidates = [
+#     Candidate(name=name, params=params, state=state, planner=planner, elo=1300)
+#     for name, (params, state) in load_params_and_states().items()
+# ]
+# candidates = [c for i, c in enumerate(candidates) if i % 10 == 0]
+# print(len(candidates))
+# t = Tournament(
+#     gii=gii,
+#     num_matches=1,
+#     candidates=candidates,
+# )
+# t.run()
+
+# %%
 lookup = load_params_and_states("/home/zeyi/moozi/examples/open_spiel/checkpoints")
 latest = list(lookup.keys())[-1]
 gii.params = {0: lookup[latest][0], 1: lookup[latest][0]}
@@ -119,6 +136,7 @@ g = visualize_search_tree(vis, search_tree, root_state, vis_dir)
 
 # # %%
 from IPython import display
+
 display.Image(vis_dir / "search.png")
 
 # # %%
@@ -153,3 +171,15 @@ display.Image(vis_dir / "search.png")
 # g.write("/home/zeyi/assets/graph.dot")
 
 # # %%
+import ray
+
+@ray.remote
+def put():
+    return ray.put(1)
+    
+@ray.remote
+def get(x):
+    print(x)
+
+x = put.remote()
+get.remote(x)

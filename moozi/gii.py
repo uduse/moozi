@@ -8,7 +8,7 @@ import numpy as np
 import pyspiel
 from flax import struct
 from moozi.core import StepSample
-from moozi.core.env import GIIEnvOut, GIIVecEnv
+from moozi.core.env import GIIEnvFeed, GIIEnvOut, GIIVecEnv
 from moozi.core.history_stacker import HistoryStacker
 from moozi.nn import NNModel, RootFeatures
 from moozi.planner import Planner, PlannerOut, PlannerFeed
@@ -108,6 +108,7 @@ class GII:
 
     def tick(self) -> StepSample:
         env_out = self.env.step(self.env_feed)
+        print(self.env.envs[0].backend.get_state)
         if self.env.num_envs == 1:
             # multiplexing only supported for 1 env
             to_play = int(env_out.to_play)
@@ -128,11 +129,10 @@ class GII:
             random_key=self._next_key(),
         )
         policy_out = self.policy(policy_feed)
-        action = policy_out.planner_out.action
+        action = np.array(policy_out.planner_out.action)
 
         self.stacker_state = policy_out.stacker_state
-        self.env_feed.reset = env_out.is_last
-        self.env_feed.action = np.array(action)
+        self.env_feed = GIIEnvFeed(action=action, reset=env_out.is_last)
         self.env_out = env_out
         self.planner_out = policy_out.planner_out
 

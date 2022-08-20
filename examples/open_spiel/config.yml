@@ -19,7 +19,7 @@ replay:
     use_remote: true
     max_trajs_size: 4_000
     max_targets_size: 500_000
-    sampling_strategy: hybrid
+    sampling_strategy: uniform
     num_unroll_steps: ${num_unroll_steps}
     num_td_steps: ${num_td_steps}
     history_length: ${history_length}

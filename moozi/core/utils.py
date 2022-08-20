@@ -1,10 +1,10 @@
 import jax
-from typing import Union
+from typing import Union, TypeVar
 from dataclasses import dataclass
 from flax import struct
 import chex
 import jax.numpy as jnp
-
+import ray
 
 def make_one_hot_planes(categories, num_rows, num_cols, num_classes):
     # [K] -> [H, W, K * A]

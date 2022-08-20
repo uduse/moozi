@@ -1,12 +1,16 @@
-from typing import Optional, Type, List
+from typing import Any, List, Optional, Type, TypeVar, Union
+
+import haiku as hk
 import jax
-from moozi.gii import GII
-from moozi.core.vis import Visualizer
+import ray
+
 from moozi.core import TrajectorySample
-from moozi.nn import NNModel
-from moozi.planner import Planner
 from moozi.core.history_stacker import HistoryStacker
 from moozi.core.trajectory_collector import TrajectoryCollector
+from moozi.core.vis import Visualizer
+from moozi.gii import GII
+from moozi.nn import NNModel
+from moozi.planner import Planner
 
 
 class TrainingWorker:
@@ -51,3 +55,11 @@ class TrainingWorker:
         samples = [self.gii.tick() for _ in range(self.num_steps)]
         self.traj_collector.add_step_samples(samples)
         return self.traj_collector.flush()
+
+    def set_params(self, params: Union[hk.Params, ray.ObjectRef]):
+        if isinstance(params, ray.ObjectRef):
+            params = ray.get(params)
+        self.gii.params = params        
+    
+    def set_state(self, state: Union[hk.Params, ray.ObjectRef])
+        pass

@@ -1,4 +1,5 @@
 import itertools
+from tqdm import tqdm
 from loguru import logger
 import random
 from moozi.core import elo
@@ -10,7 +11,7 @@ import jax
 from moozi.planner import Planner
 from typing import Union, List
 import haiku as hk
-from moozi.core.gii import GII
+from moozi.gii import GII
 
 
 def normalize_score(score) -> float:
@@ -20,6 +21,7 @@ def normalize_score(score) -> float:
 
 @dataclass
 class Candidate:
+    # TODO: rename something better
     name: Union[str, int]
     params: hk.Params
     state: hk.State
@@ -38,19 +40,15 @@ class Tournament:
     num_matches: int
     candidates: List[Candidate]
 
-    _random_key: chex.PRNGKey = field(init=False)
-
-    def __post_init__(self, seed: int):
-        self._random_key = jax.random.PRNGKey(seed)
-
     def run(self):
         results = []
         traj_collector = TrajectoryCollector(batch_size=1)
-
-        for p0, p1 in itertools.product(iter(self.candidates), iter(self.candidates)):
+        combinations = itertools.product(iter(self.candidates), iter(self.candidates))
+        for p0, p1 in tqdm(combinations):
             if p0 is not p1:
                 if self.gii.env_out is not None:
                     assert self.gii.env_out.is_last == True
+                self.gii.planner = {0: p0.planner, 1: p1.planner}
                 self.gii.params = {0: p0.params, 1: p1.params}
                 self.gii.state = {0: p0.state, 1: p1.state}
                 while len(traj_collector.trajs) <= self.num_matches:

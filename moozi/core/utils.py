@@ -6,6 +6,7 @@ import chex
 import jax.numpy as jnp
 import ray
 
+
 def make_one_hot_planes(categories, num_rows, num_cols, num_classes):
     # [K] -> [H, W, K * A]
     chex.assert_shape(categories, (None,))

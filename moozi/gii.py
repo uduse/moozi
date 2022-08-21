@@ -69,6 +69,7 @@ class GII:
         state: Union[hk.State, Dict[int, hk.State]],
         random_key: chex.PRNGKey,
         num_envs: int = 1,
+        backend: str= 'gpu'
     ):
         self.env = GIIVecEnv.new(env_name=env_name, num_envs=num_envs)
         self.env_feed = self.env.init()
@@ -83,7 +84,7 @@ class GII:
         self.params = params
         self.state = state
 
-        self.policy: PolicyType = jax.jit(policy, backend="gpu")
+        self.policy: PolicyType = jax.jit(policy, backend=backend)
 
     @staticmethod
     def _select_for_player(data: Union[Any, Dict[int, Any]], to_play: int):

@@ -36,6 +36,7 @@ param_opt:
   num_gpus: 1.0
   save_interval: 10
   save_dir: ./checkpoints/
+  load_from: null
 
 nn:
   arch_cls: ResNetV2Architecture
@@ -57,7 +58,7 @@ nn:
 
 train:
   num_epochs: 500
-  update_step_ratio: 4
+  update_step_ratio: 8
   batch_size: 1024
   lr: 3.0e-2
   weight_decay: 1.0e-4
@@ -66,7 +67,7 @@ train:
   consistency_loss_coef: 2.0
 
 training_worker:
-  num_workers: 32
+  num_workers: 24
   num_envs: 16
   num_cpus: 1
   num_gpus: 0.1
@@ -75,7 +76,7 @@ training_worker:
   planner:
     dim_action: ${dim_action}
     discount: ${discount}
-    num_unroll_steps: ${num_unroll_steps}
+    max_depth: ${num_unroll_steps}
     num_simulations: 100
     kwargs:
       dirichlet_alpha: 0.2
@@ -87,18 +88,18 @@ testing_worker:
   interval: 10
   num_cpus: 0
   num_gpus: 0.1
+  model: NNModel
   num_trajs: 10
   planner:
-    batch_size: 1
     dim_action: ${dim_action}
     discount: ${discount}
-    num_unroll_steps: ${num_unroll_steps}
-    num_simulations: 50
+    max_depth: ${num_unroll_steps}
+    num_simulations: 100
     kwargs:
-      dirichlet_alpha: 0.1
-      dirichlet_fraction: 0.1
-      temperature: 0.25
-      pb_c_init: 1.75
+      dirichlet_alpha: 0.2
+      dirichlet_fraction: 0.2
+      temperature: 1.0
+      pb_c_init: 1.25
 
 reanalyze_worker:
   num_workers: 0

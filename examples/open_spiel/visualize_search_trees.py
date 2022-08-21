@@ -1,4 +1,5 @@
 # %%
+from loguru import logger
 import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -16,13 +17,13 @@ from moozi.nn.training import make_target_from_traj
 from moozi.parameter_optimizer import ParameterServer
 from moozi.planner import Planner
 from moozi.replay import ReplayBuffer
-from moozi.tournament import Candidate, Tournament
+from moozi.tournament import Player, Tournament
 from moozi.training_worker import TrainingWorker
-
 from lib import get_config
-from train import Driver
+from moozi.driver import Driver
 
 # %%
+logger.info("Loading config")
 config = get_config()
 driver = Driver.setup(config)
 vis = BreakthroughVisualizer(num_rows=config.env.num_rows, num_cols=config.env.num_cols)
@@ -46,9 +47,8 @@ planner = Planner(
     dim_action=config.dim_action,
     model=driver.model,
     discount=-1.0,
-    num_unroll_steps=3,
-    num_simulations=50,
-    limit_depth=True,
+    num_simulations=200,
+    max_depth=6,
 )
 gii = GII(
     config.env.name,
@@ -60,6 +60,7 @@ gii = GII(
 )
 
 # %%
+logger.info("Loading checkpoints")
 lookup = load_params_and_states("/home/zeyi/moozi/examples/open_spiel/checkpoints")
 latest = lookup['latest']
 gii.params = {0: latest[0], 1: latest[0]}
@@ -74,5 +75,6 @@ for i in range(20):
     g = visualize_search_tree(vis, search_tree, root_state, vis_dir)
 
 # %%
-from IPython import display
-display.Image(vis_dir / "search.png")
+del g
+# from IPython import display
+# display.Image(vis_dir / "search.png")

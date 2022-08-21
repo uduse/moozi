@@ -10,7 +10,7 @@ import chex
 import jax.numpy as jnp
 import jax
 from moozi.planner import Planner
-from typing import Union, List
+from typing import Union, List, Tuple
 import haiku as hk
 from moozi.gii import GII
 
@@ -21,58 +21,65 @@ def normalize_score(score) -> float:
 
 
 @dataclass
-class Candidate:
-    # TODO: rename something better
+class Player:
     name: Union[str, int]
     params: hk.Params
     state: hk.State
     planner: Planner
     elo: float
+    matches: int = 0
+    score: float = 0.0
 
     def summary(self):
         return {
             "Name": self.name,
             "ELO": self.elo,
             "Num Simulations": self.planner.num_simulations,
-            "Num Unroll Steps": self.planner.num_unroll_steps,
+            "Max Depth": self.planner.max_depth,
+            "Matches": self.matches,
+            "Score": self.score
         }
 
 
 @dataclass
-class TournamentResult:
-    pass
+class MatchResult:
+    p0: Player
+    p1: Player
+    score: float
 
 
 @dataclass
 class Tournament:
     gii: GII
-    candidates: List[Candidate] = field(default_factory=list)
+    players: List[Player] = field(default_factory=list)
 
-    def run_round_robin(self, num_matches: int):
-        matches = list(itertools.product(iter(self.candidates), iter(self.candidates)))
-        self._evaluate_matches(matches, num_matches)
+    def run_round_robin(self, num_matches: int = 1) -> List[MatchResult]:
+        matches = list(itertools.product(iter(self.players), iter(self.players)))
+        return self._evaluate_matches(matches, num_matches)
 
-    def challenge(self, new_cand: Candidate, num_matches: int = 1):
+    def challenge(self, new_player: Player, num_matches: int = 1) -> List[MatchResult]:
         matches = []
-        for cand in self.candidates:
-            matches.append((new_cand, cand))
-            matches.append((cand, new_cand))
+        for old_player in self.players:
+            matches.append((new_player, old_player))
+            matches.append((old_player, new_player))
         if matches:
-            self._evaluate_matches(matches, num_matches)
-        self.candidates.append(new_cand)
+            results = self._evaluate_matches(matches, num_matches)
+        self.players.append(new_player)
+        return results
 
     @property
     def dataframe(self):
-        return pd.DataFrame(data=[c.summary() for c in self.candidates])
+        return pd.DataFrame(data=[c.summary() for c in self.players])
 
     def _evaluate_matches(
         self,
         matches,
         num_matches: int = 1,
         shuffle: bool = True,
-    ):
+    ) -> List[MatchResult]:
         results = []
-        traj_collector = TrajectoryCollector(batch_size=1)
+        traj_collector = TrajectoryCollector()
+        matches = list(filter(lambda match: match[0] != match[1], matches))
         for p0, p1 in tqdm(matches, desc="running matches"):
             if p0 is not p1:
                 if self.gii.env_out is not None:
@@ -84,9 +91,17 @@ class Tournament:
                     traj_collector.add_step_sample(self.gii.tick())
                 trajs = traj_collector.flush()
                 for traj in trajs:
-                    result_norm_0_to_1 = normalize_score(traj.last_reward[-1])
-                    results.append((p0, p1, result_norm_0_to_1))
+                    score = float(traj.last_reward[-1])
+                    results.append(MatchResult(p0, p1, score))
         if shuffle:
             random.shuffle(results)
-        for p0, p1, score in results:
-            p0.elo, p1.elo = elo.update(p0.elo, p1.elo, score, k=32)
+        for result in results:
+            norm_score = normalize_score(result.score)
+            result.p0.elo, result.p1.elo = elo.update(
+                result.p0.elo, result.p1.elo, norm_score, k=32
+            )
+            result.p0.matches += 1
+            result.p1.matches += 1
+            result.p0.score += norm_score
+            result.p1.score += (1 - norm_score)
+        return results

@@ -3,7 +3,7 @@ from pathlib import Path
 import random
 from dataclasses import dataclass, field
 import sys
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union, Dict
 
 import chex
 import cloudpickle
@@ -24,19 +24,11 @@ from moozi.nn.nn import NNArchitecture, NNModel, NNSpec
 from moozi.nn.training import make_training_suite
 
 
-# @ray.remote
-# @dataclass
-# class LoggerActor:
-#     logger: mz.logging.Logger
-
-#     def log(self, data):
-#         self.logger.write(data)
-
-
 class ParameterServer:
     def __init__(
         self,
         training_suite_factory,
+        load_from: Union[PathLike, str, None] = None,
     ):
         self.model: NNModel
         self.training_state: TrainingState
@@ -53,6 +45,9 @@ class ParameterServer:
         logger.add(f"logs/ps.debug.log", level="DEBUG")
         logger.add(f"logs/ps.info.log", level="INFO")
         self._flog = logger
+        if load_from is not None:
+            path = Path(load_from).expanduser()
+            self.restore(path)
 
     def update(self, big_batch: TrainTarget, batch_size: int):
         if len(big_batch) == 0:
@@ -162,3 +157,17 @@ class ParameterServer:
 
     def get_stats(self) -> dict:
         return self.get_device_properties()
+
+
+def load_params_and_states(
+    checkpoints_path: Union[PathLike, str] = "checkpoints",
+) -> Dict[str, Tuple[hk.Params, hk.State]]:
+    ret = {}
+    for fpath in Path(checkpoints_path).iterdir():
+        name = fpath.stem
+        training_state: TrainingState
+        with open(fpath, "rb") as f:
+            _, training_state, _ = cloudpickle.load(f)
+        params, state = training_state.target_params, training_state.target_state
+        ret[name] = (params, state)
+    return ret

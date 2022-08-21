@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from flax import struct
 from acme.utils.tree_utils import stack_sequence_fields, unstack_sequence_fields
 from typing import Any, Callable, Dict, List, Tuple, Type
 
@@ -290,6 +291,8 @@ class MuZeroLossWithScalarTransform(LossFn):
 
         # sum all losses
         # TODO: sum loss per batch, then mean across batch
+        # loss = jnp.mean(jnp.sum(jnp.concatenate(tree.flatten(losses)), axis=-1))
+        print(f"{jnp.concatenate(tree.flatten(losses)).shape=}")
         loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
 
         losses["loss"] = loss
@@ -467,6 +470,60 @@ def make_training_suite(
         target_update_period=target_update_period,
     )
     return model.with_jit(), training_state, sgd_step_fn
+
+
+# TODO: use this trainer instead
+class Trainer(struct.PyTreeNode):
+    model: NNModel
+    optimizer: optax.GradientTransformation
+    loss_fn: LossFn
+    sgd_step_fn: Callable
+    
+    @staticmethod
+    def new(
+        seed: int,
+        model: NNModel,
+        weight_decay: float,
+        lr: float,
+        num_unroll_steps: int,
+        history_length: int,
+        target_update_period: int = 1,
+        consistency_loss_coef: float = 1.0,
+    ):
+        random_key = jax.random.PRNGKey(seed)
+        random_key, new_key = jax.random.split(random_key)
+        params, state = model.init_params_and_state(new_key)
+        loss_fn = MuZeroLossWithScalarTransform(
+            history_length=history_length,
+            num_unroll_steps=num_unroll_steps,
+            scalar_transform=model.spec.scalar_transform,
+            weight_decay=weight_decay,
+            dim_action=model.spec.dim_action,
+            consistency_loss_coef=consistency_loss_coef,
+        )
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(5),
+            optax.adam(learning_rate=lr),
+        )
+        training_state = TrainingState(
+            params=params,
+            target_params=params,
+            state=state,
+            target_state=state,
+            opt_state=optimizer.init(params),
+            steps=0,
+            rng_key=random_key,
+        )
+        sgd_step_fn = make_sgd_step_fn(
+            model=model,
+            loss_fn=loss_fn,
+            optimizer=optimizer,
+            history_length=history_length,
+            num_unroll_steps=num_unroll_steps,
+            dim_action=model.spec.dim_action,
+            target_update_period=target_update_period,
+        )
+        return model.with_jit(), training_state, sgd_step_fn
 
 
 def make_target_from_traj(

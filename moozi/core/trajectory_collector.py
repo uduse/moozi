@@ -4,7 +4,7 @@ from .types import StepSample, TrajectorySample
 
 
 class TrajectoryCollector:
-    def __init__(self, batch_size: int):
+    def __init__(self, batch_size: int = 1):
         self.batch_size = batch_size
         self.buffer: List[List[StepSample]] = [[] for _ in range(batch_size)]
         self.trajs: List[TrajectorySample] = []

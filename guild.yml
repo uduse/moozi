@@ -110,7 +110,26 @@
       flags:
         env.name: MinAtar:Asterix-v1
         
-# - remotes:
-#   localhost:
-#     type: ssh
-#     host: localhost
+- model: open_spiel
+  operations:
+    train:
+      default: true
+      main: examples.open_spiel.train
+      output-scalars: off
+      flags-dest: config:examples/open_spiel/config.yml
+      flags-import: all
+      requires: utils
+      sourcecode:
+        - "*.py"
+        - "*.yml"
+        - "assets/"
+        - exclude:
+            dir: local_deps
+      flags:
+        env.name: OpenSpiel:breakthrough(rows=6,columns=5)
+  
+  resources:
+    utils:
+      - file: courier.ttf
+      - file: .env
+      - file: examples/open_spiel/config.yml

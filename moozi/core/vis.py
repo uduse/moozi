@@ -277,9 +277,9 @@ def game_state_to_image(vis: Visualizer, game_state: Optional[pyspiel.State]):
         img = vis.make_image(frame)
         # banner = vis.make_banner(to_play=game_state.current_player())
         # img = stack_images([img, banner])
-        return ImageOps.contain(img, (400, 400), Image.Resampling.LANCZOS)
+        return ImageOps.contain(img, (250, 250), Image.Resampling.LANCZOS)
     else:
-        return Image.new("RGBA", (400, 400), color="white")
+        return Image.new("RGBA", (250, 250), color="white")
 
 
 def convert_game_states_to_images(

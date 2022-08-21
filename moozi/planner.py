@@ -1,4 +1,4 @@
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 from flax import struct
 import mctx
 import chex
@@ -41,7 +41,7 @@ def make_paritial_recurr_fn(model: NNModel, state: hk.State, discount: float):
     return recurr_fn
 
 
-def qtransform_by_parent_and_siblings_inherit(
+def qtransform_by_inheritance(
     tree: mctx.Tree,
     node_index: chex.Numeric,
     *,
@@ -134,7 +134,7 @@ def make_planner(
                 num_simulations=num_simulations,
                 max_depth=num_unroll_steps if limit_depth else None,
                 invalid_actions=invalid_actions,
-                qtransform=qtransform_by_parent_and_siblings_inherit,
+                qtransform=qtransform_by_inheritance,
                 **kwargs,
             )
 
@@ -199,10 +199,11 @@ class Planner(struct.PyTreeNode):
     dim_action: int
     model: NNModel = struct.field(pytree_node=False)
     discount: float = 1.0
-    num_unroll_steps: int = struct.field(pytree_node=False, default=5)
+    # num_unroll_steps: int = struct.field(pytree_node=False, default=5)
     num_simulations: int = struct.field(pytree_node=False, default=10)
-    limit_depth: bool = struct.field(pytree_node=False, default=True)
-    use_gumbel: bool = struct.field(pytree_node=False, default=True)
+    max_depth: Optional[int] = struct.field(pytree_node=False, default=None)
+    use_gumbel: bool = struct.field(pytree_node=False, default=False)
+    kwargs: dict = struct.field(default_factory=dict)
 
     def run(self, feed: "PlannerFeed") -> "PlannerOut":
         is_training = False
@@ -225,9 +226,10 @@ class Planner(struct.PyTreeNode):
                     self.model, feed.state, self.discount
                 ),
                 num_simulations=self.num_simulations,
-                max_depth=self.num_unroll_steps if self.limit_depth else None,
+                max_depth=self.max_depth,
                 invalid_actions=invalid_actions,
                 max_num_considered_actions=16,
+                **self.kwargs
             )
         else:
             mctx_out = mctx.muzero_policy(
@@ -238,9 +240,9 @@ class Planner(struct.PyTreeNode):
                     self.model, feed.state, self.discount
                 ),
                 num_simulations=self.num_simulations,
-                max_depth=self.num_unroll_steps if self.limit_depth else None,
+                max_depth=self.max_depth,
                 invalid_actions=invalid_actions,
-                qtransform=qtransform_by_parent_and_siblings_inherit,
+                **self.kwargs
             )
 
         action = mctx_out.action

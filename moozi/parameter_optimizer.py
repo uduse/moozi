@@ -1,3 +1,4 @@
+from os import PathLike
 from pathlib import Path
 import random
 from dataclasses import dataclass, field
@@ -36,16 +37,11 @@ class ParameterServer:
     def __init__(
         self,
         training_suite_factory,
-        use_remote=False,
-        save_dir: str = "checkpoints/",
     ):
         self.model: NNModel
         self.training_state: TrainingState
         self.sgd_step_fn: Callable
         self.model, self.training_state, self.sgd_step_fn = training_suite_factory()
-        self.use_remote: bool = use_remote
-        self.save_dir: Path = Path(save_dir)
-        self.save_dir.mkdir(parents=True, exist_ok=True)
         self._tb_logger = mz.logging.JAXBoardLoggerV2(
             name="param_server", time_delta=30
         )
@@ -101,18 +97,12 @@ class ParameterServer:
     def get_params(self):
         logger.debug("getting params")
         ret = self.training_state.target_params
-        if self.use_remote:
-            return ray.put(ret)
-        else:
-            return ret
+        return ret
 
     def get_state(self):
         logger.debug("getting state")
         ret = self.training_state.target_state
-        if self.use_remote:
-            return ray.put(ret)
-        else:
-            return ret
+        return ret
 
     def set_state(self, state):
         logger.debug("setting state")
@@ -142,13 +132,33 @@ class ParameterServer:
             model_size=model_size_human,
         )
 
-    def save(self):
-        path = self.save_dir / f"{self.training_state.steps}.pkl"
-        logger.info(f"saving model to {path}")
-        with open(path, "wb") as f:
+    def save(
+        self,
+        fname: Optional[str] = None,
+        path: Union[PathLike, str] = "checkpoints",
+        save_latest: bool = True,
+    ):
+        path = Path(path).expanduser().resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        assert path.is_dir()
+        if not fname:
+            fname = f"{self.training_state.steps}.pkl"
+        else:
+            fname = f"{fname}.pkl"
+        fpath = path / fname
+        logger.info(f"saving model to {fpath}")
+        with open(fpath, "wb") as f:
             cloudpickle.dump((self.model, self.training_state, self.sgd_step_fn), f)
+        if save_latest:
+            fpath = path / "latest.pkl"
+            logger.info(f"saving model to {fpath}")
+            with open(fpath, "wb") as f:
+                cloudpickle.dump((self.model, self.training_state, self.sgd_step_fn), f)
 
-    def restore(self, path):
-        logger.info(f"restoring model from {path}")
-        with open(path, "rb") as f:
+    def restore(self, fpath):
+        logger.info(f"restoring model from {fpath}")
+        with open(fpath, "rb") as f:
             self.model, self.training_state, self.sgd_step_fn = cloudpickle.load(f)
+
+    def get_stats(self) -> dict:
+        return self.get_device_properties()

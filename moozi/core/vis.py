@@ -14,7 +14,7 @@ import pyspiel
 from loguru import logger
 from moozi import BASE_PLAYER
 from moozi.utils import get_project_root
-from PIL import Image, ImageOps, ImageDraw, ImageChops, ImageFont
+from PIL import Image, ImageOps, ImageDraw, ImageChops, ImageFont, ImageFilter
 
 
 def get_font(name="courier") -> ImageFont.ImageFont:
@@ -104,12 +104,13 @@ class BreakthroughVisualizer(Visualizer):
 
 def save_gif(
     images: List[Image.Image],
-    path: Optional[Path] = None,
+    path: Union[PathLike, str, None] = None,
     quality: int = 40,
     duration: int = 40,
 ):
     if not path:
         path = next_valid_fpath("gifs/", "gif")
+    path = Path(path).expanduser()
     assert len(images) >= 1
     images[0].save(
         str(path),
@@ -192,9 +193,10 @@ def convert_tree_to_graph(
     graph.node_attr.update(
         imagescale=True,
         shape="box",
-        width=1.25,
-        height=2.5,
+        # width=2.5,
+        # height=4,
         imagepos="tc",
+        fixed_size=True,
         labelloc="b",
         fontname="Courier New",
     )
@@ -207,7 +209,7 @@ def convert_tree_to_graph(
         **({"image": f"0.{image_suffix}"} if image_dir else {}),
     )
     # Add all other nodes and connect them up.
-    for node_id in range(tree.num_simulations + 1):
+    for node_id in tqdm(range(tree.num_simulations + 1), desc="converting to graph"):
         for action_id in range(tree.num_actions):
             # Index of children, or -1 if not expanded
             child_id = tree.children_index[batch_index, node_id, action_id]
@@ -222,10 +224,11 @@ def convert_tree_to_graph(
                         node_i=child_id,
                         reward=tree.children_rewards[batch_index, node_id, action_id],
                     ),
+                    width=2.5,
+                    height=4,
                     **{"image": f"{child_id}.{image_suffix}"} if image_dir else {},
                 )
                 graph.add_edge(node_id, child_id, label=edge_to_str(node_id, action_id))
-
     return graph
 
 
@@ -274,9 +277,9 @@ def game_state_to_image(vis: Visualizer, game_state: Optional[pyspiel.State]):
         img = vis.make_image(frame)
         # banner = vis.make_banner(to_play=game_state.current_player())
         # img = stack_images([img, banner])
-        return ImageOps.contain(img, (100, 100), Image.Resampling.NEAREST)
+        return ImageOps.contain(img, (400, 400), Image.Resampling.LANCZOS)
     else:
-        return Image.new("RGBA", (100, 100), color="black")
+        return Image.new("RGBA", (400, 400), color="white")
 
 
 def convert_game_states_to_images(
@@ -286,7 +289,7 @@ def convert_game_states_to_images(
     parents: Optional[Dict[int, int]] = None,
 ) -> Dict[int, Image.Image]:
     state_images = {}
-    for idx, game_state in game_states.items():
+    for idx, game_state in tqdm(game_states.items(), desc='making images'):
         path = Path(image_root) / f"{idx}.png"
         state_images[idx] = game_state_to_image(vis, game_state)
     if parents is None:
@@ -305,7 +308,9 @@ def align_game_states(
     search_tree: mctx.Tree,
 ) -> Dict[int, Optional[pyspiel.State]]:
     node_states = {0: root_state}
-    for node_id in tqdm(range(search_tree.num_simulations)):
+    for node_id in tqdm(
+        range(search_tree.num_simulations), desc="aligning game states"
+    ):
         for action_id in range(search_tree.num_actions):
             child_id = int(search_tree.children_index[0, node_id, action_id])
             if child_id < 0:
@@ -326,12 +331,13 @@ def align_game_states(
 def diff_image(
     before: Image.Image,
     after: Image.Image,
-    transparency: int = 80,
+    opacity: int = 25,
     mask_rgb: Tuple[int, int, int] = (255, 0, 127),
 ):
     translucent = Image.new("RGB", before.size, mask_rgb)
     diff = ImageChops.difference(before, after)
-    mask = diff.convert("L").point(lambda x: transparency if x else 0)
+    mask = diff.convert("L").point(lambda x: opacity if x else 0)
+    mask = mask.filter(ImageFilter.GaussianBlur(radius = 1))
     ret = after.copy()
     ret.paste(translucent, (0, 0), mask)
     return ret
@@ -369,9 +375,11 @@ def visualize_search_tree(
             elif to_play == pyspiel.PlayerId.TERMINAL:
                 label = "game ends"
             extra[idx] = label
+        else:
+            extra[idx] = 'delusion'
     g = convert_tree_to_graph(search_tree, image_dir=image_dir, extra=extra)
     g.layout(prog="dot")
-    g.draw(output_dir / "search.png")
-    g.write(output_dir / "search.dot")
-    logger.info("Search tree saved to ")
+    g.draw(output_dir / "search_tree.png")
+    g.write(output_dir / "search_tree.dot")
+    logger.info("Search tree saved to " + str(output_dir))
     return g

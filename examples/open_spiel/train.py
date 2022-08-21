@@ -1,185 +1,186 @@
 # %%
-import ray
+from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, Type
 
 import cloudpickle
 import haiku as hk
 import jax
-from moozi.core import HistoryStacker, TrajectoryCollector
+import moozi as mz
+import ray
+from loguru import logger
+from moozi.core import HistoryStacker, TrajectoryCollector, make_scalar_transform
 from moozi.core.env import GIIEnv, GIIEnvFeed, GIIEnvOut, GIIVecEnv
 from moozi.core.types import TrainingState
 from moozi.core.vis import BreakthroughVisualizer, visualize_search_tree
-from moozi.gii import GII
-from moozi.nn import NNModel, RootFeatures
-from moozi.nn.training import make_target_from_traj
+from moozi.nn.nn import NNArchitecture, NNSpec
 from moozi.parameter_optimizer import ParameterServer
 from moozi.planner import Planner
-from moozi.replay import ReplayBuffer
+from moozi.replay import ReplayBuffer, ShardedReplayBuffer
 from moozi.tournament import Candidate, Tournament
 from moozi.training_worker import TrainingWorker
+from omegaconf import DictConfig
 
-from lib import get_config, get_model, training_suite_factory
+from lib import get_config
 
 # %%
 config = get_config()
-model = get_model(config)
-num_envs = 4
-stacker = HistoryStacker(
-    num_rows=config.env.num_rows,
-    num_cols=config.env.num_cols,
-    num_channels=config.env.num_channels,
-    history_length=config.history_length,
-    dim_action=config.dim_action,
-)
-vis = BreakthroughVisualizer(num_rows=config.env.num_rows, num_cols=config.env.num_cols)
+
+
+@dataclass
+class Driver:
+    config: DictConfig
+    model: mz.nn.NNModel
+    stacker: HistoryStacker
+    trp: Planner
+    # tsp: Planner
+
+    trws: Optional[List[TrainingWorker]] = None
+    # trws: Optional[List[TrainingWorker]] = None
+    ps: Optional[ParameterServer] = None
+    rb: Union[ReplayBuffer, ShardedReplayBuffer, None] = None
+
+    training_start: bool = False
+    trajs: list = field(default_factory=list)
+    epoch: int = 0
+
+    @staticmethod
+    def setup(config: DictConfig):
+        scalar_transform = make_scalar_transform(**config.scalar_transform)
+        nn_arch_cls: Type[NNArchitecture] = mz.nn.get(config.nn.arch_cls)
+        nn_spec: NNSpec = mz.nn.get(config.nn.spec_cls)(
+            **config.nn.spec_kwargs,
+            scalar_transform=scalar_transform,
+        )
+        model = mz.nn.make_model(nn_arch_cls, nn_spec)
+
+        stacker = HistoryStacker(
+            num_rows=config.env.num_rows,
+            num_cols=config.env.num_cols,
+            num_channels=config.env.num_channels,
+            history_length=config.history_length,
+            dim_action=config.dim_action,
+        )
+        trp = Planner(
+            batch_size=config.training_worker.num_envs,
+            dim_action=config.dim_action,
+            model=model,
+            discount=config.discount,
+            num_unroll_steps=config.num_unroll_steps,
+            num_simulations=config.training_worker.planner.num_simulations,
+            limit_depth=True,
+        )
+        config = config.copy()
+        return Driver(
+            config=config,
+            model=model,
+            stacker=stacker,
+            trp=trp,
+        )
+
+    def start(self):
+        if config.replay.num_shards > 1:
+            self.rb = ray.remote(ShardedReplayBuffer).remote(
+                num_shards=config.replay.num_shards, kwargs=config.replay.kwargs
+            )
+        else:
+            self.rb = ray.remote(ReplayBuffer).remote(**config.replay.kwargs)
+        self.ps = ray.remote(num_gpus=config.param_opt.num_gpus)(
+            ParameterServer
+        ).remote(
+            partial(
+                mz.nn.training.make_training_suite,
+                seed=config.seed,
+                model=self.model,
+                weight_decay=config.train.weight_decay,
+                lr=config.train.lr,
+                num_unroll_steps=config.num_unroll_steps,
+                history_length=config.history_length,
+                target_update_period=config.train.target_update_period,
+                consistency_loss_coef=config.train.consistency_loss_coef,
+            )
+        )
+        self.trws = [
+            ray.remote(num_gpus=config.training_worker.num_gpus)(TrainingWorker).remote(
+                index=i,
+                env_name=config.env.name,
+                num_envs=config.training_worker.num_envs,
+                model=self.model,
+                stacker=self.stacker,
+                planner=self.trp,
+                num_steps=config.training_worker.num_steps,
+                vis=BreakthroughVisualizer if i == 0 else None,
+            )
+            for i in range(config.training_worker.num_workers)
+        ]
+
+    def wait(self):
+        ray.get(
+            [w.get_stats.remote() for w in self.trws]
+            + [self.ps.get_stats.remote(), self.rb.get_stats.remote()]
+        )
+
+    def sync_params_and_state(self):
+        if self.epoch == 0:
+            for w in self.trws:
+                w.set_params.remote(self.ps.get_params.remote())
+                w.set_state.remote(self.ps.get_state.remote())
+        else:
+            if self.epoch % self.config.training_worker.update_period == 0:
+                for w in self.trws:
+                    w.set_params.remote(self.ps.get_params.remote())
+                    w.set_state.remote(self.ps.get_state.remote())
+
+    def generate_trajs(self):
+        self.trajs.clear()
+        for w in self.trws:
+            self.trajs.append(w.run.remote())
+
+    def update_parameters(self):
+        if self.training_start:
+            batch = self.rb.get_train_targets_batch.remote(
+                batch_size=config.train.batch_size * self.config.num_updates
+            )
+            self.ps.update.remote(batch, batch_size=config.train.batch_size)
+        else:
+            if config.replay.num_shards > 1:
+                stats = ray.get(self.rb.get_stats.remote())
+                num_targets = sum([s['targets_size'] for s in stats.values()])
+            else:
+                num_targets = ray.get(self.rb.get_stats.remote())['targets_size']
+            if num_targets >= self.config.train.min_targets_to_train:
+                self.training_start = True
+                logger.info("Training start")
+
+    def process_trajs(self):
+        for trajs in self.trajs:
+            self.rb.add_trajs.remote(trajs, from_env=True)
+
+    def house_keep(self):
+        self.ps.log_tensorboard.remote()
+        self.rb.log_tensorboard.remote()
+        if self.epoch % self.config.param_opt.save_interval == 0:
+            self.ps.save.remote()
+
+    def run_one_epoch(self):
+        logger.info(f"epoch: {self.epoch}")
+        self.sync_params_and_state()
+        self.update_parameters()
+        self.process_trajs()
+        self.generate_trajs()
+        self.house_keep()
+        self.wait()
+        self.epoch += 1
+        
+
 
 # %%
-rb = ray.remote(ReplayBuffer).remote(**config.replay.kwargs)
-ps = ray.remote(num_gpus=config.param_opt.num_gpus)(ParameterServer).remote(
-    training_suite_factory(config), use_remote=True
-)
-tw = TrainingWorker(
-    index=0,
-    env_name=config.env.name,
-    num_envs=num_envs,
-    model=model,
-    stacker=stacker,
-    planner=Planner(
-        batch_size=num_envs,
-        dim_action=config.dim_action,
-        model=model,
-        discount=config.discount,
-        num_unroll_steps=config.num_unroll_steps,
-        num_simulations=1,
-        limit_depth=True,
-    ),
-    num_steps=50,
-)
+driver = Driver.setup(config)
+driver.start()
 
 # %%
-def train():
-    for i in range(1000):
-        trajs = tw.run()
-        rb.add_trajs(trajs)
-        batch = rb.get_train_targets_batch(1024)
-        loss = ps.update(batch, 256)
-        ps.log_tensorboard(i)
-        if i % 10 == 0:
-            ps.save()
-        print(f"{loss=}")
-
+for i in range(100):
+    driver.run_one_epoch()
 
 # %%
-def load_params_and_states(checkpoints_path="checkpoints") -> dict:
-    ret = {}
-    for fpath in Path(checkpoints_path).iterdir():
-        name = int(fpath.stem)
-        training_state: TrainingState
-        with open(fpath, "rb") as f:
-            _, training_state, _ = cloudpickle.load(f)
-        params, state = training_state.target_params, training_state.target_state
-        ret[name] = (params, state)
-    return ret
-
-
-# %%
-planner = Planner(
-    batch_size=1,
-    dim_action=config.dim_action,
-    model=model,
-    discount=-1.0,
-    num_unroll_steps=3,
-    num_simulations=10,
-    limit_depth=False,
-)
-gii = GII(
-    config.env.name,
-    stacker=stacker,
-    planner=planner,
-    params=None,
-    state=None,
-    random_key=jax.random.PRNGKey(0),
-)
-
-# %%
-# candidates = [
-#     Candidate(name=name, params=params, state=state, planner=planner, elo=1300)
-#     for name, (params, state) in load_params_and_states().items()
-# ]
-# candidates = [c for i, c in enumerate(candidates) if i % 10 == 0]
-# print(len(candidates))
-# t = Tournament(
-#     gii=gii,
-#     num_matches=1,
-#     candidates=candidates,
-# )
-# t.run()
-
-# %%
-lookup = load_params_and_states("/home/zeyi/moozi/examples/open_spiel/checkpoints")
-latest = list(lookup.keys())[-1]
-gii.params = {0: lookup[latest][0], 1: lookup[latest][0]}
-gii.state = {0: lookup[latest][1], 1: lookup[latest][1]}
-
-# %%
-for i in range(9):
-    gii.tick()
-# jax.config.update("jax_disable_jit", True)
-gii.tick()
-
-# %%
-search_tree = gii.planner_out.tree
-root_state = gii.env.envs[0].backend.get_state
-vis_dir = Path("~/assets/search").expanduser()
-g = visualize_search_tree(vis, search_tree, root_state, vis_dir)
-
-# # %%
-from IPython import display
-
-display.Image(vis_dir / "search.png")
-
-# # %%
-
-# %%
-# %%
-# %%
-# %%
-# %%
-# %%
-
-
-# %%
-# rb.get_stats()
-# # %%
-# aei.tick()
-# display(tw.vis.make_image(aei.env_out.frame[0]))
-# backend_states.append(aei.env.envs[0]._backend.get_state)
-# search_trees.append(aei.planner_out.tree)
-
-# # %%
-# # %%
-# idx = -1
-# root_state = backend_states[idx]
-# search_tree = search_trees[idx]
-# image_path = Path("/home/zeyi/assets/imgs")
-# for key, game_state in node_states.items():
-#     save_state_to_image(tw.vis, game_state, key)
-
-# # %%
-# g = convert_tree_to_graph(search_tree, image_path=str(image_path))
-# g.write("/home/zeyi/assets/graph.dot")
-
-# # %%
-import ray
-
-@ray.remote
-def put():
-    return ray.put(1)
-    
-@ray.remote
-def get(x):
-    print(x)
-
-x = put.remote()
-get.remote(x)

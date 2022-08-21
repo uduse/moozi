@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 
+# TODO: deprecated
 @dataclass
 class MinMaxStats:
     minimum: float = float("inf")

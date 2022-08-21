@@ -1,5 +1,5 @@
 import jax
-from typing import Union, TypeVar
+from typing import Union, TypeVar, Any
 from dataclasses import dataclass
 from flax import struct
 import chex
@@ -75,11 +75,11 @@ def fast_map_structure(func, *structure):
     return tree.unflatten_as(structure[-1], [func(*x) for x in entries])
 
 
-def stack_sequence_fields_pytree(pytree: struct.PyTreeNode):
+def stack_sequence_fields_pytree(pytree: Any):
     return jax.tree_util.tree_map(lambda *values: jnp.stack(values), *pytree)
 
 
-def unstack_sequence_fields_pytree(pytree: struct.PyTreeNode, batch_size):
+def unstack_sequence_fields_pytree(pytree: Any, batch_size):
     return [
         jax.tree_util.tree_map(lambda x, i=i: x[i], pytree) for i in range(batch_size)
     ]

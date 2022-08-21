@@ -219,6 +219,8 @@ class NNModel:
 
     # TODO: remove hk_transformed here in the future, currently here for debugging purposes
     hk_transformed: hk.MultiTransformedWithState
+    
+    spec: NNSpec
 
     def with_jit(self) -> "NNModel":
         """Return a new model with inference functions passed through `jax.jit`."""
@@ -252,6 +254,7 @@ class NNModel:
                 static_argnums=3,
             ),
             hk_transformed=self.hk_transformed,
+            spec=self.spec,
         )
 
     def __hash__(self) -> int:
@@ -358,4 +361,5 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
         trans_inference_unbatched,
         projection_inference_unbatched,
         hk_transformed,
+        spec
     )

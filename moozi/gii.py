@@ -108,7 +108,6 @@ class GII:
 
     def tick(self) -> StepSample:
         env_out = self.env.step(self.env_feed)
-        print(self.env.envs[0].backend.get_state)
         if self.env.num_envs == 1:
             # multiplexing only supported for 1 env
             to_play = int(env_out.to_play)

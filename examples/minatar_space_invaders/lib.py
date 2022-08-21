@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Callable, List, Set, Tuple, Union
 
 import moozi
-from acme.utils.tree_utils import stack_sequence_fields
 from dotenv import load_dotenv
 from loguru import logger
 from moozi.core import make_env_and_spec

@@ -1,8 +1,8 @@
 seed: 0
 discount: 1
-num_unroll_steps: 2
+num_unroll_steps: 5
 num_td_steps: 1000
-history_length: 4
+history_length: 1
 dim_action: auto
 debug: false
 
@@ -14,9 +14,8 @@ env:
   num_players: 2
 
 replay:
-  num_shards: 1
+  num_shards: 6
   kwargs:
-    use_remote: true
     max_trajs_size: 4_000
     max_targets_size: 500_000
     sampling_strategy: uniform
@@ -34,14 +33,13 @@ scalar_transform:
   contract: false
 
 param_opt:
-  use_remote: true
-  num_gpus: 0.6
+  num_gpus: 1.0
   save_interval: 10
   save_dir: ./checkpoints/
 
 nn:
-  arch_cls: moozi.nn.ResNetV2Architecture
-  spec_cls: moozi.nn.ResNetV2Spec
+  arch_cls: ResNetV2Architecture
+  spec_cls: ResNetV2Spec
   spec_kwargs:
     history_length: ${history_length}
     num_players: ${env.num_players}
@@ -61,31 +59,31 @@ train:
   num_epochs: 500
   update_step_ratio: 4
   batch_size: 1024
-  lr: 1.0e-2
+  lr: 3.0e-2
   weight_decay: 1.0e-4
-  target_update_period: 500
-  min_targets_to_train: 5_000
+  target_update_period: 100
+  min_targets_to_train: 1_000
   consistency_loss_coef: 2.0
 
-env_worker:
-  num_workers: 20
-  num_envs: 32
+training_worker:
+  num_workers: 32
+  num_envs: 16
   num_cpus: 1
   num_gpus: 0.1
-  num_steps: 100
-  update_period: 10
+  num_steps: 10
+  update_period: 2
   planner:
     dim_action: ${dim_action}
     discount: ${discount}
     num_unroll_steps: ${num_unroll_steps}
-    num_simulations: 25
+    num_simulations: 100
     kwargs:
       dirichlet_alpha: 0.2
       dirichlet_fraction: 0.2
       temperature: 1.0
-      pb_c_init: 2.25
+      pb_c_init: 1.25
 
-test_worker:
+testing_worker:
   interval: 10
   num_cpus: 0
   num_gpus: 0.1
@@ -102,7 +100,7 @@ test_worker:
       temperature: 0.25
       pb_c_init: 1.75
 
-reanalyze:
+reanalyze_worker:
   num_workers: 0
   num_envs: 32
   num_cpus: 1

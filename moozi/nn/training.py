@@ -172,14 +172,14 @@ class MuZeroLossWithScalarTransform(LossFn):
         n_step_return = batch.n_step_return.take(0, axis=1)
         n_step_return_transformed = self.scalar_transform.transform(n_step_return)
         losses["loss/value_0"] = (
-            vmap(rlax.categorical_cross_entropy)(
+            optax.softmax_cross_entropy(
                 labels=n_step_return_transformed,
                 logits=network_output.value,
             )
             * self.value_loss_coef
         )
 
-        losses["loss/action_probs_0"] = vmap(rlax.categorical_cross_entropy)(
+        losses["loss/action_probs_0"] = optax.softmax_cross_entropy(
             labels=batch.action_probs.take(0, axis=1),
             logits=network_output.policy_logits,
         )
@@ -207,7 +207,7 @@ class MuZeroLossWithScalarTransform(LossFn):
                 (batch_size, self.scalar_transform.dim),
             )
             losses[f"loss/reward_{str(i + 1)}"] = (
-                vmap(rlax.categorical_cross_entropy)(
+                optax.softmax_cross_entropy(
                     labels=reward_transformed,
                     logits=network_output.reward,
                 )
@@ -223,7 +223,7 @@ class MuZeroLossWithScalarTransform(LossFn):
                 (batch_size, self.scalar_transform.dim),
             )
             losses[f"loss/value_{str(i + 1)}"] = (
-                vmap(rlax.categorical_cross_entropy)(
+                optax.softmax_cross_entropy(
                     labels=n_step_return_transformed,
                     logits=network_output.value,
                 )
@@ -233,9 +233,9 @@ class MuZeroLossWithScalarTransform(LossFn):
 
             # action probs loss
             losses[f"loss/action_probs_{str(i + 1)}"] = (
-                vmap(rlax.categorical_cross_entropy)(
-                    batch.action_probs.take(i + 1, axis=1),
-                    network_output.policy_logits,
+                optax.softmax_cross_entropy(
+                    labels=batch.action_probs.take(i + 1, axis=1),
+                    logits=network_output.policy_logits,
                 )
                 * transition_loss_scale
             )
@@ -425,8 +425,7 @@ def make_sgd_step_fn(
 
 def make_training_suite(
     seed: int,
-    nn_arch_cls: Type[NNArchitecture],
-    nn_spec: NNSpec,
+    model: NNModel,
     weight_decay: float,
     lr: float,
     num_unroll_steps: int,
@@ -434,16 +433,15 @@ def make_training_suite(
     target_update_period: int = 1,
     consistency_loss_coef: float = 1.0,
 ) -> Tuple[NNModel, TrainingState, Callable]:
-    model = make_model(nn_arch_cls, nn_spec)
     random_key = jax.random.PRNGKey(seed)
     random_key, new_key = jax.random.split(random_key)
     params, state = model.init_params_and_state(new_key)
     loss_fn = MuZeroLossWithScalarTransform(
         history_length=history_length,
         num_unroll_steps=num_unroll_steps,
-        scalar_transform=nn_spec.scalar_transform,
+        scalar_transform=model.spec.scalar_transform,
         weight_decay=weight_decay,
-        dim_action=nn_spec.dim_action,
+        dim_action=model.spec.dim_action,
         consistency_loss_coef=consistency_loss_coef,
     )
     optimizer = optax.chain(
@@ -465,7 +463,7 @@ def make_training_suite(
         optimizer=optimizer,
         history_length=history_length,
         num_unroll_steps=num_unroll_steps,
-        dim_action=nn_spec.dim_action,
+        dim_action=model.spec.dim_action,
         target_update_period=target_update_period,
     )
     return model.with_jit(), training_state, sgd_step_fn

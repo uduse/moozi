@@ -45,39 +45,28 @@ def get_config(overrides={}, path=None):
         config.env.num_cols = num_cols
     if config.env.num_channels == "auto":
         config.env.num_channels = num_channels
+
+    config.num_steps_per_epoch = (
+        config.training_worker.num_steps
+        * config.training_worker.num_workers
+        * config.training_worker.num_envs
+    ) + (
+        config.reanalyze_worker.num_workers
+        * config.reanalyze_worker.num_envs
+        * config.reanalyze_worker.num_steps
+    )
+    config.num_env_steps_per_epoch = (
+        config.training_worker.num_steps
+        * config.training_worker.num_workers
+        * config.training_worker.num_envs
+    )
+    config.num_updates = int(
+        config.train.update_step_ratio
+        * config.num_steps_per_epoch
+        / config.train.batch_size
+    )
+
     for key, value in overrides.items():
         OmegaConf.update(config, key, value)
     OmegaConf.resolve(config)
     return config
-
-
-def get_model(config) -> NNModel:
-    scalar_transform = make_scalar_transform(**config.scalar_transform)
-    nn_arch_cls = eval(config.nn.arch_cls)
-    nn_spec = eval(config.nn.spec_cls)(
-        **config.nn.spec_kwargs,
-        scalar_transform=scalar_transform,
-    )
-    return make_model(nn_arch_cls, nn_spec)
-
-
-def training_suite_factory(config):
-
-    scalar_transform = make_scalar_transform(**config.scalar_transform)
-    nn_arch_cls = eval(config.nn.arch_cls)
-    nn_spec = eval(config.nn.spec_cls)(
-        **config.nn.spec_kwargs,
-        scalar_transform=scalar_transform,
-    )
-    return partial(
-        make_training_suite,
-        seed=config.seed,
-        nn_arch_cls=nn_arch_cls,
-        nn_spec=nn_spec,
-        weight_decay=config.train.weight_decay,
-        lr=config.train.lr,
-        num_unroll_steps=config.num_unroll_steps,
-        history_length=config.history_length,
-        target_update_period=config.train.target_update_period,
-        consistency_loss_coef=config.train.consistency_loss_coef,
-    )

@@ -1,4 +1,6 @@
 from dataclasses import dataclass, field
+import jax
+import dm_env
 from flax import struct
 import pyspiel
 import chex
@@ -216,14 +218,29 @@ class GIIEnvOut(struct.PyTreeNode):
             is_last=np.asarray(self.is_last, dtype=np.bool8),
             to_play=np.asarray(self.to_play, dtype=np.int32),
             reward=np.asarray(self.reward, dtype=np.float32),
-            legal_actions=np.asarray(self.legal_actions, dtype=np.int32),
+            legal_actions=np.asarray(self.legal_actions, dtype=np.bool8),
         )
+
+
+@dataclass
+class ArraySpec:
+    shape: tuple
+    dtype: np.dtype
+
+
+class GIISpec(struct.PyTreeNode):
+    frame: ArraySpec
+    is_first: ArraySpec
+    is_last: ArraySpec
+    to_play: ArraySpec
+    reward: ArraySpec
+    legal_actions: ArraySpec
 
 
 class GIIEnv(struct.PyTreeNode):
     name: str
     num_players: int
-    spec: EnvironmentSpec
+    spec: GIISpec
     backend: dm_env.Environment = struct.field(pytree_node=False)
 
     @staticmethod
@@ -231,10 +248,22 @@ class GIIEnv(struct.PyTreeNode):
         """Smart constructor."""
         backend, spec = make_env_and_spec(env_name)
         num_players = backend.num_players
+        dim_action = spec.actions.num_values
+        gii_spec = GIISpec(
+            frame=ArraySpec(
+                shape=backend.observation_spec().observation.shape,
+                dtype=np.float32,
+            ),
+            is_first=ArraySpec(shape=(), dtype=np.bool8),
+            is_last=ArraySpec(shape=(), dtype=np.bool8),
+            to_play=ArraySpec(shape=(), dtype=np.int32),
+            reward=ArraySpec(shape=(), dtype=np.float32),
+            legal_actions=ArraySpec(shape=(dim_action,), dtype=np.bool8),
+        )
         return GIIEnv(
             name=env_name,
+            spec=gii_spec,
             num_players=num_players,
-            spec=spec,
             backend=backend,
         )
 
@@ -286,10 +315,10 @@ class GIIEnv(struct.PyTreeNode):
         assert isinstance(timestep.observation, list)
         if to_play == pyspiel.PlayerId.TERMINAL:
             la = np.zeros_like(timestep.observation[0].legal_actions)
-            return np.insert(la, 0, [1])
+            return np.insert(la, 0, [1]).astype(np.bool8)
         else:
             la = timestep.observation[to_play].legal_actions
-            return np.insert(la, 0, [0])
+            return np.insert(la, 0, [0]).astype(np.bool8)
 
 
 # TODO: extra dummy action handling into a class
@@ -299,6 +328,7 @@ class GIIVecEnv(struct.PyTreeNode):
     name: str
     num_envs: int
     num_players: int
+    spec: GIISpec
     envs: List[GIIEnv] = struct.field(pytree_node=False)
 
     @staticmethod
@@ -306,10 +336,15 @@ class GIIVecEnv(struct.PyTreeNode):
         assert num_envs >= 1
         envs = [GIIEnv.new(env_name) for _ in range(num_envs)]
         num_players = envs[0].num_players
+        spec = jax.tree_util.tree_map(
+            lambda arr: ArraySpec(shape=(num_envs, *arr.shape), dtype=arr.dtype),
+            envs[0].spec,
+        )
         return GIIVecEnv(
             name=env_name,
             num_envs=num_envs,
             num_players=num_players,
+            spec=spec,
             envs=envs,
         )
 
@@ -322,3 +357,6 @@ class GIIVecEnv(struct.PyTreeNode):
             lambda path, env: env.step(input_list[path[0]]), self.envs
         )
         return stack_sequence_fields_pytree(output_list)
+
+    def __getitem__(self, key: int):
+        return self.envs[key]

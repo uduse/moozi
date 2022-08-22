@@ -58,16 +58,16 @@ nn:
 
 train:
   num_epochs: 500
-  update_step_ratio: 8
+  update_step_ratio: 12
   batch_size: 1024
-  lr: 3.0e-2
+  lr: 5.0e-2
   weight_decay: 1.0e-4
   target_update_period: 100
-  min_targets_to_train: 1_000
+  min_targets_to_train: 10_000
   consistency_loss_coef: 2.0
 
 training_worker:
-  num_workers: 24
+  num_workers: 32
   num_envs: 16
   num_cpus: 1
   num_gpus: 0.1
@@ -75,30 +75,31 @@ training_worker:
   update_period: 2
   planner:
     dim_action: ${dim_action}
-    discount: ${discount}
+    discount: -1.0
     max_depth: ${num_unroll_steps}
-    num_simulations: 100
-    kwargs:
-      dirichlet_alpha: 0.2
-      dirichlet_fraction: 0.2
-      temperature: 1.0
-      pb_c_init: 1.25
+    num_simulations: 10
+    use_gumbel: true
+    # kwargs:
+    #   dirichlet_alpha: 0.5
+    #   dirichlet_fraction: 0.25
+    #   temperature: 1.0
+    #   pb_c_init: 1.25
 
 testing_worker:
-  interval: 10
-  num_cpus: 0
+  num_workers: 0
+  num_cpus: 1
   num_gpus: 0.1
   model: NNModel
   num_trajs: 10
   planner:
     dim_action: ${dim_action}
-    discount: ${discount}
+    discount: -1.0
     max_depth: ${num_unroll_steps}
-    num_simulations: 100
+    num_simulations: 256
     kwargs:
-      dirichlet_alpha: 0.2
-      dirichlet_fraction: 0.2
-      temperature: 1.0
+      dirichlet_alpha: 0.5
+      dirichlet_fraction: 0.25
+      temperature: 0.25
       pb_c_init: 1.25
 
 reanalyze_worker:
@@ -110,10 +111,24 @@ reanalyze_worker:
   update_period: 1
   planner:
     dim_action: ${dim_action}
-    discount: ${discount}
-    num_unroll_steps: ${num_unroll_steps}
+    discount: -1.0
+    max_depth: ${num_unroll_steps}
     num_simulations: 25
     kwargs:
       dirichlet_alpha: 0.1
       dirichlet_fraction: 0.1
       pb_c_init: 1.75
+
+vis:
+  checkpoint_path: null
+  num_steps: 20
+  planner: 
+    dim_action: ${dim_action}
+    discount: -1.0
+    max_depth: ${num_unroll_steps}
+    num_simulations: 256
+    kwargs:
+      dirichlet_alpha: 0.5
+      dirichlet_fraction: 0.25
+      pb_c_init: 1.25
+      pb_c_base: 19652

@@ -1,4 +1,6 @@
 # %%
+import numpy as np
+import jax.numpy as jnp
 from dotenv import load_dotenv
 from dataclasses import dataclass, field
 from functools import partial

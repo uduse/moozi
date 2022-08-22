@@ -243,6 +243,7 @@ class MuZeroLossWithScalarTransform(LossFn):
 
             if self.consistency_loss_coef > 0.0 and i == 0:
                 # flip player
+                # TODO: only use in two players games
                 next_player = jnp.logical_not(batch.to_play).astype(jnp.int32)
                 next_feats = RootFeatures(
                     frames=_slice_frames(batch, 1, self.history_length),
@@ -285,16 +286,9 @@ class MuZeroLossWithScalarTransform(LossFn):
             info["is_ratio/max"] = jnp.max(batch.importance_sampling_ratio)
             info["is_ratio/min"] = jnp.min(batch.importance_sampling_ratio)
 
-        losses["loss/l2"] = jnp.reshape(
-            params_l2_loss(params) * self.weight_decay, (1,)
-        )
-
-        # sum all losses
-        # TODO: sum loss per batch, then mean across batch
-        # loss = jnp.mean(jnp.sum(jnp.concatenate(tree.flatten(losses)), axis=-1))
-        print(f"{jnp.concatenate(tree.flatten(losses)).shape=}")
-        loss = jnp.mean(jnp.concatenate(tree.flatten(losses)))
-
+        losses = tree.map_structure(lambda x: jnp.mean(x), losses)
+        losses["loss/l2"] = params_l2_loss(params) * self.weight_decay
+        loss = jnp.sum(jnp.stack(tree.flatten(losses)))
         losses["loss"] = loss
 
         step_data = {}
@@ -478,7 +472,7 @@ class Trainer(struct.PyTreeNode):
     optimizer: optax.GradientTransformation
     loss_fn: LossFn
     sgd_step_fn: Callable
-    
+
     @staticmethod
     def new(
         seed: int,

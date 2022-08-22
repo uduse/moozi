@@ -25,7 +25,8 @@ from moozi.training_worker import TrainingWorker
 from omegaconf import OmegaConf
 
 
-def get_config(overrides={}, path='config.yml'):
+# TODO: separate config parsing process
+def get_config(overrides={}, path="config.yml"):
     path = Path(path)
     config = OmegaConf.load(path)
     if config.dim_action == "auto":
@@ -70,19 +71,17 @@ def get_config(overrides={}, path='config.yml'):
 
 @dataclass
 class Driver:
+    # static properties
     config: DictConfig
     model: mz.nn.NNModel
     stacker: HistoryStacker
 
-    # training planner
-    trp: Planner
+    training_planner: Planner
+    testing_planner: Planner
 
-    # testing planner Planner
-    # tsp: Planner
-
+    # dynamic properties
     # trianing workers
-    trws: Optional[List[TrainingWorker]] = None
-
+    traning_workers: Optional[List[TrainingWorker]] = None
     # trws: Optional[List[TrainingWorker]] = None
     ps: Optional[ParameterServer] = None
     rb: Union[ReplayBuffer, ShardedReplayBuffer, None] = None
@@ -108,20 +107,23 @@ class Driver:
             history_length=config.history_length,
             dim_action=config.dim_action,
         )
-        trp = Planner(
+        training_planner = Planner(
             batch_size=config.training_worker.num_envs,
-            dim_action=config.dim_action,
             model=model,
-            discount=config.discount,
-            max_depth=config.num_unroll_steps,
-            num_simulations=config.training_worker.planner.num_simulations,
+            **config.training_worker.planner,
+        )
+        testing_planner = Planner(
+            batch_size=1,
+            model=model,
+            **config.testing_worker.planner,
         )
         config = config.copy()
         return Driver(
             config=config,
             model=model,
             stacker=stacker,
-            trp=trp,
+            training_planner=training_planner,
+            testing_planner=testing_planner,
         )
 
     def start(self):
@@ -130,16 +132,18 @@ class Driver:
         self._start_workers()
 
     def _start_workers(self):
-        self.trws = [
-            ray.remote(num_gpus=self.config.training_worker.num_gpus)(
-                TrainingWorker
-            ).remote(
+        self.traning_workers = [
+            ray.remote(
+                num_gpus=self.config.training_worker.num_gpus,
+                num_cpus=self.config.training_worker.num_cpus,
+            )(TrainingWorker).remote(
                 index=i,
+                seed=i,
                 env_name=self.config.env.name,
                 num_envs=self.config.training_worker.num_envs,
                 model=self.model,
                 stacker=self.stacker,
-                planner=self.trp,
+                planner=self.training_planner,
                 num_steps=self.config.training_worker.num_steps,
                 vis=BreakthroughVisualizer if i == 0 else None,
             )
@@ -174,24 +178,24 @@ class Driver:
 
     def wait(self):
         ray.get(
-            [w.get_stats.remote() for w in self.trws]
+            [w.get_stats.remote() for w in self.traning_workers]
             + [self.ps.get_stats.remote(), self.rb.get_stats.remote()]
         )
 
     def sync_params_and_state(self):
         if self.epoch == 0:
-            for w in self.trws:
+            for w in self.traning_workers:
                 w.set_params.remote(self.ps.get_params.remote())
                 w.set_state.remote(self.ps.get_state.remote())
         else:
             if self.epoch % self.config.training_worker.update_period == 0:
-                for w in self.trws:
+                for w in self.traning_workers:
                     w.set_params.remote(self.ps.get_params.remote())
                     w.set_state.remote(self.ps.get_state.remote())
 
     def generate_trajs(self):
         self.trajs.clear()
-        for w in self.trws:
+        for w in self.traning_workers:
             self.trajs.append(w.run.remote())
 
     def update_parameters(self):

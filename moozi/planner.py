@@ -198,8 +198,8 @@ class Planner(struct.PyTreeNode):
     batch_size: int
     dim_action: int
     model: NNModel = struct.field(pytree_node=False)
+    # TODO: make two-players game discount = -1.0 more explicit
     discount: float = 1.0
-    # num_unroll_steps: int = struct.field(pytree_node=False, default=5)
     num_simulations: int = struct.field(pytree_node=False, default=10)
     max_depth: Optional[int] = struct.field(pytree_node=False, default=None)
     use_gumbel: bool = struct.field(pytree_node=False, default=False)

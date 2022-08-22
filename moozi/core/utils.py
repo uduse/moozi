@@ -227,3 +227,13 @@ def tree_map(f):
         return tree.map_structure(f, *structures)
 
     return mapped_f
+
+
+def fetch_device_array(values: chex.ArrayTree) -> chex.ArrayTree:
+    return jax.tree_util.tree_map(_fetch_devic_earray, values)
+
+
+def _fetch_devic_earray(x):
+    if isinstance(x, jax.xla.DeviceArray):
+        return np.asarray(x)
+    return x

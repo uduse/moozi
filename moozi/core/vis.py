@@ -189,12 +189,10 @@ def convert_tree_to_graph(
         )
 
     image_dir = str(image_dir)
-    graph = pygraphviz.AGraph(directed=True, imagepath=image_dir)
+    graph = pygraphviz.AGraph(directed=True, imagepath=image_dir, dpi=300)
     graph.node_attr.update(
         imagescale=True,
         shape="box",
-        # width=2.5,
-        # height=4,
         imagepos="tc",
         fixed_size=True,
         labelloc="b",
@@ -206,6 +204,8 @@ def convert_tree_to_graph(
     graph.add_node(
         0,
         label=node_to_str(node_i=0),
+        width=2.5,
+        height=4,
         **({"image": f"0.{image_suffix}"} if image_dir else {}),
     )
     # Add all other nodes and connect them up.
@@ -289,7 +289,7 @@ def convert_game_states_to_images(
     parents: Optional[Dict[int, int]] = None,
 ) -> Dict[int, Image.Image]:
     state_images = {}
-    for idx, game_state in tqdm(game_states.items(), desc='making images'):
+    for idx, game_state in tqdm(game_states.items(), desc="making images"):
         path = Path(image_root) / f"{idx}.png"
         state_images[idx] = game_state_to_image(vis, game_state)
     if parents is None:
@@ -331,13 +331,13 @@ def align_game_states(
 def diff_image(
     before: Image.Image,
     after: Image.Image,
-    opacity: int = 25,
+    opacity: int = 30,
     mask_rgb: Tuple[int, int, int] = (255, 0, 127),
 ):
     translucent = Image.new("RGB", before.size, mask_rgb)
     diff = ImageChops.difference(before, after)
     mask = diff.convert("L").point(lambda x: opacity if x else 0)
-    mask = mask.filter(ImageFilter.GaussianBlur(radius = 1))
+    mask = mask.filter(ImageFilter.GaussianBlur(radius=2))
     ret = after.copy()
     ret.paste(translucent, (0, 0), mask)
     return ret
@@ -350,7 +350,7 @@ def visualize_search_tree(
     output_dir: Union[PathLike, str],
     batch_idx: int = 0,
 ) -> pygraphviz.AGraph:
-    output_dir = Path(output_dir).expanduser()
+    output_dir = Path(output_dir).expanduser().resolve()
     game_states = align_game_states(root_state, search_tree)
     image_dir = output_dir / "imgs"
     image_dir.mkdir(parents=True, exist_ok=True)
@@ -376,7 +376,7 @@ def visualize_search_tree(
                 label = "game ends"
             extra[idx] = label
         else:
-            extra[idx] = 'delusion'
+            extra[idx] = "delusion"
     g = convert_tree_to_graph(search_tree, image_dir=image_dir, extra=extra)
     g.layout(prog="dot")
     g.draw(output_dir / "search_tree.png")

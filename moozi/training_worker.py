@@ -1,4 +1,5 @@
 from inspect import isclass
+import random
 import sys
 from loguru import logger
 from typing import Any, List, Optional, Type, TypeVar, Union
@@ -26,14 +27,12 @@ class TrainingWorker:
         stacker: HistoryStacker,
         planner: Planner,
         num_steps: int,
-        seed: Optional[int] = 0,
+        seed: Optional[int] = None,
         save_gif: bool = True,
         vis: Union[Type[Visualizer], Visualizer, None] = None,
     ):
-        if seed is None:
-            seed = index
         self.index = index
-        self.seed = seed
+        self.seed = seed if seed is not None else index
         self.num_envs = num_envs
         self.num_steps = num_steps
         self.save_gif = save_gif
@@ -59,8 +58,8 @@ class TrainingWorker:
 
         logger.remove()
         logger.add(sys.stderr, level="SUCCESS")
-        logger.add(f"logs/tw_{index}.debug.log", level="DEBUG")
-        logger.add(f"logs/tw_{index}.info.log", level="INFO")
+        logger.add(f"logs/training_workers/{index}.debug.log", level="DEBUG")
+        logger.add(f"logs/training_workers/{index}.info.log", level="INFO")
         self._flog = logger
 
     def run(self) -> List[TrajectorySample]:
@@ -88,5 +87,5 @@ class TrainingWorker:
     def exec(self, fn):
         return fn(self)
 
-    def get_stats(self) -> str:
+    def get_stats(self) -> dict:
         return {}

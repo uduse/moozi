@@ -2,12 +2,11 @@
 import jax
 from moozi.gii import GII
 from moozi.tournament import Tournament, Player
-from moozi.parameter_optimizer import load_params_and_states
-from lib import get_config
-from moozi.driver import Driver
+from moozi.parameter_optimizer import load_all_params_and_states
+from moozi.driver import Driver, get_config
 
 # %%
-lookup = load_params_and_states()
+lookup = load_all_params_and_states("/home/zeyi/miniconda3/envs/moozi/.guild/runs/21905045fef04698bdb5cb7df7c58274/checkpoints")
 config = get_config()
 driver = Driver.setup(config)
 
@@ -25,7 +24,7 @@ for i, key in enumerate(lookup):
             name=key,
             params=lookup[key][0],
             state=lookup[key][1],
-            planner=driver.trp,
+            planner=driver.training_planner,
             elo=1300,
         )
         players.append(player)
@@ -34,7 +33,7 @@ for i, key in enumerate(lookup):
 gii = GII(
     env_name=config.env.name,
     stacker=driver.stacker,
-    planner=driver.trp,
+    planner=driver.training_planner,
     params=None,
     state=None,
     random_key=jax.random.PRNGKey(0),

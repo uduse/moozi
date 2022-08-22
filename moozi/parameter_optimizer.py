@@ -159,11 +159,11 @@ class ParameterServer:
         return self.get_device_properties()
 
 
-def load_params_and_states(
-    checkpoints_path: Union[PathLike, str] = "checkpoints",
+def load_all_params_and_states(
+    checkpoints_dir: Union[PathLike, str] = "checkpoints",
 ) -> Dict[str, Tuple[hk.Params, hk.State]]:
     ret = {}
-    for fpath in Path(checkpoints_path).iterdir():
+    for fpath in Path(checkpoints_dir).iterdir():
         name = fpath.stem
         training_state: TrainingState
         with open(fpath, "rb") as f:
@@ -171,3 +171,14 @@ def load_params_and_states(
         params, state = training_state.target_params, training_state.target_state
         ret[name] = (params, state)
     return ret
+
+
+def load_params_and_state(
+    path: Union[PathLike, str] = "checkpoints",
+) -> Tuple[hk.Params, hk.State]:
+    path = Path(path)
+    name = path.stem
+    training_state: TrainingState
+    with open(path, "rb") as f:
+        _, training_state, _ = cloudpickle.load(f)
+    return training_state.target_params, training_state.target_state

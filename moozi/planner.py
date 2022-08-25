@@ -24,19 +24,20 @@ def _next_player(player: chex.Array):
 
 def make_paritial_recurr_fn(model: NNModel, state: hk.State, discount: float):
     def recurr_fn(params, random_key, action, embedding):
-        hidden_state, to_play = embedding
+        hidden_state, prev_player = embedding
+        curr_player = _next_player(prev_player)
         trans_feats = TransitionFeatures(hidden_state, action)
         is_training = False
         nn_output, _ = model.trans_inference(params, state, trans_feats, is_training)
         chex.assert_shape(nn_output.reward, (None,))
         chex.assert_shape(nn_output.value, (None,))
         rnn_output = mctx.RecurrentFnOutput(
-            reward=_view_from_player(nn_output.reward, to_play),
+            reward=_view_from_player(nn_output.reward, prev_player),
             discount=jnp.full_like(nn_output.reward, fill_value=discount),
             prior_logits=nn_output.policy_logits,
-            value=_view_from_player(nn_output.value, to_play),
+            value=_view_from_player(nn_output.value, curr_player),
         )
-        return rnn_output, (nn_output.hidden_state, _next_player(to_play))
+        return rnn_output, (nn_output.hidden_state, curr_player)
 
     return recurr_fn
 
@@ -228,7 +229,6 @@ class Planner(struct.PyTreeNode):
                 num_simulations=self.num_simulations,
                 max_depth=self.max_depth,
                 invalid_actions=invalid_actions,
-                max_num_considered_actions=16,
                 **self.kwargs
             )
         else:

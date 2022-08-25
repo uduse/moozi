@@ -279,10 +279,16 @@ class ResNetV2Architecture(NNArchitecture):
         return projected
 
 
-def normalize_hidden_state(hidden_state):
-    batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)
-    batch_max = jnp.max(hidden_state, axis=(1, 2, 3), keepdims=True)
-    hidden_state = (hidden_state - batch_min) / (
-        batch_max - batch_min + jnp.array(1e-12)
-    )
-    return hidden_state
+def normalize_hidden_state(hidden_state, kind='unit'):
+    if kind == 'unit':
+        batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)
+        batch_max = jnp.max(hidden_state, axis=(1, 2, 3), keepdims=True)
+        hidden_state = (hidden_state - batch_min) / (
+            batch_max - batch_min + jnp.array(1e-12)
+        )
+        return hidden_state
+    elif kind == 'normal':
+        batch_mean = jnp.mean(hidden_state, axis=(1, 2, 3), keepdims=True)
+        batch_std = jnp.std(hidden_state, axis=(1, 2, 3), keepdims=True)
+        hidden_state = (hidden_state - batch_mean) / (batch_std + 1e-4)
+        return hidden_state

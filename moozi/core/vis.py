@@ -1,6 +1,6 @@
 from multiprocessing.sharedctypes import Value
+from flax import struct
 from os import PathLike
-from tqdm import tqdm
 from pathlib import Path
 from typing import List, Optional, Sequence, Union, Dict, Tuple
 
@@ -13,6 +13,7 @@ import pygraphviz
 import pyspiel
 from loguru import logger
 from moozi import BASE_PLAYER
+from moozi.core.utils import fetch_device_array
 from moozi.utils import get_project_root
 from PIL import Image, ImageOps, ImageDraw, ImageChops, ImageFont, ImageFilter
 
@@ -77,6 +78,10 @@ class BreakthroughVisualizer(Visualizer):
                     # empty tile
                     pass
         return img
+        
+    def size(self):
+        # TODO: add default resolution
+        return
 
     def make_banner(self, to_play: int) -> Image:
         assert self.num_cols >= 2
@@ -155,6 +160,21 @@ def convert_tree_to_graph(
     Copy-pasted from mctx library examples.
     https://github.com/deepmind/mctx/blob/main/examples/visualization_demo.py
     """
+    # TODO: add colors based on visit counts
+        
+    # graph {
+    # node [colorscheme=oranges9,shape=rect, penwidth=3] # Apply colorscheme to all nodes
+    # 1 [color=1]
+    # 2 [color=2]
+    # 3 [color=3]
+    # 4 [color=4]
+    # 5 [color=5]
+    # 6 [color=6]
+    # 7 [color=7]
+    # 8 [color=8]
+    # 9 [color=9]
+    # }
+    
     chex.assert_rank(tree.node_values, 2)
     batch_size = tree.node_values.shape[0]
     if action_labels is None:
@@ -184,12 +204,12 @@ def convert_tree_to_graph(
         probs = jax.nn.softmax(tree.children_prior_logits[batch_index, node_i])
         return (
             f"A: {action_labels[a_i]}\l"
+            f"p: {probs[a_i] * 100:.1f}%\l"
             f"Q: {tree.qvalues(node_index)[batch_index, a_i]:.2f}\l"
-            f"p: {probs[a_i]:.2f}\l"
         )
 
     image_dir = str(image_dir)
-    graph = pygraphviz.AGraph(directed=True, imagepath=image_dir, dpi=300)
+    graph = pygraphviz.AGraph(directed=True, imagepath=image_dir, dpi=72)
     graph.node_attr.update(
         imagescale=True,
         shape="box",
@@ -209,7 +229,7 @@ def convert_tree_to_graph(
         **({"image": f"0.{image_suffix}"} if image_dir else {}),
     )
     # Add all other nodes and connect them up.
-    for node_id in tqdm(range(tree.num_simulations + 1), desc="converting to graph"):
+    for node_id in range(tree.num_simulations + 1):
         for action_id in range(tree.num_actions):
             # Index of children, or -1 if not expanded
             child_id = tree.children_index[batch_index, node_id, action_id]
@@ -269,28 +289,28 @@ def stack_images(images: List[Image.Image]):
     return dst
 
 
-def game_state_to_image(vis: Visualizer, game_state: Optional[pyspiel.State]):
+def game_state_to_image(
+    vis: Visualizer,
+    game_state: Optional[pyspiel.State],
+    resolution: Tuple[int, int] = (250, 250),
+):
     if game_state:
         target_shape = game_state.get_game().observation_tensor_shape()
         frame = np.array(game_state.observation_tensor(BASE_PLAYER))
         frame = np.moveaxis(frame.reshape(target_shape), 0, -1)
         img = vis.make_image(frame)
-        # banner = vis.make_banner(to_play=game_state.current_player())
-        # img = stack_images([img, banner])
-        return ImageOps.contain(img, (250, 250), Image.Resampling.LANCZOS)
+        return ImageOps.contain(img, resolution, Image.Resampling.LANCZOS)
     else:
-        return Image.new("RGBA", (250, 250), color="white")
+        return Image.new("RGBA", resolution, color="white")
 
 
 def convert_game_states_to_images(
     vis: Visualizer,
     game_states: Dict[int, pyspiel.State],
-    image_root: Union[PathLike, str],
     parents: Optional[Dict[int, int]] = None,
 ) -> Dict[int, Image.Image]:
     state_images = {}
-    for idx, game_state in tqdm(game_states.items(), desc="making images"):
-        path = Path(image_root) / f"{idx}.png"
+    for idx, game_state in game_states.items():
         state_images[idx] = game_state_to_image(vis, game_state)
     if parents is None:
         return state_images
@@ -308,9 +328,7 @@ def align_game_states(
     search_tree: mctx.Tree,
 ) -> Dict[int, Optional[pyspiel.State]]:
     node_states = {0: root_state}
-    for node_id in tqdm(
-        range(search_tree.num_simulations), desc="aligning game states"
-    ):
+    for node_id in range(search_tree.num_simulations):
         for action_id in range(search_tree.num_actions):
             child_id = int(search_tree.children_index[0, node_id, action_id])
             if child_id < 0:
@@ -350,7 +368,9 @@ def visualize_search_tree(
     output_dir: Union[PathLike, str],
     batch_idx: int = 0,
 ) -> pygraphviz.AGraph:
+    # TODO: fetch search tree locally to numpy
     output_dir = Path(output_dir).expanduser().resolve()
+    search_tree = fetch_device_array(search_tree)
     game_states = align_game_states(root_state, search_tree)
     image_dir = output_dir / "imgs"
     image_dir.mkdir(parents=True, exist_ok=True)
@@ -359,9 +379,7 @@ def visualize_search_tree(
         parent_idx = int(search_tree.parents[batch_idx, child_idx])
         if parent_idx >= 0:
             parents[child_idx] = parent_idx
-    game_state_images = convert_game_states_to_images(
-        vis, game_states, image_dir, parents=parents
-    )
+    game_state_images = convert_game_states_to_images(vis, game_states, parents=parents)
     for key, image in game_state_images.items():
         image.save(image_dir / f"{key}.png")
     extra = {}

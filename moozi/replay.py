@@ -127,6 +127,7 @@ class ReplayBuffer(ReplayBufferBase):
     def _process_trajs(self, trajs: List[TrajectorySample], from_env: bool) -> int:
         num_processed = 0
         for traj in trajs:
+            traj = traj.cast()
             chex.assert_rank(traj.last_reward, 1)
             traj_len = traj.action.shape[0]
             for i in range(traj_len):

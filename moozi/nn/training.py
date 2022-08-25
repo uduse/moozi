@@ -144,7 +144,7 @@ class MuZeroLossWithScalarTransform(LossFn):
     dim_action: int
     weight_decay: float = 1e-4
     consistency_loss_coef: float = 1.0
-    value_loss_coef: float = 0.25
+    value_loss_coef: float = 1.0
     use_importance_sampling: bool = True
 
     def __call__(

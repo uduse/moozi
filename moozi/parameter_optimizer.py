@@ -46,8 +46,7 @@ class ParameterServer:
         logger.add(f"logs/ps.info.log", level="INFO")
         self._flog = logger
         if load_from is not None:
-            path = Path(load_from).expanduser()
-            self.restore(path)
+            self.restore(load_from)
 
     def update(self, big_batch: TrainTarget, batch_size: int):
         if len(big_batch) == 0:
@@ -150,9 +149,10 @@ class ParameterServer:
             with open(fpath, "wb") as f:
                 cloudpickle.dump((self.model, self.training_state, self.sgd_step_fn), f)
 
-    def restore(self, fpath):
-        logger.info(f"restoring model from {fpath}")
-        with open(fpath, "rb") as f:
+    def restore(self, path: Union[PathLike, str]):
+        path = Path(path).expanduser().resolve()
+        logger.info(f"restoring model from {path}")
+        with open(path, "rb") as f:
             self.model, self.training_state, self.sgd_step_fn = cloudpickle.load(f)
 
     def get_stats(self) -> dict:

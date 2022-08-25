@@ -1,5 +1,4 @@
 from inspect import isclass
-import random
 import sys
 from loguru import logger
 from typing import Any, List, Optional, Type, TypeVar, Union
@@ -62,7 +61,7 @@ class TrainingWorker:
         logger.add(f"logs/training_workers/{index}.info.log", level="INFO")
         self._flog = logger
 
-    def run(self) -> List[TrajectorySample]:
+    def run(self, epoch: int = 0) -> List[TrajectorySample]:
         samples = [self.gii.tick() for _ in range(self.num_steps)]
         self.traj_collector.add_step_samples(samples)
         trajs = self.traj_collector.flush()

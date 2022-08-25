@@ -1,5 +1,6 @@
 INIT = 1300
 
+
 def expected(a: float, b: float):
     return 1 / (1 + 10 ** ((b - a) / 400))
 

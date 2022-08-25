@@ -1,121 +1,26 @@
-- model: catch
-  default: true
-  operations:
-    train:
-      default: true
-      main: examples.catch.main
-      output-scalars: off
-      flags-import: all
-      sourcecode:
-        - "*.py"
-        - "*.yml"
-        - exclude:
-            dir: local_deps
+# - model: base
+#   flags-import: all
+#   output-scalars: off
+#   requires:
+#     - file: courier.ttf
+#     - file: .env
+#   sourcecode:
+#     - "*.py"
+#     - "*.yml"
+#     - "assets/"
+#     - exclude:
+#         dir: local_deps
+#   flags:
+#     vis.planner.max_depth:
+#       type: int
 
-- model: space_invaders
-  operations:
-    train:
-      default: true
-      main: examples.minatar_space_invaders.driver
-      output-scalars: off
-      flags-dest: config:examples/minatar_space_invaders/config.yml
-      flags-import: all
-      requires:
-        - file: courier.ttf
-        - file: .env
-        - file: examples/minatar_space_invaders/lib.py
-      sourcecode:
-        - "*.py"
-        - "*.yml"
-        - exclude:
-            dir: local_deps
 
-- model: breakout
-  operations:
-    train:
-      default: true
-      main: examples.minatar_space_invaders.driver
-      output-scalars: off
-      flags-dest: config:examples/minatar_space_invaders/config.yml
-      flags-import: all
-      requires:
-        - file: courier.ttf
-        - file: .env
-        - file: examples/minatar_space_invaders/lib.py
-      sourcecode:
-        - "*.py"
-        - "*.yml"
-        - exclude:
-            dir: local_deps
-      flags:
-        env.name: MinAtar:Breakout-v1
-
-- model: seaquest
-  operations:
-    train:
-      default: true
-      main: examples.minatar_space_invaders.driver
-      output-scalars: off
-      flags-dest: config:examples/minatar_space_invaders/config.yml
-      flags-import: all
-      requires:
-        - file: courier.ttf
-        - file: .env
-        - file: examples/minatar_space_invaders/lib.py
-      sourcecode:
-        - "*.py"
-        - "*.yml"
-        - exclude:
-            dir: local_deps
-      flags:
-        env.name: MinAtar:Seaquest-v1
-
-- model: freeway
-  operations:
-    train:
-      default: true
-      main: examples.minatar_space_invaders.driver
-      output-scalars: off
-      flags-dest: config:examples/minatar_space_invaders/config.yml
-      flags-import: all
-      requires:
-        - file: courier.ttf
-        - file: .env
-        - file: examples/minatar_space_invaders/lib.py
-      sourcecode:
-        - "*.py"
-        - "*.yml"
-        - exclude:
-            dir: local_deps
-      flags:
-        env.name: MinAtar:Freeway-v1
-
-- model: asterix
-  operations:
-    train:
-      default: true
-      main: examples.minatar_space_invaders.driver
-      output-scalars: off
-      flags-dest: config:examples/minatar_space_invaders/config.yml
-      flags-import: all
-      requires:
-        - file: courier.ttf
-        - file: .env
-        - file: examples/minatar_space_invaders/lib.py
-      sourcecode:
-        - "*.py"
-        - "*.yml"
-        - exclude:
-            dir: local_deps
-      flags:
-        env.name: MinAtar:Asterix-v1
-        
 - model: open_spiel
   operation-defaults:
     flags-dest: config:examples/open_spiel/config.yml
     flags-import: all
     output-scalars: off
-    requires: 
+    requires:
       - file: courier.ttf
       - file: .env
       - file: examples/open_spiel/config.yml
@@ -126,12 +31,44 @@
       - exclude:
           dir: local_deps
     flags:
-      env.name: OpenSpiel:breakthrough(rows=5,columns=5)
+      vis.planner.max_depth:
+        type: int
 
   operations:
     train:
       default: true
       main: examples.open_spiel.train
-        
+      tags: ['train']
+
     vis:
       main: examples.open_spiel.visualize_search_trees
+      tags: ['vis']
+
+- model: minatar
+  operation-defaults:
+    flags-dest: config:examples/minatar/config.yml
+    flags-import: all
+    output-scalars: off
+    requires:
+      - file: courier.ttf
+      - file: .env
+      - file: examples/minatar/config.yml
+    sourcecode:
+      - "*.py"
+      - "*.yml"
+      - "assets/"
+      - exclude:
+          dir: local_deps
+    flags:
+      vis.planner.max_depth:
+        type: int
+
+  operations:
+    train:
+      default: true
+      main: examples.open_spiel.train
+      tags: ['open_spiel', 'train']
+
+    vis:
+      main: examples.open_spiel.visualize_search_trees
+      tags: ['opel_spiel', 'vis']

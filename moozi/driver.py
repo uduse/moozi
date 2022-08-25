@@ -20,6 +20,7 @@ from moozi.nn.nn import NNArchitecture, NNSpec
 from moozi.parameter_optimizer import ParameterServer
 from moozi.planner import Planner
 from moozi.replay import ReplayBuffer, ShardedReplayBuffer
+from moozi.testing_worker import TestingWorker
 from moozi.tournament import Player, Tournament
 from moozi.training_worker import TrainingWorker
 from omegaconf import OmegaConf
@@ -81,8 +82,9 @@ class Driver:
 
     # dynamic properties
     # trianing workers
-    traning_workers: Optional[List[TrainingWorker]] = None
-    # trws: Optional[List[TrainingWorker]] = None
+    training_workers: Optional[List[TrainingWorker]] = None
+    testing_workers: Optional[List[TrainingWorker]] = None
+
     ps: Optional[ParameterServer] = None
     rb: Union[ReplayBuffer, ShardedReplayBuffer, None] = None
 
@@ -132,7 +134,7 @@ class Driver:
         self._start_workers()
 
     def _start_workers(self):
-        self.traning_workers = [
+        self.training_workers = [
             ray.remote(
                 num_gpus=self.config.training_worker.num_gpus,
                 num_cpus=self.config.training_worker.num_cpus,
@@ -149,6 +151,20 @@ class Driver:
             )
             for i in range(self.config.training_worker.num_workers)
         ]
+        self.testing_workers = [
+            ray.remote(
+                num_gpus=self.config.testing_worker.num_gpus,
+                num_cpus=self.config.testing_worker.num_cpus,
+            )(TestingWorker).remote(
+                index=0,
+                env_name=self.config.env.name,
+                model=self.model,
+                stacker=self.stacker,
+                planner=self.testing_planner,
+                num_steps=self.config.testing_worker.num_steps,
+                vis=BreakthroughVisualizer,
+            )
+        ]
 
     def _start_parameter_server(self):
         self.ps = ray.remote(num_gpus=self.config.param_opt.num_gpus)(
@@ -164,7 +180,8 @@ class Driver:
                 history_length=self.config.history_length,
                 target_update_period=self.config.train.target_update_period,
                 consistency_loss_coef=self.config.train.consistency_loss_coef,
-            )
+            ),
+            load_from=self.config.param_opt.load_from
         )
 
     def _start_replay_buffer(self):
@@ -178,25 +195,29 @@ class Driver:
 
     def wait(self):
         ray.get(
-            [w.get_stats.remote() for w in self.traning_workers]
+            [w.get_stats.remote() for w in self.training_workers + self.testing_workers]
             + [self.ps.get_stats.remote(), self.rb.get_stats.remote()]
         )
 
     def sync_params_and_state(self):
         if self.epoch == 0:
-            for w in self.traning_workers:
+            for w in self.training_workers + self.testing_workers:
                 w.set_params.remote(self.ps.get_params.remote())
                 w.set_state.remote(self.ps.get_state.remote())
         else:
             if self.epoch % self.config.training_worker.update_period == 0:
-                for w in self.traning_workers:
+                for w in self.training_workers:
+                    w.set_params.remote(self.ps.get_params.remote())
+                    w.set_state.remote(self.ps.get_state.remote())
+            if self.epoch % self.config.testing_worker.update_period == 0:
+                for w in self.testing_workers:
                     w.set_params.remote(self.ps.get_params.remote())
                     w.set_state.remote(self.ps.get_state.remote())
 
     def generate_trajs(self):
         self.trajs.clear()
-        for w in self.traning_workers:
-            self.trajs.append(w.run.remote())
+        for w in self.training_workers:
+            self.trajs.append(w.run.remote(self.epoch))
 
     def update_parameters(self):
         if self.training_start:
@@ -230,16 +251,24 @@ class Driver:
         if self.epoch % self.config.param_opt.save_interval == 0:
             self.ps.save.remote()
 
-    def run_one_epoch(self):
-        logger.info(f"epoch: {self.epoch}")
+    def run_tests(self):
+        if self.epoch % self.config.testing_worker.test_period == 0:
+            for w in self.testing_workers:
+                w.run.remote(self.epoch)
+
+    def schedule_one_epoch(self):
         self.sync_params_and_state()
         self.update_parameters()
         self.process_trajs()
         self.generate_trajs()
+        self.run_tests()
         self.house_keep()
-        self.wait()
         self.epoch += 1
 
     def run(self):
         for i in range(self.config.train.num_epochs):
-            self.run_one_epoch()
+            if i % 20 == 0:
+                self.wait()
+                logger.info(f"Epoch {i} done.")
+            self.schedule_one_epoch()
+        self.wait()

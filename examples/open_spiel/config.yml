@@ -7,7 +7,7 @@ dim_action: auto
 debug: false
 
 env:
-  name: OpenSpiel:breakthrough(rows=4,columns=4)
+  name: OpenSpiel:breakthrough(rows=5,columns=5)
   num_rows: auto
   num_cols: auto
   num_channels: auto
@@ -33,7 +33,7 @@ scalar_transform:
   contract: false
 
 param_opt:
-  num_gpus: 1.0
+  num_gpus: 0.6
   save_interval: 10
   save_dir: ./checkpoints/
   load_from: null
@@ -58,9 +58,9 @@ nn:
 
 train:
   num_epochs: 500
-  update_step_ratio: 12
-  batch_size: 1024
-  lr: 5.0e-2
+  update_step_ratio: 20
+  batch_size: 2048
+  lr: 2.0e-2
   weight_decay: 1.0e-4
   target_update_period: 100
   min_targets_to_train: 10_000
@@ -68,39 +68,43 @@ train:
 
 training_worker:
   num_workers: 32
-  num_envs: 16
+  num_envs: 32
   num_cpus: 1
   num_gpus: 0.1
-  num_steps: 10
-  update_period: 2
+  num_steps: 50
+  update_period: 5
   planner:
     dim_action: ${dim_action}
     discount: -1.0
     max_depth: ${num_unroll_steps}
-    num_simulations: 10
-    use_gumbel: true
+    num_simulations: 256
+    # use_gumbel: true
     # kwargs:
-    #   dirichlet_alpha: 0.5
-    #   dirichlet_fraction: 0.25
-    #   temperature: 1.0
-    #   pb_c_init: 1.25
+    #   gumbel_scale: 1.0
+    #   max_num_considered_actions: 6
+    kwargs:
+      dirichlet_alpha: 0.5
+      dirichlet_fraction: 0.25
+      temperature: 1.0
+      pb_c_init: 1.25
 
 testing_worker:
   num_workers: 0
   num_cpus: 1
   num_gpus: 0.1
   model: NNModel
-  num_trajs: 10
-  planner:
-    dim_action: ${dim_action}
-    discount: -1.0
-    max_depth: ${num_unroll_steps}
-    num_simulations: 256
-    kwargs:
-      dirichlet_alpha: 0.5
-      dirichlet_fraction: 0.25
-      temperature: 0.25
-      pb_c_init: 1.25
+  num_steps: 25
+  update_period: 1
+  test_period: 10
+  planner: ${training_worker.planner}
+    # dim_action: ${dim_action}
+    # discount: -1.0
+    # max_depth: ${num_unroll_steps}
+    # num_simulations: 16
+    # use_gumbel: true
+    # kwargs:
+    #   gumbel_scale: 1.0
+    #   max_num_considered_actions: 6
 
 reanalyze_worker:
   num_workers: 0
@@ -120,9 +124,14 @@ reanalyze_worker:
       pb_c_init: 1.75
 
 vis:
-  checkpoint_path: null
-  num_steps: 20
-  planner: 
+  load:
+    pkl: null
+    run: null
+  show:
+    tree: true
+    projection: false
+  num_steps: 25
+  planner:
     dim_action: ${dim_action}
     discount: -1.0
     max_depth: ${num_unroll_steps}
@@ -130,5 +139,5 @@ vis:
     kwargs:
       dirichlet_alpha: 0.5
       dirichlet_fraction: 0.25
+      temperature: 1.0
       pb_c_init: 1.25
-      pb_c_base: 19652

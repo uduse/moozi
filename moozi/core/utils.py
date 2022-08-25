@@ -6,6 +6,8 @@ import chex
 import jax.numpy as jnp
 import ray
 
+T = TypeVar("T")
+
 
 def make_one_hot_planes(categories, num_rows, num_cols, num_classes):
     # [K] -> [H, W, K * A]
@@ -229,7 +231,7 @@ def tree_map(f):
     return mapped_f
 
 
-def fetch_device_array(values: chex.ArrayTree) -> chex.ArrayTree:
+def fetch_device_array(values: T) -> T:
     return jax.tree_util.tree_map(_fetch_devic_earray, values)
 
 

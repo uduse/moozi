@@ -1,7 +1,5 @@
-from moozi import make_env
-from moozi.core.env import make_env_and_spec
+import pytest
 
-
-def test_obs():
-    env_name = "MinAtar:SpaceInvaders-v1"
-    _, env_spec = make_env_and_spec(env_name)
+from moozi import HistoryStacker, Planner
+from moozi.gii import GII
+from moozi.core.env import GIIEnv, make_dm_env_and_spec, make_spec

@@ -1,22 +1,21 @@
+import os
 from typing import List, Sequence
 
 import acme
-from dm_env import Environment
 import jax
 import jax.numpy as jnp
-import numpy as np
 import moozi as mz
+import numpy as np
 import open_spiel
 import pytest
 from acme import types
 from acme.core import VariableSource
 from acme.jax.variable_utils import VariableClient
-
-
+from dm_env import Environment
 from moozi.core import PolicyFeed, make_catch
-import os
-
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+from moozi.core.env import GIIEnv
+from moozi.core.scalar_transform import ScalarTransform
+from moozi.gii import GII
 
 
 def update_jax_config():
@@ -30,18 +29,13 @@ def update_jax_config():
 # update_jax_config()
 
 
-@pytest.fixture
-def env() -> Environment:
-    return make_catch()[0]
+@pytest.fixture(scope="session", params=["OpenSpiel:catch", "MinAtar:Breakout-v1"])
+def env(request) -> GIIEnv:
+    return GIIEnv.new(request.param)
 
 
 @pytest.fixture(scope="session")
-def env_spec():
-    return make_catch()[1]
-
-
-@pytest.fixture(scope="session")
-def num_stacked_frames():
+def history_length():
     return 2
 
 
@@ -51,20 +45,26 @@ def num_unroll_steps() -> int:
 
 
 @pytest.fixture(scope="session")
-def model(env_spec, num_stacked_frames):
+def scalar_transform() -> ScalarTransform:
+    return ScalarTransform.new(support_min=-2, support_max=2, contract=True)
 
-    dim_action = env_spec.actions.num_values
-    single_frame_shape = env_spec.observations.observation.shape
-    obs_rows, obs_cols = single_frame_shape[0:2]
-    obs_channels = num_stacked_frames * single_frame_shape[-1]
+
+@pytest.fixture(scope="session")
+def model(env: GIIEnv, history_length, scalar_transform):
+
+    dim_action = env.spec.dim_action
+    frame_shape = env.spec.frame.shape
     nn_spec = mz.nn.NNSpec(
-        frame_rows=obs_rows,
-        frame_cols=obs_cols,
-        frame_channels=obs_channels,
-        repr_rows=obs_rows,
-        repr_cols=obs_cols,
-        repr_channels=2,
         dim_action=dim_action,
+        num_players=env.spec.num_players,
+        history_length=history_length,
+        frame_rows=frame_shape[0],
+        frame_cols=frame_shape[1],
+        frame_channels=frame_shape[2],
+        repr_rows=frame_shape[0],
+        repr_cols=frame_shape[1],
+        repr_channels=frame_shape[2],
+        scalar_transform=scalar_transform,
     )
     return mz.nn.make_model(mz.nn.NaiveArchitecture, nn_spec)
 
@@ -87,26 +87,3 @@ def params(params_and_state):
 @pytest.fixture
 def state(params_and_state):
     return params_and_state[1]
-
-
-@pytest.fixture
-def policy_feed(env, env_spec, num_stacked_frames, random_key) -> PolicyFeed:
-    legal_actions_mask = np.ones(env_spec.actions.num_values)
-    timestep = env.reset()
-    frame = timestep.observation[0].observation
-    stacked_frames = frame.repeat(num_stacked_frames, axis=-1)
-
-    return PolicyFeed(
-        stacked_frames=stacked_frames,
-        to_play=0,
-        legal_actions_mask=legal_actions_mask,
-        random_key=random_key,
-    )
-
-
-# TODO: this fixutre seems redundent
-@pytest.fixture
-def init_ray():
-    import ray
-
-    ray.init(ignore_reinit_error=True)

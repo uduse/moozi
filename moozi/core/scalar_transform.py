@@ -1,4 +1,5 @@
 from typing import Callable, NamedTuple
+from flax import struct
 
 import chex
 import jax
@@ -6,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 
 
-class ScalarTransform(NamedTuple):
+class ScalarTransform(struct.PyTreeNode):
     support_min: int
     support_max: int
     dim: int
@@ -15,6 +16,16 @@ class ScalarTransform(NamedTuple):
     scalar_max: float
     transform: Callable[[chex.Array], chex.Array]
     inverse_transform: Callable[[chex.Array], chex.Array]
+    contract: bool
+
+    @staticmethod
+    def new(
+        support_min: int,
+        support_max: int,
+        eps: float = 1e-3,
+        contract: bool = True,
+    ) -> "ScalarTransform":
+        return make_scalar_transform(support_min, support_max, eps, contract)
 
 
 def _phi(scalar, eps):
@@ -39,7 +50,7 @@ def make_scalar_transform(
 ) -> ScalarTransform:
     support_dim = support_max - support_min + 1
 
-    def _scalar_transform(scalar: float):
+    def _scalar_transform(scalar: chex.Scalar) -> chex.Scalar:
         if contract:
             scalar = _phi(scalar, eps)
         scalar = jnp.clip(scalar, support_min, support_max)
@@ -55,9 +66,7 @@ def make_scalar_transform(
         chex.assert_shape(probs, (support_dim,))
         return probs
 
-    def _inverse_scalar_transform(
-        probs: chex.Array,
-    ):
+    def _inverse_scalar_transform(probs: chex.Array) -> chex.Array:
         chex.assert_shape(probs, (support_dim,))
         support_vals = jnp.arange(support_min, support_max + 1, dtype=jnp.float32)
         scalar = jnp.sum(probs * support_vals)
@@ -79,4 +88,5 @@ def make_scalar_transform(
         scalar_max,
         jax.vmap(_scalar_transform),
         jax.vmap(_inverse_scalar_transform),
+        contract=contract,
     )

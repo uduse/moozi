@@ -78,33 +78,55 @@ class BreakthroughVisualizer(Visualizer):
                     # empty tile
                     pass
         return img
-        
+
     def size(self):
         # TODO: add default resolution
         return
 
-    def make_banner(self, to_play: int) -> Image:
-        assert self.num_cols >= 2
-        banner_width = self.token_width * self.num_cols
-        banner_height = self.token_height
-        im = Image.new("RGBA", (banner_width, banner_height), color="white")
 
-        terminal = False
-        if to_play == 0:
-            im.paste(self.black_pawn_img, (0, 0), mask=self.black_pawn_img)
-        elif to_play == 1:
-            im.paste(self.white_pawn_img, (0, 0), mask=self.white_pawn_img)
-        else:
-            assert to_play == pyspiel.PlayerId.TERMINAL
-            terminal = True
+# TODO: support GO visualizer
+# import matplotlib.pyplot as plt
 
-        draw = ImageDraw.Draw(im)
-        if terminal:
-            content = "game ends"
-        else:
-            content = " to play"
-        draw.text((0, 0), content, fill="black", font=get_font())
-        return im
+# fig = plt.figure(figsize=[8, 8])
+# fig.patch.set_facecolor((1, 1, 0.8))
+
+# ax = fig.add_subplot(111)
+
+# # draw the grid
+# for x in range(9):
+#     ax.plot([x, x], [0, 8], "k")
+# for y in range(9):
+#     ax.plot([0, 8], [y, y], "k")
+
+# # scale the axis area to fill the whole figure
+# ax.set_position([0, 0, 1, 1])
+
+# # get rid of axes and everything (the figure background will show through)
+# ax.set_axis_off()
+
+# # scale the plot area conveniently (the board is in 0,0..18,18)
+# ax.set_xlim(-1, 9)
+# ax.set_ylim(-1, 9)
+
+# # draw Go stones at (10,10) and (13,16)
+# (s1,) = ax.plot(
+#     2,
+#     2,
+#     "o",
+#     markersize=30,
+#     markeredgecolor=(0, 0, 0),
+#     markerfacecolor="w",
+#     markeredgewidth=2,
+# )
+# (s2,) = ax.plot(
+#     5,
+#     5,
+#     "o",
+#     markersize=30,
+#     markeredgecolor=(0.5, 0.5, 0.5),
+#     markerfacecolor="k",
+#     markeredgewidth=2,
+# )
 
 
 def save_gif(
@@ -161,7 +183,7 @@ def convert_tree_to_graph(
     https://github.com/deepmind/mctx/blob/main/examples/visualization_demo.py
     """
     # TODO: add colors based on visit counts
-        
+
     # graph {
     # node [colorscheme=oranges9,shape=rect, penwidth=3] # Apply colorscheme to all nodes
     # 1 [color=1]
@@ -174,7 +196,7 @@ def convert_tree_to_graph(
     # 8 [color=8]
     # 9 [color=9]
     # }
-    
+
     chex.assert_rank(tree.node_values, 2)
     batch_size = tree.node_values.shape[0]
     if action_labels is None:

@@ -1,20 +1,3 @@
-# - model: base
-#   flags-import: all
-#   output-scalars: off
-#   requires:
-#     - file: courier.ttf
-#     - file: .env
-#   sourcecode:
-#     - "*.py"
-#     - "*.yml"
-#     - "assets/"
-#     - exclude:
-#         dir: local_deps
-#   flags:
-#     vis.planner.max_depth:
-#       type: int
-
-
 - model: open_spiel
   operation-defaults:
     flags-dest: config:examples/open_spiel/config.yml
@@ -30,19 +13,16 @@
       - "assets/"
       - exclude:
           dir: local_deps
-    flags:
-      vis.planner.max_depth:
-        type: int
 
   operations:
     train:
       default: true
-      main: examples.open_spiel.train
-      tags: ['train']
+      main: examples.train
+      tags: ['minatar', 'train']
 
     vis:
       main: examples.open_spiel.visualize_search_trees
-      tags: ['vis']
+      tags: ['minatar', 'vis']
 
 - model: minatar
   operation-defaults:
@@ -59,14 +39,11 @@
       - "assets/"
       - exclude:
           dir: local_deps
-    flags:
-      vis.planner.max_depth:
-        type: int
 
   operations:
     train:
       default: true
-      main: examples.open_spiel.train
+      main: examples.train
       tags: ['open_spiel', 'train']
 
     vis:

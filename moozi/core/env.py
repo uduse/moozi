@@ -81,34 +81,14 @@ def make_openspiel_env_and_spec(env_name):
 
     raw_env = open_spiel.python.rl_environment.Environment(env_name)
 
-    if raw_env.name == "catch":
-        game_params = raw_env.game.get_parameters()
-        num_rows, num_cols = game_params["rows"], game_params["columns"]
-
-        def transform_frame(frame):
-            return frame.reshape((num_rows, num_cols, 1))
-
-    elif raw_env.name == "tic_tac_toe":
-
-        def transform_frame(frame):
-            return frame.reshape((3, 3, 3)).swapaxes(0, 2)
-
-    elif raw_env.name == "go":
-
-        board_size = raw_env.game.get_parameters()["board_size"]
-
-        def transform_frame(frame):
-            return frame.reshape((board_size, board_size, 4))
-
-    elif raw_env.name == "breakthrough":
-
+    if raw_env.name in ["breakthrough", "connect_four", "go", "tic_tac_toe", "catch"]:
         target_shape = raw_env.game.observation_tensor_shape()
 
         def transform_frame(frame):
             return np.moveaxis(frame.reshape(target_shape), 0, -1)
 
     else:
-        raise ValueError(f"Game not support by MooZi: {raw_env.name}")
+        raise ValueError(f"Game {raw_env.name} currently not support by MooZi.")
 
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
@@ -155,7 +135,7 @@ def make_minatar_env(level, **kwargs) -> dm_env.Environment:
     return wrap_all(env, wrapper_list)
 
 
-def make_env_and_spec(env_name):
+def make_dm_env_and_spec(env_name):
     if ":" in env_name:
         lib_type, env_name = env_name.split(":")
         if lib_type == "OpenSpiel":
@@ -189,13 +169,13 @@ def make_env_and_spec(env_name):
 
 
 def make_env(env_name):
-    return make_env_and_spec(env_name)[0]
+    return make_dm_env_and_spec(env_name)[0]
 
 
 # environment specs should be the same if the `env_name` is the same
 @functools.lru_cache(maxsize=None)
 def make_spec(env_name):
-    return make_env_and_spec(env_name)[1]
+    return make_dm_env_and_spec(env_name)[1]
 
 
 class GIIEnvFeed(struct.PyTreeNode):
@@ -228,7 +208,10 @@ class ArraySpec:
     dtype: np.dtype
 
 
-class GIISpec(struct.PyTreeNode):
+class GIIEnvSpec(struct.PyTreeNode):
+    num_players: int
+    dim_action: int
+
     frame: ArraySpec
     is_first: ArraySpec
     is_last: ArraySpec
@@ -236,22 +219,40 @@ class GIISpec(struct.PyTreeNode):
     reward: ArraySpec
     legal_actions: ArraySpec
 
+    def add_batch_dim(self, batch_size) -> "GIIEnvSpec":
+        def update_spec_data(data):
+            if isinstance(data, ArraySpec):
+                return ArraySpec(shape=(batch_size, *data.shape), dtype=data.dtype)
+            else:
+                return data
+
+        return jax.tree_util.tree_map(update_spec_data, self)
+
 
 class GIIEnv(struct.PyTreeNode):
     name: str
-    num_players: int
-    spec: GIISpec
+    spec: GIIEnvSpec
     backend: dm_env.Environment = struct.field(pytree_node=False)
 
     @staticmethod
     def new(env_name):
         """Smart constructor."""
-        backend, spec = make_env_and_spec(env_name)
-        num_players = backend.num_players
-        dim_action = spec.actions.num_values
-        gii_spec = GIISpec(
+        backend, spec = make_dm_env_and_spec(env_name)
+        try:
+            num_players = backend.num_players
+        except:
+            num_players = 1
+        try:
+            frame_shape = backend.observation_spec().observation.shape
+        except:
+            frame_shape = backend.observation_spec().shape
+
+        dim_action = spec.actions.num_values + 1
+        gii_spec = GIIEnvSpec(
+            num_players=num_players,
+            dim_action=dim_action,
             frame=ArraySpec(
-                shape=backend.observation_spec().observation.shape,
+                shape=frame_shape,
                 dtype=np.float32,
             ),
             is_first=ArraySpec(shape=(), dtype=np.bool8),
@@ -263,13 +264,8 @@ class GIIEnv(struct.PyTreeNode):
         return GIIEnv(
             name=env_name,
             spec=gii_spec,
-            num_players=num_players,
             backend=backend,
         )
-
-    @property
-    def dim_action(self):
-        return self.spec.actions.num_values + 1
 
     def init(self) -> GIIEnvFeed:
         return GIIEnvFeed(action=0, reset=True)
@@ -327,24 +323,18 @@ class GIIEnv(struct.PyTreeNode):
 class GIIVecEnv(struct.PyTreeNode):
     name: str
     num_envs: int
-    num_players: int
-    spec: GIISpec
+    spec: GIIEnvSpec
     envs: List[GIIEnv] = struct.field(pytree_node=False)
 
     @staticmethod
     def new(env_name: str, num_envs: int):
         assert num_envs >= 1
         envs = [GIIEnv.new(env_name) for _ in range(num_envs)]
-        num_players = envs[0].num_players
-        spec = jax.tree_util.tree_map(
-            lambda arr: ArraySpec(shape=(num_envs, *arr.shape), dtype=arr.dtype),
-            envs[0].spec,
-        )
+
         return GIIVecEnv(
             name=env_name,
             num_envs=num_envs,
-            num_players=num_players,
-            spec=spec,
+            spec=envs[0].spec.add_batch_dim(num_envs),
             envs=envs,
         )
 

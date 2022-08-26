@@ -3,6 +3,12 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 from moozi.core.utils import push_and_rotate_out
+from moozi.core.env import GIIEnvSpec
+
+
+class HistoryStackerState(struct.PyTreeNode):
+    frames: chex.Array
+    actions: chex.Array
 
 
 class HistoryStacker(struct.PyTreeNode):
@@ -12,11 +18,19 @@ class HistoryStacker(struct.PyTreeNode):
     history_length: int
     dim_action: int
 
-    class StackerState(struct.PyTreeNode):
-        frames: chex.Array
-        actions: chex.Array
+    @staticmethod
+    def from_spec(spec: GIIEnvSpec, history_length: int = 1):
+        num_rows, num_cols, num_channels = spec.frame.shape
+        dim_action = spec.legal_actions.shape[0]
+        return HistoryStacker(
+            num_rows=num_rows,
+            num_cols=num_cols,
+            num_channels=num_channels,
+            history_length=history_length,
+            dim_action=dim_action,
+        )
 
-    def init(self) -> "StackerState":
+    def init(self) -> "HistoryStackerState":
         empty_frames = jnp.zeros(
             (self.history_length, self.num_rows, self.num_cols, self.num_channels),
             dtype=jnp.float32,
@@ -25,18 +39,18 @@ class HistoryStacker(struct.PyTreeNode):
             (self.history_length,),
             dtype=jnp.int32,
         )
-        return self.StackerState(
+        return HistoryStackerState(
             frames=empty_frames,
             actions=empty_actions,
         )
 
-    def apply(self, state: "StackerState", frame, action, is_first):
+    def apply(self, state: "HistoryStackerState", frame, action, is_first):
         assert frame.shape == (self.num_rows, self.num_cols, self.num_channels)
 
         def _update_state(state, frame, action):
             frames = push_and_rotate_out(state.frames, frame)
             actions = push_and_rotate_out(state.actions, action)
-            return self.StackerState(frames=frames, actions=actions)
+            return self.HistoryStackerState(frames=frames, actions=actions)
 
         def _reset_and_update_state(state, frame, action):
             state = self.init()

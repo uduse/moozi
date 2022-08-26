@@ -11,7 +11,7 @@ env:
   num_rows: auto
   num_cols: auto
   num_channels: auto
-  num_players: auto
+  num_players: 2
 
 replay:
   num_shards: 6
@@ -27,8 +27,8 @@ replay:
     save_dir: ./replay/
 
 scalar_transform:
-  support_min: -1
-  support_max: 1
+  support_min: -2
+  support_max: 2
   eps: 1.0e-3
   contract: false
 
@@ -50,11 +50,11 @@ nn:
     dim_action: ${dim_action}
     repr_rows: ${env.num_rows}
     repr_cols: ${env.num_cols}
-    repr_channels: 48
-    repr_tower_blocks: 8
-    pred_tower_blocks: 8
-    dyna_tower_blocks: 8
-    dyna_state_blocks: 8
+    repr_channels: 32
+    repr_tower_blocks: 6
+    pred_tower_blocks: 2
+    dyna_tower_blocks: 2
+    dyna_state_blocks: 2
 
 train:
   num_epochs: 500
@@ -78,15 +78,15 @@ training_worker:
     discount: ${discount}
     max_depth: ${num_unroll_steps}
     num_simulations: 256
-    use_gumbel: true
-    kwargs:
-      gumbel_scale: 1.0
-      max_num_considered_actions: 8
+    # use_gumbel: true
     # kwargs:
-    #   dirichlet_alpha: 0.5
-    #   dirichlet_fraction: 0.25
-    #   temperature: 1.0
-    #   pb_c_init: 1.25
+    #   gumbel_scale: 1.0
+    #   max_num_considered_actions: 6
+    kwargs:
+      dirichlet_alpha: 0.5
+      dirichlet_fraction: 0.25
+      temperature: 1.0
+      pb_c_init: 1.25
 
 testing_worker:
   num_workers: 0
@@ -97,6 +97,14 @@ testing_worker:
   update_period: 1
   test_period: 10
   planner: ${training_worker.planner}
+    # dim_action: ${dim_action}
+    # discount: -1.0
+    # max_depth: ${num_unroll_steps}
+    # num_simulations: 16
+    # use_gumbel: true
+    # kwargs:
+    #   gumbel_scale: 1.0
+    #   max_num_considered_actions: 6
 
 reanalyze_worker:
   num_workers: 0
@@ -107,7 +115,7 @@ reanalyze_worker:
   update_period: 1
   planner:
     dim_action: ${dim_action}
-    discount: 1.0
+    discount: -1.0
     max_depth: ${num_unroll_steps}
     num_simulations: 25
     kwargs:
@@ -125,7 +133,7 @@ vis:
   num_steps: 25
   planner:
     dim_action: ${dim_action}
-    discount: 1.0
+    discount: -1.0
     max_depth: ${num_unroll_steps}
     num_simulations: 256
     kwargs:

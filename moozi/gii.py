@@ -9,13 +9,13 @@ import pyspiel
 from flax import struct
 from moozi.core import StepSample
 from moozi.core.env import GIIEnvFeed, GIIEnvOut, GIIVecEnv
-from moozi.core.history_stacker import HistoryStacker
+from moozi.core.history_stacker import HistoryStacker, HistoryStackerState
 from moozi.nn import NNModel, RootFeatures
 from moozi.planner import Planner, PlannerOut, PlannerFeed
 
 
 class PolicyFeed(struct.PyTreeNode):
-    stacker_state: HistoryStacker.StackerState
+    stacker_state: HistoryStackerState
     params: hk.Params
     state: hk.State
     env_out: GIIEnvOut
@@ -27,7 +27,7 @@ class PolicyFeed(struct.PyTreeNode):
 
 
 class PolicyOut(struct.PyTreeNode):
-    stacker_state: HistoryStacker.StackerState
+    stacker_state: HistoryStackerState
     planner_out: PlannerOut
 
 
@@ -69,7 +69,7 @@ class GII:
         state: Union[hk.State, Dict[int, hk.State]],
         random_key: chex.PRNGKey,
         num_envs: int = 1,
-        backend: str= 'gpu'
+        backend: str = "gpu",
     ):
         self.env = GIIVecEnv.new(env_name=env_name, num_envs=num_envs)
         self.env_feed = self.env.init()

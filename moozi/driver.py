@@ -13,10 +13,17 @@ from omegaconf import DictConfig
 
 import moozi as mz
 from moozi.core import HistoryStacker, TrajectoryCollector, make_scalar_transform
-from moozi.core.env import GIIEnv, GIIEnvFeed, GIIEnvOut, GIIVecEnv, make_env_and_spec
+from moozi.core.env import (
+    GIIEnv,
+    GIIEnvFeed,
+    GIIEnvOut,
+    GIIVecEnv,
+    make_dm_env_and_spec,
+)
+from moozi.core.scalar_transform import ScalarTransform
 from moozi.core.types import TrainingState
 from moozi.core.vis import BreakthroughVisualizer, visualize_search_tree
-from moozi.nn.nn import NNArchitecture, NNSpec
+from moozi.nn.nn import NNArchitecture, NNModel, NNSpec
 from moozi.parameter_optimizer import ParameterServer
 from moozi.planner import Planner
 from moozi.replay import ReplayBuffer, ShardedReplayBuffer
@@ -27,22 +34,22 @@ from omegaconf import OmegaConf
 
 
 # TODO: separate config parsing process
-def get_config(overrides={}, path="config.yml"):
+def get_config(path="config.yml", overrides={}):
     path = Path(path)
     config = OmegaConf.load(path)
+    env = GIIEnv.new(config.env.name)
+
+    num_rows, num_cols, num_channels = env.spec.frame.shape
     if config.dim_action == "auto":
-        _, env_spec = make_env_and_spec(config.env.name)
-        config.dim_action = env_spec.actions.num_values + 1
-    try:
-        num_rows, num_cols, num_channels = env_spec.observations.shape
-    except:
-        num_rows, num_cols, num_channels = env_spec.observations.observation.shape
+        config.dim_action = env.spec.dim_action
     if config.env.num_rows == "auto":
         config.env.num_rows = num_rows
     if config.env.num_cols == "auto":
         config.env.num_cols = num_cols
     if config.env.num_channels == "auto":
         config.env.num_channels = num_channels
+    if config.env.num_players == "auto":
+        config.env.num_players = env.spec.num_players
 
     config.num_steps_per_epoch = (
         config.training_worker.num_steps
@@ -112,11 +119,13 @@ class Driver:
         training_planner = Planner(
             batch_size=config.training_worker.num_envs,
             model=model,
+            num_players=config.env.num_players,
             **config.training_worker.planner,
         )
         testing_planner = Planner(
             batch_size=1,
             model=model,
+            num_players=config.env.num_players,
             **config.testing_worker.planner,
         )
         config = config.copy()
@@ -181,7 +190,7 @@ class Driver:
                 target_update_period=self.config.train.target_update_period,
                 consistency_loss_coef=self.config.train.consistency_loss_coef,
             ),
-            load_from=self.config.param_opt.load_from
+            load_from=self.config.param_opt.load_from,
         )
 
     def _start_replay_buffer(self):
@@ -272,3 +281,48 @@ class Driver:
                 logger.info(f"Epoch {i} done.")
             self.schedule_one_epoch()
         self.wait()
+
+
+@dataclass
+class ConfigFactory:
+    config: DictConfig
+    
+    def make_scalar_transform(self) -> ScalarTransform:
+        return make_scalar_transform(**self.config.scalar_transform)
+        
+    def make_model(self) -> NNModel:
+        nn_arch_cls: Type[NNArchitecture] = mz.nn.get(self.config.nn.arch_cls)
+        nn_spec: NNSpec = mz.nn.get(self.config.nn.spec_cls)(
+            **self.config.nn.spec_kwargs,
+            scalar_transform=self.make_scalar_transform(),
+        )
+        return mz.nn.make_model(nn_arch_cls, nn_spec)
+
+    def make_history_stacker(self) -> HistoryStacker:
+        return HistoryStacker(
+            num_rows=config.env.num_rows,
+            num_cols=config.env.num_cols,
+            num_channels=config.env.num_channels,
+            history_length=config.history_length,
+            dim_action=config.dim_action,
+        )
+    #     training_planner = Planner(
+    #         batch_size=config.training_worker.num_envs,
+    #         model=model,
+    #         num_players=config.env.num_players,
+    #         **config.training_worker.planner,
+    #     )
+    #     testing_planner = Planner(
+    #         batch_size=1,
+    #         model=model,
+    #         num_players=config.env.num_players,
+    #         **config.testing_worker.planner,
+    #     )
+    #     config = config.copy()
+    #     return Driver(
+    #         config=config,
+    #         model=model,
+    #         stacker=stacker,
+    #         training_planner=training_planner,
+    #         testing_planner=testing_planner,
+    #     )

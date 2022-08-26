@@ -1,4 +1,6 @@
 # %%
+from dotenv import load_dotenv
+from moozi.driver import Driver, get_config
 import numpy as np
 import chex
 import random
@@ -9,12 +11,16 @@ from moozi.planner import Planner
 import jax
 import jax.numpy as jnp
 from moozi.replay import ReplayBuffer
+import pyspiel
 
 rng_key = jax.random.PRNGKey(0)
 
+load_dotenv()
+config = get_config("/home/zeyi/moozi/examples/minatar/config.yml")
+driver = Driver.setup(config)
 
 # %%
-replay = ReplayBuffer
+
 
 # %%
 
@@ -70,6 +76,8 @@ replay = ReplayBuffer
 # GRAVEYARD
 # GRAVEYARD
 # GRAVEYARD
+# %%
+
 # # %%
 num_actions = 100
 legal_actions = jnp.zeros(num_actions).at[:13].set(1)
@@ -103,9 +111,5 @@ graph.add_node(0, label="some label", width=2.5, height=4, image="image_path")
 # Add all other nodes and connect them up.
 for i, node in enumerate(nodes):
     graph.add_node(
-        child_id,
-        label="some other label",
-        width=2.5,
-        height=4,
-        image="image_path"
+        child_id, label="some other label", width=2.5, height=4, image="image_path"
     )

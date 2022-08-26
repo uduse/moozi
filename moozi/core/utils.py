@@ -239,3 +239,11 @@ def _fetch_devic_earray(x):
     if isinstance(x, jax.xla.DeviceArray):
         return np.asarray(x)
     return x
+
+
+def add_batch_dim(array_tree: chex.ArrayTree) -> chex.ArrayTree:
+    return jax.tree_map(lambda x: jnp.expand_dims(x, axis=0), array_tree)
+
+
+def squeeze_batch_dim(array_tree: chex.ArrayTree) -> chex.ArrayTree:
+    return jax.tree_map(lambda x: jnp.squeeze(x, axis=0), array_tree)

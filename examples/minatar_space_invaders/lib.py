@@ -11,7 +11,7 @@ from typing import Callable, List, Set, Tuple, Union
 import moozi
 from dotenv import load_dotenv
 from loguru import logger
-from moozi.core import make_env_and_spec
+from moozi.core import make_dm_env_and_spec
 from moozi.core.scalar_transform import ScalarTransform, make_scalar_transform
 from moozi.core.tape import exclude, include, make_tape
 from moozi.laws import *
@@ -33,7 +33,7 @@ def get_config(overrides={}, path=None):
         path = Path(__file__).parent / "config.yml"
     config = OmegaConf.load(path)
     if config.dim_action == "auto":
-        _, env_spec = make_env_and_spec(config.env.name)
+        _, env_spec = make_dm_env_and_spec(config.env.name)
         config.dim_action = env_spec.actions.num_values + 1
     num_rows, num_cols, num_channels = env_spec.observations.shape
     if config.env.num_rows == "auto":

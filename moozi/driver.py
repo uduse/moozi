@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import chex
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
@@ -18,7 +19,7 @@ from moozi.core.env import (
     GIIEnvFeed,
     GIIEnvOut,
     GIIVecEnv,
-    make_dm_env_and_spec,
+    _make_dm_env_and_spec,
 )
 from moozi.core.scalar_transform import ScalarTransform
 from moozi.core.types import TrainingState
@@ -156,7 +157,7 @@ class Driver:
                 stacker=self.stacker,
                 planner=self.training_planner,
                 num_steps=self.config.training_worker.num_steps,
-                vis=BreakthroughVisualizer if i == 0 else None,
+                use_vis=(i == 0),
             )
             for i in range(self.config.training_worker.num_workers)
         ]
@@ -171,7 +172,7 @@ class Driver:
                 stacker=self.stacker,
                 planner=self.testing_planner,
                 num_steps=self.config.testing_worker.num_steps,
-                vis=BreakthroughVisualizer,
+                use_vis=True
             )
         ]
 
@@ -286,10 +287,13 @@ class Driver:
 @dataclass
 class ConfigFactory:
     config: DictConfig
-    
+
+    def make_env(self) -> GIIEnv:
+        return GIIEnv.new(self.config.env.name)
+
     def make_scalar_transform(self) -> ScalarTransform:
         return make_scalar_transform(**self.config.scalar_transform)
-        
+
     def make_model(self) -> NNModel:
         nn_arch_cls: Type[NNArchitecture] = mz.nn.get(self.config.nn.arch_cls)
         nn_spec: NNSpec = mz.nn.get(self.config.nn.spec_cls)(
@@ -300,29 +304,28 @@ class ConfigFactory:
 
     def make_history_stacker(self) -> HistoryStacker:
         return HistoryStacker(
-            num_rows=config.env.num_rows,
-            num_cols=config.env.num_cols,
-            num_channels=config.env.num_channels,
-            history_length=config.history_length,
-            dim_action=config.dim_action,
+            num_rows=self.config.env.num_rows,
+            num_cols=self.config.env.num_cols,
+            num_channels=self.config.env.num_channels,
+            history_length=self.config.history_length,
+            dim_action=self.config.dim_action,
         )
-    #     training_planner = Planner(
-    #         batch_size=config.training_worker.num_envs,
-    #         model=model,
-    #         num_players=config.env.num_players,
-    #         **config.training_worker.planner,
-    #     )
-    #     testing_planner = Planner(
-    #         batch_size=1,
-    #         model=model,
-    #         num_players=config.env.num_players,
-    #         **config.testing_worker.planner,
-    #     )
-    #     config = config.copy()
-    #     return Driver(
-    #         config=config,
-    #         model=model,
-    #         stacker=stacker,
-    #         training_planner=training_planner,
-    #         testing_planner=testing_planner,
-    #     )
+
+    def make_training_planner(self) -> Planner:
+        return Planner(
+            batch_size=self.config.training_worker.num_envs,
+            model=self.make_model(),
+            num_players=self.config.env.num_players,
+            **self.config.training_worker.planner,
+        )
+
+    def make_testing_planner(self) -> Planner:
+        return Planner(
+            batch_size=1,
+            model=self.make_model(),
+            num_players=self.config.env.num_players,
+            **self.config.testing_worker.planner,
+        )
+
+    def make_random_key(self) -> chex.PRNGKey:
+        return jax.random.PRNGKey(self.config.seed)

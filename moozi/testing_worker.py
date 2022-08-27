@@ -11,6 +11,7 @@ import jax
 import ray
 
 from moozi.core import TrajectorySample
+from moozi.core.env import GIIVecEnv
 from moozi.core.history_stacker import HistoryStacker
 from moozi.core.trajectory_collector import TrajectoryCollector
 from moozi.core.vis import Visualizer, next_valid_fpath, visualize_search_tree
@@ -31,7 +32,7 @@ class TestingWorker:
         num_envs: int = 1,  # TODO: make this effective
         *,
         seed: Optional[int] = None,
-        vis: Union[Type[Visualizer], Visualizer, None] = None,
+        use_vis: bool = False,
     ):
         self.index = index
         self.seed = seed if seed is not None else index
@@ -41,19 +42,18 @@ class TestingWorker:
         model_key, agent_key = jax.random.split(random_key, 2)
         params, state = model.init_params_and_state(model_key)
         self.gii = GII(
-            env_name=env_name,
+            env=GIIVecEnv.new(env_name, num_envs),
             stacker=stacker,
             planner=planner,
             params=params,
             state=state,
             random_key=agent_key,
-            num_envs=1,
         )
-        if isclass(vis):
-            _, num_rows, num_cols, _ = self.gii.env.spec.frame.shape
-            self.vis = vis(num_rows=num_rows, num_cols=num_cols)
+        self.vis: Optional[Visualizer]
+        if use_vis:
+            self.vis = Visualizer.match_env(self.gii.env)
         else:
-            self.vis = vis
+            self.vis = None
         self.traj_collector = TrajectoryCollector()
 
         logger.remove()
@@ -63,13 +63,17 @@ class TestingWorker:
         self._flog = logger
 
     def run(self, epoch: int = 0) -> None:
-        self.gii.env_feed = self.gii.env.init()
-        for i in range(self.num_steps):
-            self.gii.tick()
-            search_tree = self.gii.planner_out.tree
-            root_state = self.gii.env[0].backend.get_state
-            vis_dir = Path(f"search_trees/epoch_{epoch}/step_{i}")
-            visualize_search_tree(self.vis, search_tree, root_state, vis_dir)
+        if self.vis:
+            self.gii.env_feed = self.gii.env.init()
+            for i in range(self.num_steps):
+                self.gii.tick()
+                search_tree = self.gii.planner_out.tree
+                try:
+                    root_state = self.gii.env[0].backend.get_state
+                    vis_dir = Path(f"search_trees/epoch_{epoch}/step_{i}")
+                    visualize_search_tree(self.vis, search_tree, root_state, vis_dir)
+                except:
+                    pass
 
     def set_params(self, params: hk.Params):
         self.gii.params = params

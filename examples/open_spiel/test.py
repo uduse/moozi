@@ -41,7 +41,7 @@ gii = GII(
     params=None,
     state=None,
     random_key=jax.random.PRNGKey(0),
-    backend="cpu",
+    device="cpu",
 )
 t = Tournament(gii=gii, players=players)
 

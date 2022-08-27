@@ -110,7 +110,7 @@ class OpenSpielEnv:
 
 
 def make_env():
-    return mz.make_env("OpenSpiel:catch(rows=6,columns=6)")
+    return mz._make_dm_env("OpenSpiel:catch(rows=6,columns=6)")
 
 
 def make_env_law():

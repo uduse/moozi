@@ -4,23 +4,59 @@ from moozi.driver import Driver, get_config
 import numpy as np
 import chex
 import random
-from moozi.core import make_env
+from moozi.core import _make_dm_env
 from moozi.core.vis import BreakthroughVisualizer, save_gif
 from moozi.core.env import GIIEnv, GIIVecEnv, GIIEnvFeed, GIIEnvOut
 from moozi.planner import Planner
 import jax
 import jax.numpy as jnp
 from moozi.replay import ReplayBuffer
+from moozi.driver import ConfigFactory
+from moozi.gii import GII
+from moozi.training_worker import TrainingWorker
 import pyspiel
 
 rng_key = jax.random.PRNGKey(0)
 
 load_dotenv()
 config = get_config("/home/zeyi/moozi/examples/minatar/config.yml")
-driver = Driver.setup(config)
+factory = ConfigFactory(config)
+
+# # %%
+# planner = factory.make_training_planner()
+# model = factory.make_model()
+# params, state = model.init_params_and_state(factory.make_random_key())
+# gii = GII(
+#     env=factory.make_env(),
+#     params=params,
+#     state=state,
+#     stacker=factory.make_history_stacker(),
+#     planner=factory.make_training_planner(),
+#     random_key=factory.make_random_key(),
+# )
+
+# %%
+t = TrainingWorker(
+    0,
+    env_name=config.env.name,
+    num_envs=2,
+    model=factory.make_model(),
+    stacker=factory.make_history_stacker(),
+    planner=factory.make_training_planner(),
+    num_steps=500,
+    use_vis=True,
+)
+trajs = t.run()
+
+# %%
+trajs
+
 
 # %%
 
+# %%
+
+# %%
 
 # %%
 

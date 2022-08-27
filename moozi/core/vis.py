@@ -1,4 +1,4 @@
-from multiprocessing.sharedctypes import Value
+from dataclasses import dataclass
 from flax import struct
 from os import PathLike
 from pathlib import Path
@@ -13,6 +13,7 @@ import pygraphviz
 import pyspiel
 from loguru import logger
 from moozi import BASE_PLAYER
+from moozi.core.env import GIIEnv, GIIVecEnv
 from moozi.core.utils import fetch_device_array
 from moozi.utils import get_project_root
 from PIL import Image, ImageOps, ImageDraw, ImageChops, ImageFont, ImageFilter
@@ -27,18 +28,118 @@ def get_font(name="courier") -> ImageFont.ImageFont:
     return font
 
 
+def make_description(
+    root_value=None,
+    q_values=None,
+    action_probs=None,
+    prior_probs=None,
+    action=None,
+    reward=None,
+    action_map=None,
+    visit_counts=None,
+    n_step_return=None,
+):
+    if root_value is not None:
+        root_value = np.asarray(root_value, dtype=np.float32)
+    if q_values is not None:
+        q_values = np.asarray(q_values, dtype=np.float32)
+    if action_probs is not None:
+        action_probs = np.asarray(action_probs, dtype=np.float32)
+    if action is not None:
+        action = np.asarray(action, dtype=np.int32)
+    if reward is not None:
+        reward = np.asarray(reward, dtype=np.float32)
+    if visit_counts is not None:
+        visit_counts = np.asarray(visit_counts, dtype=np.int32)
+    if prior_probs is not None:
+        prior_probs = np.asarray(prior_probs, dtype=np.float32)
+    if n_step_return is not None:
+        n_step_return = np.asarray(n_step_return, dtype=np.float32)
+    with np.printoptions(precision=3, suppress=True, floatmode="fixed"):
+        desc = ""
+        if reward is not None:
+            desc += f"R {reward}\n"
+        if n_step_return is not None:
+            desc += f"G {n_step_return}\n"
+        if root_value is not None:
+            desc += f"V {root_value:.3f}\n"
+        if prior_probs is not None:
+            desc += f"P {prior_probs}\n"
+        if visit_counts is not None:
+            desc += f"N {visit_counts}\n"
+        if action_probs is not None:
+            desc += f"π {action_probs}\n"
+        if q_values is not None:
+            desc += f"Q {q_values}\n"
+        if action is not None:
+            if action_map:
+                action = action_map[action]
+            desc += f"A {action}\n"
+    return desc
+
+
+@dataclass
+class VisualizerSpec:
+    num_rows: int
+    num_cols: int
+    num_channels: int
+    image_width: int = 250
+    image_height: int = 250
+    font: str = "courier"
+
+
 class Visualizer:
-    def __init__(self, num_rows: int, num_cols: int):
-        self.num_rows = num_rows
-        self.num_cols = num_cols
+    def __init__(self, spec: VisualizerSpec):
+        self.spec = spec
 
     def make_image(self, frame: np.ndarray) -> Image:
         raise NotImplementedError
 
+    @staticmethod
+    def _match_open_spiel(env: GIIEnv) -> Optional["Visualizer"]:
+        try:
+            name = env.backend.game.get_type().short_name
+            if name == "breakthrough":
+                return BreakthroughVisualizer(
+                    VisualizerSpec(
+                        num_rows=env.spec.frame.shape[0],
+                        num_cols=env.spec.frame.shape[1],
+                        num_channels=env.spec.frame.shape[2],
+                    )
+                )
+            else:
+                return None
+        except:
+            return None
+
+    @staticmethod
+    def _match_min_atar(env: GIIEnv) -> Optional["Visualizer"]:
+        try:
+            name = env.backend.game.game_name()
+            spec = VisualizerSpec(
+                num_rows=10,
+                num_cols=10,
+                num_channels=env.spec.frame.shape[2],
+            )
+            return MinAtarVisualizer(spec)
+        except:
+            return None
+
+    @staticmethod
+    def match_env(env: Union[GIIEnv, GIIVecEnv], **kwargs) -> "Visualizer":
+        if isinstance(env, GIIVecEnv):
+            env = env[0]
+        if vis := Visualizer._match_open_spiel(env):
+            return vis
+        elif vis := Visualizer._match_min_atar(env):
+            return vis
+        else:
+            raise NotImplementedError
+
 
 class BreakthroughVisualizer(Visualizer):
-    def __init__(self, num_rows: int, num_cols: int):
-        super().__init__(num_rows=num_rows, num_cols=num_cols)
+    def __init__(self, spec: VisualizerSpec):
+        super().__init__(spec)
         root = get_project_root()
         self.white_pawn_img = Image.open(root / "assets/white_pawn.png").convert("RGBA")
         self.black_pawn_img = Image.open(root / "assets/black_pawn.png").convert("RGBA")
@@ -56,10 +157,10 @@ class BreakthroughVisualizer(Visualizer):
 
     def make_image(self, frame: np.ndarray) -> Image:
         frame = np.asarray(frame, dtype=np.float32)
-        assert frame.shape == (self.num_rows, self.num_cols, 3)
+        assert frame.shape == (self.spec.num_rows, self.spec.num_cols, 3)
 
-        img_width = self.token_width * self.num_cols
-        img_height = self.token_height * self.num_rows
+        img_width = self.token_width * self.spec.num_cols
+        img_height = self.token_height * self.spec.num_rows
         img = Image.new("RGBA", (img_width, img_height), (255, 255, 255))
 
         for row_idx, row in enumerate(frame):
@@ -75,16 +176,36 @@ class BreakthroughVisualizer(Visualizer):
                 elif piece == 1:
                     img.paste(self.white_pawn_img, loc, mask=self.white_pawn_img)
                 else:
-                    # empty tile
                     pass
-        return img
-
-    def size(self):
-        # TODO: add default resolution
-        return
+        return img.resize((self.spec.image_width, self.spec.image_height))
 
 
-# TODO: support GO visualizer
+class MinAtarVisualizer(Visualizer):
+    def __init__(self, spec: VisualizerSpec):
+        super().__init__(spec)
+        import seaborn as sns
+
+        cmap = sns.color_palette("cubehelix", self.spec.num_channels)
+        cmap.insert(0, (0, 0, 0))
+        self.colors = np.array([cmap[i] for i in range(self.spec.num_channels + 1)])
+
+    def make_image(self, frame: np.ndarray) -> Image:
+        frame = np.asarray(frame, dtype=np.float32)
+        numerical_state = np.array(
+            np.amax(
+                frame * np.reshape(np.arange(self.spec.num_channels) + 1, (1, 1, -1)), 2
+            )
+            + 0.5,
+            dtype=int,
+        )
+        rgbs = np.array(self.colors[numerical_state - 1] * 255, dtype=np.uint8)
+        img = Image.fromarray(rgbs)
+        return img.resize((self.spec.image_width, self.spec.image_height), resample=Image.Resampling.NEAREST)
+
+
+class GoVisualizer(Visualizer):
+    def __init__(self, spec: VisualizerSpec):
+        super().__init__(spec)
 # import matplotlib.pyplot as plt
 
 # fig = plt.figure(figsize=[8, 8])
@@ -138,6 +259,7 @@ def save_gif(
     if not path:
         path = next_valid_fpath("gifs/", "gif")
     path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
     assert len(images) >= 1
     images[0].save(
         str(path),
@@ -274,7 +396,7 @@ def convert_tree_to_graph(
     return graph
 
 
-def cat_images(
+def tile_images(
     images: List[Image.Image],
     max_columns: int = 1,
     border: bool = False,

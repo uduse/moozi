@@ -338,6 +338,7 @@ def make_model(architecture_cls: Type[NNArchitecture], spec: NNSpec) -> NNModel:
             params, state, dummy_random_key, hidden_state, is_training
         )
 
+    # TODO: remove unbatched interface?
     def root_inference_unbatched(params, state, feats, is_training):
         out, state = root_inference(params, state, add_batch_dim(feats), is_training)
         return squeeze_batch_dim(out), state

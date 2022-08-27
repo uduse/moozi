@@ -1,24 +1,39 @@
 import functools
+from typing import Tuple
+
+import haiku as hk
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 from moozi.core import PolicyFeed
-from moozi.core.scalar_transform import make_scalar_transform
+from moozi.core.env import GIIEnv, GIIVecEnv
+from moozi.core.history_stacker import HistoryStacker
+from moozi.core.scalar_transform import ScalarTransform, make_scalar_transform
+from moozi.core.utils import add_batch_dim
 from moozi.nn import (
+    MLPArchitecture,
+    NNModel,
     NNSpec,
     ResNetArchitecture,
-    MLPArchitecture,
+    ResNetSpec,
+    ResNetV2Architecture,
+    ResNetV2Spec,
     RootFeatures,
     TransitionFeatures,
     make_model,
-    NNModel,
-    ResNetSpec,
-    ResNetV2Architecture,
-    ResNetV2Spec
 )
 from moozi.nn.mlp import MLPSpec
 from moozi.nn.naive import NaiveArchitecture
+
+
+@pytest.fixture(
+    params=["OpenSpiel:catch", "MinAtar:Breakout-v1"],
+    ids=["catch", "breakout"],
+)
+def env(request):
+    env_name = request.param
+    return GIIEnv.new(env_name)
 
 
 # override pytest model fixture to test all architectures
@@ -31,41 +46,71 @@ from moozi.nn.naive import NaiveArchitecture
     ],
     ids=["naive", "mlp", "resnet", "resnet_v2"],
 )
-def model(env_spec, num_stacked_frames, request):
+def model(env: GIIEnv, request, history_length):
     arch_cls, spec_cls = request.param
-
-    single_frame_shape = env_spec.observations.observation.shape
-    obs_rows, obs_cols = single_frame_shape[0:2]
-    obs_channels = single_frame_shape[-1] * num_stacked_frames
-    dim_action = env_spec.actions.num_values
-
-    assert issubclass(spec_cls, NNSpec)
+    shape = env.spec.frame.shape
     return make_model(
         arch_cls,
         spec_cls(
-            frame_rows=obs_rows,
-            frame_cols=obs_cols,
-            frame_channels=obs_channels,
-            repr_rows=obs_rows,
-            repr_cols=obs_cols,
+            frame_rows=shape[0],
+            frame_cols=shape[1],
+            frame_channels=shape[2],
+            repr_rows=shape[0],
+            repr_cols=shape[1],
             repr_channels=2,
-            dim_action=dim_action,
-            scalar_transform=make_scalar_transform(-30, 30),
+            dim_action=env.spec.dim_action,
+            scalar_transform=ScalarTransform.new(-10, 10),
+            num_players=env.spec.num_players,
+            history_length=history_length,
         ),
     )
 
 
+def params_and_state(model: NNModel, random_key) -> Tuple[hk.Params, hk.State]:
+    return model.init_params_and_state(random_key)
+
+
 @pytest.mark.parametrize("use_jit", [True, False], ids=["no_jit", "jit"])
 def test_model_basic_inferences(
-    model: NNModel, params, state, policy_feed: PolicyFeed, use_jit
+    env: GIIEnv,
+    model: NNModel,
+    params_and_state,
+    use_jit,
+    history_length,
 ):
+    feed = env.init()
+    env_out = env.step(feed)
+
+    params, state = params_and_state
     if use_jit:
         model = model.with_jit()
+
+    frames = np.repeat(env_out.frame[np.newaxis, ...], repeats=history_length, axis=0)
+    actions = np.repeat(np.array(feed.action)[np.newaxis, ...], repeats=history_length, axis=0)
     root_feats = RootFeatures(
-        obs=policy_feed.stacked_frames, to_play=np.array(policy_feed.to_play)
+        frames=frames,
+        actions=actions,
+        to_play=np.array(0),
     )
-    is_training = False
-    out, _ = model.root_inference_unbatched(params, state, root_feats, is_training)
-    assert out
-    trans_feats = TransitionFeatures(hidden_state=out.hidden_state, action=np.array(0))
-    out, _ = model.trans_inference_unbatched(params, state, trans_feats, is_training)
+    for is_training in [True, False]:
+        out, _ = model.root_inference_unbatched(params, state, root_feats, is_training)
+        assert out
+        trans_feats = TransitionFeatures(
+            hidden_state=out.hidden_state,
+            action=np.array(0),
+        )
+        out, _ = model.trans_inference_unbatched(
+            params, state, trans_feats, is_training
+        )
+
+        out, _ = model.root_inference(
+            params, state, add_batch_dim(root_feats), is_training
+        )
+        assert out
+        trans_feats = TransitionFeatures(
+            hidden_state=out.hidden_state,
+            action=add_batch_dim(np.array(0)),
+        )
+        out, _ = model.trans_inference(
+            params, state, trans_feats, is_training
+        )

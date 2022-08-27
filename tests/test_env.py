@@ -1,7 +1,10 @@
 import moozi as mz
+import numpy as np
+import random
 from moozi.core.env import GIIEnv
 from moozi.core.link import link
 from moozi.core.tape import make_tape
+from moozi.core.trajectory_collector import TrajectoryCollector
 from moozi.laws import make_vec_env
 import pytest
 
@@ -18,8 +21,14 @@ ENV_NAMES = [
 @pytest.mark.parametrize("env_name", ENV_NAMES)
 def test_gii_env(env_name):
     env = GIIEnv.new(env_name)
-    print(env.spec)
     assert env.spec
+    env_feed = env.init()
+    
+    for i in range(100):
+        env_out = env.step(env_feed)
+        assert env_out
+        action = np.random.choice(np.flatnonzero(env_out.legal_actions))
+        env_feed = env_feed.replace(action=action, reset=env_out.is_last)
 
 
 # @pytest.mark.parametrize("env_name", ENV_NAMES)

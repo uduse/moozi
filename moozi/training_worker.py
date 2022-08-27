@@ -11,6 +11,7 @@ from moozi.core import TrajectorySample
 from moozi.core.history_stacker import HistoryStacker
 from moozi.core.trajectory_collector import TrajectoryCollector
 from moozi.core.vis import Visualizer, save_gif, next_valid_fpath
+from moozi.core.env import GIIVecEnv
 from moozi.gii import GII
 from moozi.nn import NNModel
 from moozi.planner import Planner
@@ -27,32 +28,29 @@ class TrainingWorker:
         planner: Planner,
         num_steps: int,
         seed: Optional[int] = None,
-        save_gif: bool = True,
-        vis: Union[Type[Visualizer], Visualizer, None] = None,
+        use_vis: bool = False,
     ):
         self.index = index
         self.seed = seed if seed is not None else index
         self.num_envs = num_envs
         self.num_steps = num_steps
-        self.save_gif = save_gif
 
         random_key = jax.random.PRNGKey(self.seed)
         model_key, agent_key = jax.random.split(random_key, 2)
         params, state = model.init_params_and_state(model_key)
         self.gii = GII(
-            env_name=env_name,
+            env=GIIVecEnv.new(env_name, num_envs),
             stacker=stacker,
             planner=planner,
             params=params,
             state=state,
             random_key=agent_key,
-            num_envs=num_envs,
         )
-        if isclass(vis):
-            _, num_rows, num_cols, _ = self.gii.env.spec.frame.shape
-            self.vis = vis(num_rows=num_rows, num_cols=num_cols)
+        self.vis: Optional[Visualizer]
+        if use_vis:
+            self.vis = Visualizer.match_env(self.gii.env)
         else:
-            self.vis = vis
+            self.vis = None
         self.traj_collector = TrajectoryCollector(num_envs)
 
         logger.remove()
@@ -65,13 +63,14 @@ class TrainingWorker:
         samples = [self.gii.tick() for _ in range(self.num_steps)]
         self.traj_collector.add_step_samples(samples)
         trajs = self.traj_collector.flush()
+        limit = 3
         if self.vis and trajs:
-            traj = trajs[0]
-            ims = [
-                self.vis.make_image(traj.frame[i]) for i in range(traj.frame.shape[0])
-            ]
-            save_gif(ims, next_valid_fpath("training_workers_gifs", suffix="gif"))
-            save_gif(ims, "training_workers_gifs/latest.gif")
+            for i, traj in enumerate(trajs[:limit]):
+                ims = [
+                    self.vis.make_image(traj.frame[i])
+                    for i in range(traj.frame.shape[0])
+                ]
+                save_gif(ims, f"training_workers_gifs/epoch_{epoch}/{i}.gif")
         return trajs
 
     def set_params(self, params: hk.Params):

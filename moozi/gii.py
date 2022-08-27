@@ -8,7 +8,7 @@ import numpy as np
 import pyspiel
 from flax import struct
 from moozi.core import StepSample
-from moozi.core.env import GIIEnvFeed, GIIEnvOut, GIIVecEnv
+from moozi.core.env import GIIEnvFeed, GIIEnvOut, GIIVecEnv, GIIEnv
 from moozi.core.history_stacker import HistoryStacker, HistoryStackerState
 from moozi.nn import NNModel, RootFeatures
 from moozi.planner import Planner, PlannerOut, PlannerFeed
@@ -62,29 +62,30 @@ def policy(
 class GII:
     def __init__(
         self,
-        env_name: str,
+        env: Union[GIIVecEnv, GIIEnv],
         stacker: HistoryStacker,
         planner: Union[Planner, Dict[int, Planner]],
         params: Union[hk.Params, Dict[int, hk.Params]],
         state: Union[hk.State, Dict[int, hk.State]],
         random_key: chex.PRNGKey,
-        num_envs: int = 1,
-        backend: str = "gpu",
+        device: str = "gpu",
     ):
-        self.env = GIIVecEnv.new(env_name=env_name, num_envs=num_envs)
+        if isinstance(env, GIIEnv):
+            env = GIIVecEnv.from_single(env)
+        self.env: GIIVecEnv = env
         self.env_feed = self.env.init()
-        self.env_out: Optional[GIIEnvOut] = None
-        self.planner_out: Optional[PlannerOut] = None
+        self.env_out: GIIEnvOut = self.env.step(self.env_feed)
+        self.planner_out: PlannerOut = None
 
         self.stacker = stacker
-        self.stacker_state = jax.vmap(stacker.init, axis_size=num_envs)()
+        self.stacker_state = jax.vmap(stacker.init, axis_size=self.env.num_envs)()
 
         self.random_key = random_key
         self.planner = planner
         self.params = params
         self.state = state
 
-        self.policy: PolicyType = jax.jit(policy, backend=backend)
+        self.policy: PolicyType = jax.jit(policy, backend=device)
 
     @staticmethod
     def _select_for_player(data: Union[Any, Dict[int, Any]], to_play: int):
@@ -108,6 +109,7 @@ class GII:
         return next_key
 
     def tick(self) -> StepSample:
+        # TODO: make this function more `pure`, probably use Ninjax?
         env_out = self.env.step(self.env_feed)
         if self.env.num_envs == 1:
             # multiplexing only supported for 1 env

@@ -6,7 +6,7 @@ import tree
 from acme.utils.tree_utils import unstack_sequence_fields
 
 from moozi.batching_layer import BatchingLayer
-from moozi import make_env, make_spec
+from moozi import _make_dm_env, _make_dm_env_spec
 from moozi.rollout_worker import RolloutWorkerWithWeights
 import numpy as np
 import moozi as mz
@@ -45,7 +45,7 @@ def make_rollout_worker_batching_layers(self: RolloutWorkerWithWeights, config: 
 
 
 def make_param_opt_properties(config):
-    env_spec = make_spec(config.env)
+    env_spec = _make_dm_env_spec(config.env)
     dim_action = env_spec.actions.num_values
     frame_shape = env_spec.observations.observation.shape
     stacked_frame_shape = (config.num_stacked_frames,) + frame_shape

@@ -28,3 +28,6 @@ class TrajectoryCollector:
         ret = self.trajs.copy()
         self.trajs.clear()
         return ret
+
+    def __len__(self):
+        return len(self.trajs)

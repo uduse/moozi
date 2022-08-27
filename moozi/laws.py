@@ -36,7 +36,7 @@ from moozi.core.utils import (
     push_and_rotate_out_planes,
     push_and_rotate_out,
 )
-from moozi.core.env import make_env
+from moozi.core.env import _make_dm_env
 from moozi.core.link import link, unlink
 from moozi.core.tape import include
 from moozi.core.types import TrainTarget, TrajectorySample
@@ -296,7 +296,7 @@ def get_keys(fn):
 # TODO: sort this out
 def make_env_law(env_name) -> Law:
     def malloc():
-        return {"env": make_env(env_name)}
+        return {"env": _make_dm_env(env_name)}
 
     def apply(env: dm_env.Environment, is_last: bool, action: int):
         if is_last:

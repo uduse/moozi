@@ -12,7 +12,7 @@ from acme import types
 from acme.core import VariableSource
 from acme.jax.variable_utils import VariableClient
 from dm_env import Environment
-from moozi.core import PolicyFeed, make_catch
+from moozi.core import PolicyFeed
 from moozi.core.env import GIIEnv
 from moozi.core.scalar_transform import ScalarTransform
 from moozi.gii import GII
@@ -51,7 +51,6 @@ def scalar_transform() -> ScalarTransform:
 
 @pytest.fixture(scope="session")
 def model(env: GIIEnv, history_length, scalar_transform):
-
     dim_action = env.spec.dim_action
     frame_shape = env.spec.frame.shape
     nn_spec = mz.nn.NNSpec(

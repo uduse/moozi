@@ -7,11 +7,11 @@ dim_action: auto
 debug: false
 
 env:
-  name: OpenSpiel:breakthrough(rows=5,columns=5)
+  name: MinAtar:SpaceInvaders-v1
   num_rows: auto
   num_cols: auto
   num_channels: auto
-  num_players: 2
+  num_players: auto
 
 replay:
   num_shards: 6
@@ -27,10 +27,10 @@ replay:
     save_dir: ./replay/
 
 scalar_transform:
-  support_min: -2
-  support_max: 2
+  support_min: -30
+  support_max: 30
   eps: 1.0e-3
-  contract: false
+  contract: true
 
 param_opt:
   num_gpus: 0.6
@@ -77,18 +77,19 @@ training_worker:
     dim_action: ${dim_action}
     discount: ${discount}
     max_depth: ${num_unroll_steps}
-    num_simulations: 256
-    # use_gumbel: true
-    # kwargs:
-    #   gumbel_scale: 1.0
-    #   max_num_considered_actions: 6
+    num_simulations: 16
+    search_type: "gumbel_muzero"
     kwargs:
-      dirichlet_alpha: 0.5
-      dirichlet_fraction: 0.25
-      temperature: 1.0
-      pb_c_init: 1.25
+      gumbel_scale: 1.0
+      max_num_considered_actions: 4
+    # kwargs:
+    #   dirichlet_alpha: 0.5
+    #   dirichlet_fraction: 0.25
+    #   temperature: 1.0
+    #   pb_c_init: 1.25
 
 testing_worker:
+  # kinds: ['tournament', 'trajectory']
   num_workers: 0
   num_cpus: 1
   num_gpus: 0.1

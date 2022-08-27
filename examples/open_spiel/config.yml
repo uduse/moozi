@@ -92,7 +92,6 @@ testing_worker:
   num_workers: 0
   num_cpus: 1
   num_gpus: 0.1
-  model: NNModel
   num_steps: 25
   update_period: 1
   test_period: 10

@@ -14,11 +14,11 @@ from moozi.planner import PlannerFeed, Planner
     [
         (
             "muzero",
-            dict(gumbel_scale=1, max_num_considered_actions=8),
+            dict(dirichlet_alpha=0.1, dirichlet_fraction=0.1, pb_c_init=1.75),
         ),
         (
             "gumbel_muzero",
-            dict(dirichlet_alpha=0.1, dirichlet_fraction=0.1, pb_c_init=1.75),
+            dict(gumbel_scale=1, max_num_considered_actions=8),
         ),
     ],
 )

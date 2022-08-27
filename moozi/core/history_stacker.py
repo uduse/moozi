@@ -50,7 +50,7 @@ class HistoryStacker(struct.PyTreeNode):
         def _update_state(state, frame, action):
             frames = push_and_rotate_out(state.frames, frame)
             actions = push_and_rotate_out(state.actions, action)
-            return self.HistoryStackerState(frames=frames, actions=actions)
+            return HistoryStackerState(frames=frames, actions=actions)
 
         def _reset_and_update_state(state, frame, action):
             state = self.init()

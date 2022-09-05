@@ -141,6 +141,7 @@ class Planner(struct.PyTreeNode):
         if self.num_players == 1:
             return self.discount
         elif self.num_players == 2:
+            # Use negative discount for two-player zero-sum games
             return -self.discount
         else:
             raise NotImplementedError

@@ -36,7 +36,7 @@ from omegaconf import OmegaConf
 
 # TODO: separate config parsing process
 def get_config(path="config.yml", overrides={}):
-    path = Path(path)
+    path = Path(path).expanduser().resolve()
     config = OmegaConf.load(path)
     env = GIIEnv.new(config.env.name)
 
@@ -89,7 +89,6 @@ class Driver:
     testing_planner: Planner
 
     # dynamic properties
-    # trianing workers
     training_workers: Optional[List[TrainingWorker]] = None
     testing_workers: Optional[List[TrainingWorker]] = None
 
@@ -157,7 +156,7 @@ class Driver:
                 stacker=self.stacker,
                 planner=self.training_planner,
                 num_steps=self.config.training_worker.num_steps,
-                use_vis=(i == 0),
+                use_vis=(i in range(2)),
             )
             for i in range(self.config.training_worker.num_workers)
         ]
@@ -190,6 +189,7 @@ class Driver:
                 history_length=self.config.history_length,
                 target_update_period=self.config.train.target_update_period,
                 consistency_loss_coef=self.config.train.consistency_loss_coef,
+                value_loss_coef=self.config.train.value_loss_coef
             ),
             load_from=self.config.param_opt.load_from,
         )

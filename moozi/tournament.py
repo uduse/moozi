@@ -30,8 +30,8 @@ class Player:
     state: hk.State
     planner: Planner
     elo: float
-    matches: int = 0
-    score: float = 0.0
+    matches_played: int = 0
+    total_score: float = 0.0
 
     def summary(self):
         return {
@@ -39,9 +39,12 @@ class Player:
             "ELO": self.elo,
             "Num Simulations": self.planner.num_simulations,
             "Max Depth": self.planner.max_depth,
-            "Matches": self.matches,
-            "Score": self.score,
+            "Num Matches": self.matches_played,
+            "Score": self.total_score,
         }
+
+    def __hash__(self) -> int:
+        return hash(self.name)
 
 
 @dataclass
@@ -58,7 +61,9 @@ class Tournament:
 
     def run_round_robin(self, num_matches: int = 1) -> List[MatchResult]:
         matches = list(itertools.product(iter(self.players), iter(self.players)))
-        return self._evaluate_matches(matches, num_matches)
+        results = self._evaluate_matches(matches, num_matches)
+        self._update_elo_with_results(results)
+        return results
 
     def challenge(self, new_player: Player, num_matches: int = 1) -> List[MatchResult]:
         matches = []
@@ -67,6 +72,7 @@ class Tournament:
             matches.append((old_player, new_player))
         if matches:
             results = self._evaluate_matches(matches, num_matches)
+            self._update_elo_with_results(results)
         self.players.append(new_player)
         return results
 
@@ -76,52 +82,14 @@ class Tournament:
 
     def _evaluate_matches(
         self,
-        matches,
-        num_matches: int = 1,
-        shuffle: bool = True,
-    ) -> List[MatchResult]:
-        results = []
-        traj_collector = TrajectoryCollector()
-        matches = list(filter(lambda match: match[0] != match[1], matches))
-        for p0, p1 in tqdm(matches, desc="running matches"):
-            if p0 is not p1:
-                if self.gii.env_out is not None:
-                    assert self.gii.env_out.is_last == True
-                self.gii.planner = {0: p0.planner, 1: p1.planner}
-                self.gii.params = {0: p0.params, 1: p1.params}
-                self.gii.state = {0: p0.state, 1: p1.state}
-                while len(traj_collector.trajs) <= num_matches:
-                    traj_collector.add_step_sample(self.gii.tick())
-                trajs = traj_collector.flush()
-                for traj in trajs:
-                    score = float(traj.last_reward[-1])
-                    results.append(MatchResult(p0, p1, score))
-        if shuffle:
-            random.shuffle(results)
-        for result in results:
-            norm_score = normalize_score(result.score)
-            result.p0.elo, result.p1.elo = elo.update(
-                result.p0.elo, result.p1.elo, norm_score, k=32
-            )
-            result.p0.matches += 1
-            result.p1.matches += 1
-            result.p0.score += norm_score
-            result.p1.score += 1 - norm_score
-        return results
-
-    # TODO: use and test this
-    def _evaluate_matches_no_random(
-        self,
         matches: List[Tuple[Player, Player]],
         num_matches: int = 1,
     ) -> List[MatchResult]:
-        results = []
+        results: List[MatchResult] = []
         traj_collector = TrajectoryCollector()
         matches = list(filter(lambda match: match[0] != match[1], matches))
         for p0, p1 in tqdm(matches, desc="running matches"):
             if p0 is not p1:
-                if self.gii.env_out is not None:
-                    assert self.gii.env_out.is_last == True
                 self.gii.planner = {0: p0.planner, 1: p1.planner}
                 self.gii.params = {0: p0.params, 1: p1.params}
                 self.gii.state = {0: p0.state, 1: p1.state}
@@ -130,19 +98,30 @@ class Tournament:
                 trajs = traj_collector.flush()
                 for traj in trajs:
                     score = float(traj.last_reward[-1])
+                    score = normalize_score(score)
                     results.append(MatchResult(p0, p1, score))
+        return results
+
+    def _update_elo_with_results(self, results: List[MatchResult]):
         expected: Dict[Player, float] = defaultdict(lambda: 0.0)
         scores: Dict[Player, float] = defaultdict(lambda: 0.0)
-        for p0, p1 in matches:
-            p0_exp = elo.expected(p0.elo, p1.elo)
+        for r in results:
+            p0_exp = elo.expected(r.p0.elo, r.p1.elo)
             p1_exp = 1 - p0_exp
-            expected[p0] += p0_exp
-            expected[p1] += p1_exp
-        for result in results:
-            p0_score = normalize_score(result.score)
-            p1_score = 1 - normalize_score
-            scores[p0] += p0_score
-            scores[p1] += p1_score
+            expected[r.p0] += p0_exp
+            expected[r.p1] += p1_exp
+            p0_score = r.score
+            p1_score = 1 - p0_score
+            scores[r.p0] += p0_score
+            scores[r.p1] += p1_score
+            r.p0.matches_played += 1
+            r.p1.matches_played += 1
+            r.p0.total_score += p0_score
+            r.p1.total_score += p1_score
         for p in expected:
+            elo_before = p.elo
             p.elo = elo.elo(p.elo, expected[p], scores[p])
-        return results
+            elo_after = p.elo
+            logger.debug(
+                f"Player {p.name} Elo updated from {elo_before} to {elo_after}"
+            )

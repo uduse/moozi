@@ -55,8 +55,8 @@ class TrainingWorker:
 
         logger.remove()
         logger.add(sys.stderr, level="SUCCESS")
-        logger.add(f"logs/training_workers/{index}.debug.log", level="DEBUG")
-        logger.add(f"logs/training_workers/{index}.info.log", level="INFO")
+        logger.add(f"logs/training_workers/worker_{index}.debug.log", level="DEBUG")
+        logger.add(f"logs/training_workers/worker_{index}.info.log", level="INFO")
         self._flog = logger
 
     def run(self, epoch: int = 0) -> List[TrajectorySample]:
@@ -70,7 +70,8 @@ class TrainingWorker:
                     self.vis.make_image(traj.frame[i])
                     for i in range(traj.frame.shape[0])
                 ]
-                save_gif(ims, f"training_workers_gifs/epoch_{epoch}/{i}.gif")
+                gif_path = f"gifs/epoch_{epoch}/worker_{self.index}/{i}.gif"
+                save_gif(ims, gif_path)
         return trajs
 
     def set_params(self, params: hk.Params):

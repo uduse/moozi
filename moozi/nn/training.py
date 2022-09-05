@@ -429,6 +429,7 @@ def make_training_suite(
     history_length: int,
     target_update_period: int = 1,
     consistency_loss_coef: float = 1.0,
+    value_loss_coef: float = 1.0,
 ) -> Tuple[NNModel, TrainingState, Callable]:
     random_key = jax.random.PRNGKey(seed)
     random_key, new_key = jax.random.split(random_key)
@@ -440,6 +441,7 @@ def make_training_suite(
         weight_decay=weight_decay,
         dim_action=model.spec.dim_action,
         consistency_loss_coef=consistency_loss_coef,
+        value_loss_coef=value_loss_coef
     )
     optimizer = optax.chain(
         optax.clip_by_global_norm(5),

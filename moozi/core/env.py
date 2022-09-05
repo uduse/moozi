@@ -234,6 +234,7 @@ class GIIEnvSpec(struct.PyTreeNode):
 
 
 class GIIEnv(struct.PyTreeNode):
+    # TODO: rename to MII (MooZi Interaction Interface)
     name: str
     spec: GIIEnvSpec
     backend: Any = struct.field(pytree_node=False)

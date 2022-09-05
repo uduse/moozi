@@ -1,3 +1,26 @@
+- model: main
+  operation-defaults:
+    flags-dest: config:examples/config.yml
+    flags-import: all
+    output-scalars: off
+    requires:
+      - file: courier.ttf
+      - file: .env
+      - file: examples/config.yml
+    sourcecode:
+      - "*.py"
+      - "*.yml"
+      - "assets/"
+      - exclude:
+          dir: local_deps
+
+  operations:
+    train:
+      default: true
+      main: examples.train
+      tags: ['train']
+
+
 - model: open_spiel
   operation-defaults:
     flags-dest: config:examples/open_spiel/config.yml

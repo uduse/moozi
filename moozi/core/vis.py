@@ -128,10 +128,12 @@ class Visualizer:
     @staticmethod
     def match_env(env: Union[GIIEnv, GIIVecEnv], **kwargs) -> "Visualizer":
         if isinstance(env, GIIVecEnv):
-            env = env[0]
-        if vis := Visualizer._match_open_spiel(env):
+            single_env = env[0]
+        else:
+            single_env = env
+        if vis := Visualizer._match_open_spiel(single_env):
             return vis
-        elif vis := Visualizer._match_min_atar(env):
+        elif vis := Visualizer._match_min_atar(single_env):
             return vis
         else:
             raise NotImplementedError
@@ -200,12 +202,17 @@ class MinAtarVisualizer(Visualizer):
         )
         rgbs = np.array(self.colors[numerical_state - 1] * 255, dtype=np.uint8)
         img = Image.fromarray(rgbs)
-        return img.resize((self.spec.image_width, self.spec.image_height), resample=Image.Resampling.NEAREST)
+        return img.resize(
+            (self.spec.image_width, self.spec.image_height),
+            resample=Image.Resampling.NEAREST,
+        )
 
 
 class GoVisualizer(Visualizer):
     def __init__(self, spec: VisualizerSpec):
         super().__init__(spec)
+
+
 # import matplotlib.pyplot as plt
 
 # fig = plt.figure(figsize=[8, 8])
@@ -512,7 +519,7 @@ def visualize_search_tree(
     output_dir: Union[PathLike, str],
     batch_idx: int = 0,
 ) -> pygraphviz.AGraph:
-    # TODO: fetch search tree locally to numpy
+    # TODO: identify terminal nodes predictions
     output_dir = Path(output_dir).expanduser().resolve()
     search_tree = fetch_device_array(search_tree)
     game_states = align_game_states(root_state, search_tree)

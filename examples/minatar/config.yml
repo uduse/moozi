@@ -1,8 +1,8 @@
 seed: 0
-discount: 1
+discount: 0.99
 num_unroll_steps: 5
 num_td_steps: 1000
-history_length: 1
+history_length: 4
 dim_action: auto
 debug: false
 
@@ -58,12 +58,13 @@ nn:
 
 train:
   num_epochs: 500
-  update_step_ratio: 20
+  update_step_ratio: 4
   batch_size: 2048
-  lr: 2.0e-2
+  lr: 1.0e-2
   weight_decay: 1.0e-4
   target_update_period: 100
   min_targets_to_train: 10_000
+  value_loss_coef: 0.25
   consistency_loss_coef: 2.0
 
 training_worker:
@@ -71,7 +72,7 @@ training_worker:
   num_envs: 32
   num_cpus: 1
   num_gpus: 0.1
-  num_steps: 50
+  num_steps: 250
   update_period: 5
   planner:
     dim_action: ${dim_action}

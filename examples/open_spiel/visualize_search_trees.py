@@ -10,24 +10,27 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import jax
 from moozi.core.utils import fetch_device_array
-from moozi.core.vis import BreakthroughVisualizer, visualize_search_tree
+from moozi.core.vis import BreakthroughVisualizer, Visualizer, visualize_search_tree
 from moozi.gii import GII
 from moozi.parameter_optimizer import load_params_and_state
 from moozi.planner import Planner
-from moozi.driver import Driver, get_config
+from moozi.driver import ConfigFactory, Driver, get_config
 import guild.ipy as guild
 
-# %%
+
 logger.info("Loading config")
-config = get_config()
+config = get_config("~/moozi/examples/open_spiel/config.yml")
+pkl_path = "/home/zeyi/miniconda3/envs/moozi/.guild/runs/e95902811f16497c80397281a535f341/checkpoints/latest.pkl"
+factory = ConfigFactory(config)
 
 # %%
-driver = Driver.setup(config)
-vis = BreakthroughVisualizer(num_rows=config.env.num_rows, num_cols=config.env.num_cols)
-
-planner = Planner(batch_size=1, model=driver.model, **config.vis.planner)
+env = factory.make_env()
+vis = Visualizer.match_env(env)
+planner = factory.make_testing_planner()
+planner = planner.replace(max_depth=None, num_simulations=1000)
 logger.info(f"Using planner {planner}")
-logger.info("Loading checkpoints")
+logger.info("Loading checkpoint")
+config.vis.load.run = "e9590281"
 if config.vis.load.pkl:
     params, state = load_params_and_state(config.vis.load.pkl)
 elif config.vis.load.run:
@@ -38,6 +41,7 @@ elif config.vis.load.run:
     if len(df) == 1:
         latest_pkl = Path(df.run[0].run.dir) / "checkpoints/latest.pkl"
         params, state = load_params_and_state(latest_pkl)
+        logger.info(f'Checkpoint loaded from {str(latest_pkl)}')
     else:
         raise ValueError(f"Matches {len(df)} runs")
 else:
@@ -45,8 +49,8 @@ else:
 
 # %%
 gii = GII(
-    config.env.name,
-    stacker=driver.stacker,
+    env=factory.make_env(),
+    stacker=factory.make_history_stacker(),
     planner=planner,
     params=params,
     state=state,
@@ -54,17 +58,6 @@ gii = GII(
 )
 
 
-# @dataclass
-# class ProjectionEntry:
-#     hidden_state: chex.Array
-#     step_index: int
-#     game_index: int
-#     last_action: int
-#     next_action: int
-#     image: Image.Image
-
-
-entries = []
 step_index = 0
 game_index = 0
 for i in tqdm(range(config.vis.num_steps), desc="making visualizations"):
@@ -147,3 +140,5 @@ if config.vis.show.projection:
 
     with open("projector_config.pbtxt", "w") as f:
         f.write(projector_config)
+
+# %%

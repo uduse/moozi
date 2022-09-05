@@ -53,7 +53,7 @@ class ReplayBufferBase:
     num_td_steps: int = 5
     history_length: int = 4
     discount: float = 0.997
-    decay: float = 0.9
+    decay: float = 1.0
     save_dir: str = "./replay/"
     name: str = "replay"
 
@@ -325,12 +325,6 @@ class ShardedReplayBuffer(ReplayBufferBase):
 
     def get_train_targets_batch(self, batch_size: int) -> TrainTarget:
         return ray.get(self._pick().get_train_targets_batch.remote(batch_size))
-
-    # def get_train_targets_batch_sharded(self, batch_size: int) -> TrainTarget:
-    #     shard_batch_size = int(np.ceil(batch_size / len(self.shards)))
-    #     return ray.get(
-    #         [shard.get_train_targets_batch.remote(shard_batch_size) for shard in self.shards]
-    #     )
 
     def get_trajs_batch(self, batch_size: int) -> List[TrajectorySample]:
         return ray.get(self._pick().get_trajs_batch.remote(batch_size))

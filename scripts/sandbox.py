@@ -22,34 +22,7 @@ load_dotenv()
 config = get_config("/home/zeyi/moozi/examples/minatar/config.yml")
 factory = ConfigFactory(config)
 
-# # %%
-# planner = factory.make_training_planner()
-# model = factory.make_model()
-# params, state = model.init_params_and_state(factory.make_random_key())
-# gii = GII(
-#     env=factory.make_env(),
-#     params=params,
-#     state=state,
-#     stacker=factory.make_history_stacker(),
-#     planner=factory.make_training_planner(),
-#     random_key=factory.make_random_key(),
-# )
-
 # %%
-t = TrainingWorker(
-    0,
-    env_name=config.env.name,
-    num_envs=2,
-    model=factory.make_model(),
-    stacker=factory.make_history_stacker(),
-    planner=factory.make_training_planner(),
-    num_steps=500,
-    use_vis=True,
-)
-trajs = t.run()
-
-# %%
-trajs
 
 
 # %%

@@ -12,8 +12,11 @@ The *MooZi* core learning algorithm is based on [*MuZero*](https://www.deepmind.
 
 
 ## Architecture
-![*MooZi* Architecture](assets/moozi_architecture.png)
 *MooZi* deploys a [hierarchial control](https://arxiv.org/abs/1712.09381) paradigm to parallizes its workers.
+
+![*MooZi* Architecture](assets/moozi_architecture.png)
+![*MooZi* Training Step](assets/training_step.png)
+
 
 ## Tools
 *MooZi* is shipped with tools to help you montior understand the system.

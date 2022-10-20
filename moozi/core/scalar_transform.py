@@ -42,6 +42,7 @@ def _inverse_phi(scalar, eps):
     )
 
 
+# TODO: merge this into the smart constructor
 def make_scalar_transform(
     support_min: int,
     support_max: int,

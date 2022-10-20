@@ -227,6 +227,7 @@ class ReplayBuffer(ReplayBufferBase):
     def _sample_targets(self, batch_size: int) -> List[ReplayEntry]:
         if self.sampling_strategy == "uniform":
             weights = np.ones(len(self._train_targets))
+            weights /= np.sum(weights)
         elif self.sampling_strategy == "ranking":
             weights = self._compute_ranking_weights()
         elif self.sampling_strategy == "value_diff":

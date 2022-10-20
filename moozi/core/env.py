@@ -7,7 +7,7 @@ import chex
 import numpy as np
 import jax.numpy as jnp
 import functools
-from typing import Callable, List, Any
+from typing import Callable, List, Any, Type
 from loguru import logger
 import uuid
 import gym
@@ -34,7 +34,7 @@ from moozi.core.utils import (
 )
 
 
-class TransformFrameWrapper(EnvironmentWrapper):
+class OpenSpielTransformFrameWrapper(EnvironmentWrapper):
     """Wrapper which converts environments from double- to single-precision."""
 
     def __init__(self, environment: dm_env.Environment, transform_fn):
@@ -91,7 +91,7 @@ def _make_openspiel_env_and_spec(env_name):
 
     env = OpenSpielWrapper(raw_env)
     env = SinglePrecisionWrapper(env)
-    env = TransformFrameWrapper(env, transform_frame)
+    env = OpenSpielTransformFrameWrapper(env, transform_frame)
     env_spec = make_environment_spec(env)
 
     logging.set_verbosity(prev_verbosity)
@@ -150,6 +150,9 @@ def _make_dm_env_and_spec(env_name):
 
             env = _make_minatar_env(env_name)
             return env, make_environment_spec(env)
+        elif lib_type == "EnvPool":
+            env = _make_envpool_env(env_name)
+            return env, make_environment_spec(env)
         else:
             raise ValueError(f"Unknown library type: {lib_type}")
     else:
@@ -166,6 +169,8 @@ def _make_dm_env_and_spec(env_name):
         except:
             raise ValueError(f"Environment {env_name} not found")
 
+def _make_envpool_env(env_name):
+    return
 
 def _make_dm_env(env_name):
     return _make_dm_env_and_spec(env_name)[0]
@@ -179,7 +184,7 @@ def _make_dm_spec(env_name):
 
 class GIIEnvFeed(struct.PyTreeNode):
     action: np.ndarray
-    reset: np.ndarray
+    # reset: np.ndarray
 
 
 class GIIEnvOut(struct.PyTreeNode):
@@ -203,8 +208,9 @@ class GIIEnvOut(struct.PyTreeNode):
 
 @dataclass
 class ArraySpec:
+    # TODO: use dm_env's specs instead?
     shape: tuple
-    dtype: np.dtype
+    dtype: Type
 
 
 GIIEnvStepFn = Callable[[Any, GIIEnvFeed], GIIEnvOut]
@@ -224,13 +230,13 @@ class GIIEnvSpec(struct.PyTreeNode):
     step_fn: GIIEnvStepFn
 
     def add_batch_dim(self, batch_size) -> "GIIEnvSpec":
-        def update_spec_data(data):
+        def _add_batch_dim_for_spec(data):
             if isinstance(data, ArraySpec):
                 return ArraySpec(shape=(batch_size, *data.shape), dtype=data.dtype)
             else:
                 return data
 
-        return jax.tree_util.tree_map(update_spec_data, self)
+        return jax.tree_util.tree_map(_add_batch_dim_for_spec, self)
 
 
 class GIIEnv(struct.PyTreeNode):
@@ -362,6 +368,11 @@ class AtariStepFn:
 class DummyAction:
     def to_env(self, action):
         return action - 1
+        
+    @staticmethod
+    def extend_legal_actions(legal_actions):
+        return np.insert(legal_actions, 0, [1]).astype(np.bool8)
+
 
 
 class GIIVecEnv(struct.PyTreeNode):

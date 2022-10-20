@@ -14,6 +14,7 @@ import rlax
 import tree
 from jax import vmap
 from moozi import ScalarTransform, TrainingState, TrainTarget
+from moozi.core import scalar_transform
 from moozi.core.types import BASE_PLAYER, TrainingState, TrajectorySample
 from moozi.core.utils import make_one_hot_planes, make_frame_planes
 from moozi.laws import concat_stacked_to_obs, make_stacker
@@ -25,18 +26,6 @@ from moozi.nn import (
     TransitionFeatures,
     make_model,
 )
-
-
-class LossFn:
-    def __call__(
-        self,
-        model: NNModel,
-        params: hk.Params,
-        state: hk.State,
-        batch: TrainTarget,
-    ) -> Tuple[chex.ArrayDevice, Any]:
-        r"""Loss function."""
-        raise NotImplementedError
 
 
 def params_l2_loss(params):
@@ -136,12 +125,9 @@ def _slice_actions(
     return batch.action[:, step : step + history_length, ...]
 
 
-@dataclass
-class MuZeroLossWithScalarTransform(LossFn):
-    history_length: int
+class LossFn(struct.PyTreeNode):
+    model: NNModel
     num_unroll_steps: int
-    scalar_transform: ScalarTransform
-    dim_action: int
     weight_decay: float = 1e-4
     consistency_loss_coef: float = 1.0
     value_loss_coef: float = 1.0
@@ -149,21 +135,22 @@ class MuZeroLossWithScalarTransform(LossFn):
 
     def __call__(
         self,
-        model: NNModel,
         params: hk.Params,
         state: hk.State,
         batch: TrainTarget,
     ) -> Tuple[chex.ArrayDevice, Any]:
         self._check_shapes(batch)
         batch_size = batch.frame.shape[0]
+        scalar_transform = self.model.spec.scalar_transform
 
+        history_length = self.model.spec.history_length
         init_inf_features = RootFeatures(
-            frames=_slice_frames(batch, 0, self.history_length),
-            actions=_slice_actions(batch, 0, self.history_length),
+            frames=_slice_frames(batch, 0, history_length),
+            actions=_slice_actions(batch, 0, history_length),
             to_play=batch.to_play,
         )
         is_training = True
-        network_output, state = model.root_inference(
+        network_output, state = self.model.root_inference(
             params, state, init_inf_features, is_training
         )
 
@@ -171,7 +158,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         info = {}
 
         n_step_return = batch.n_step_return.take(0, axis=1)
-        n_step_return_transformed = self.scalar_transform.transform(n_step_return)
+        n_step_return_transformed = scalar_transform.transform(n_step_return)
         losses["loss/value_0"] = (
             optax.softmax_cross_entropy(
                 labels=n_step_return_transformed,
@@ -193,19 +180,19 @@ class MuZeroLossWithScalarTransform(LossFn):
                 info[f"hidden_state_{i}"] = hidden_state
             trans_feats = TransitionFeatures(
                 hidden_state=hidden_state,
-                action=batch.action.take(i + self.history_length, axis=1),
+                action=batch.action.take(i + history_length, axis=1),
             )
-            network_output, state = model.trans_inference(
+            network_output, state = self.model.trans_inference(
                 params, state, trans_feats, is_training
             )
 
             # reward loss
-            reward_transformed = self.scalar_transform.transform(
+            reward_transformed = scalar_transform.transform(
                 batch.last_reward.take(i + 1, axis=1)
             )
             chex.assert_shape(
                 reward_transformed,
-                (batch_size, self.scalar_transform.dim),
+                (batch_size, scalar_transform.dim),
             )
             losses[f"loss/reward_{str(i + 1)}"] = (
                 optax.softmax_cross_entropy(
@@ -216,12 +203,12 @@ class MuZeroLossWithScalarTransform(LossFn):
             )
 
             # value loss
-            n_step_return_transformed = self.scalar_transform.transform(
+            n_step_return_transformed = scalar_transform.transform(
                 batch.n_step_return.take(i + 1, axis=1)
             )
             chex.assert_shape(
                 n_step_return_transformed,
-                (batch_size, self.scalar_transform.dim),
+                (batch_size, scalar_transform.dim),
             )
             losses[f"loss/value_{str(i + 1)}"] = (
                 optax.softmax_cross_entropy(
@@ -246,25 +233,25 @@ class MuZeroLossWithScalarTransform(LossFn):
                 # TODO: only use in two players games
                 next_player = jnp.logical_not(batch.to_play).astype(jnp.int32)
                 next_feats = RootFeatures(
-                    frames=_slice_frames(batch, 1, self.history_length),
-                    actions=_slice_actions(batch, 1, self.history_length),
+                    frames=_slice_frames(batch, 1, history_length),
+                    actions=_slice_actions(batch, 1, history_length),
                     to_play=next_player,
                 )
 
-                next_network_output, state = model.root_inference(
+                next_network_output, state = self.model.root_inference(
                     params, state, next_feats, is_training
                 )
                 next_hidden_state = jax.lax.stop_gradient(
                     next_network_output.hidden_state
                 )
 
-                curr_projection, state = model.projection_inference(
+                curr_projection, state = self.model.projection_inference(
                     params, state, network_output.hidden_state, is_training
                 )
                 # next_projection, state = model.projection_inference(
                 #     params, state, next_hidden_state, is_training
                 # )
-                losses[f"loss/consistency_{str(i + 1)}"] = (
+                consistency_loss = (
                     optax.cosine_distance(
                         curr_projection.reshape((batch_size, -1)),
                         next_hidden_state.reshape((batch_size, -1)),
@@ -272,6 +259,8 @@ class MuZeroLossWithScalarTransform(LossFn):
                     * transition_loss_scale
                     * self.consistency_loss_coef
                 )
+
+                losses[f"loss/consistency_{str(i + 1)}"] = consistency_loss
 
         # all batched losses should be the shape of (batch_size,)
         tree.map_structure(lambda x: chex.assert_shape(x, (batch_size,)), losses)
@@ -300,6 +289,7 @@ class MuZeroLossWithScalarTransform(LossFn):
         return loss, dict(state=state, step_data=step_data)
 
     def _check_shapes(self, batch):
+
         chex.assert_rank(
             [
                 batch.frame,
@@ -325,31 +315,44 @@ class MuZeroLossWithScalarTransform(LossFn):
             prefix_len=1,
         )
 
+        batch_size = batch.frame.shape[0]
 
-def make_sgd_step_fn(
-    model: NNModel,
-    loss_fn: LossFn,
-    optimizer,
-    num_unroll_steps: int,
-    history_length: int,
-    dim_action: int,
-    target_update_period: int = 1,
-    include_prior_kl: bool = True,
-    include_weights: bool = False,
-) -> Callable[[TrainingState, TrainTarget], Tuple[TrainingState, Dict[str, Any]]]:
-    @jax.jit
-    @chex.assert_max_traces(n=1)
-    def sgd_step_fn(training_state: TrainingState, batch: mz.replay.TrainTarget):
+        B = batch_size
+        L = self.history_length
+        K = self.num_unroll_steps
+        H = self.model.spec.frame_rows
+        W = self.model.spec.frame_cols
+        C = self.model.spec.frame_channels
+        Z = self.model.spec.scalar_transform.dim
+        chex.assert_shape(batch.frame, (B, H, W, L + 1, C))
+        chex.assert_shape(batch.action, (B, L + K))
+        chex.assert_shape(batch.n_step_return, (B, K + 1))
+
+
+class SGD(struct.PyTreeNode):
+    loss_fn: LossFn
+    optimizer: optax.GradientTransformation
+    num_unroll_steps: int
+    target_update_period: int = 1
+    log_prior_kl: bool = True
+    log_weights: bool = False
+
+    def step(
+        self,
+        training_state: TrainingState,
+        batch: TrainTarget,
+    ):
+        model = self.loss_fn.model
         orig_params = training_state.params
         orig_state = training_state.state
 
         # gradient descend
         _, new_key = jax.random.split(training_state.rng_key)
-        grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
+        grads, extra = jax.grad(self.loss_fn, has_aux=True, argnums=1)(
             model, training_state.params, training_state.state, batch
         )
         new_state = extra["state"]
-        updates, new_opt_state = optimizer.update(grads, training_state.opt_state)
+        updates, new_opt_state = self.optimizer.update(grads, training_state.opt_state)
         new_params = optax.apply_updates(training_state.params, updates)
         new_steps = training_state.steps + 1
 
@@ -357,14 +360,14 @@ def make_sgd_step_fn(
             new_params,
             training_state.target_params,
             new_steps,
-            target_update_period,
+            self.target_update_period,
         )
 
         target_state = rlax.periodic_update(
             new_state,
             training_state.state,
             new_steps,
-            target_update_period,
+            self.target_update_period,
         )
 
         new_training_state = TrainingState(
@@ -379,12 +382,13 @@ def make_sgd_step_fn(
 
         step_data = extra["step_data"]
 
-        if include_weights:
+        if self.log_weights:
             for module, weight_name, weights in hk.data_structures.traverse(new_params):
                 name = module + "/" + weight_name
                 step_data[name] = weights
 
-        if include_prior_kl:
+        history_length = model.spec.history_length
+        if self.log_prior_kl:
             orig_feats = RootFeatures(
                 frames=_slice_frames(batch, 0, history_length),
                 actions=_slice_actions(batch, 0, history_length),
@@ -413,113 +417,206 @@ def make_sgd_step_fn(
             jnp.sum(jnp.abs(p)) for p in jax.tree_leaves(updates)
         )
 
-        # return 0.5 * sum(jnp.sum(jnp.square(p)) for p in jax.tree_leaves(params))
-
         return new_training_state, step_data
 
-    return sgd_step_fn
+
+# def make_sgd_step_fn(
+#     model: NNModel,
+#     loss_fn: LossFn,
+#     optimizer,
+#     num_unroll_steps: int,
+#     history_length: int,
+#     dim_action: int,
+#     target_update_period: int = 1,
+#     include_prior_kl: bool = True,
+#     include_weights: bool = False,
+# ) -> Callable[[TrainingState, TrainTarget], Tuple[TrainingState, Dict[str, Any]]]:
+#     @jax.jit
+#     @chex.assert_max_traces(n=1)
+#     def sgd_step_fn(training_state: TrainingState, batch: mz.replay.TrainTarget):
+#         orig_params = training_state.params
+#         orig_state = training_state.state
+
+#         # gradient descend
+#         _, new_key = jax.random.split(training_state.rng_key)
+#         grads, extra = jax.grad(loss_fn, has_aux=True, argnums=1)(
+#             model, training_state.params, training_state.state, batch
+#         )
+#         new_state = extra["state"]
+#         updates, new_opt_state = optimizer.update(grads, training_state.opt_state)
+#         new_params = optax.apply_updates(training_state.params, updates)
+#         new_steps = training_state.steps + 1
+
+#         target_params = rlax.periodic_update(
+#             new_params,
+#             training_state.target_params,
+#             new_steps,
+#             target_update_period,
+#         )
+
+#         target_state = rlax.periodic_update(
+#             new_state,
+#             training_state.state,
+#             new_steps,
+#             target_update_period,
+#         )
+
+#         new_training_state = TrainingState(
+#             params=new_params,
+#             target_params=target_params,
+#             state=new_state,
+#             target_state=target_state,
+#             opt_state=new_opt_state,
+#             steps=new_steps,
+#             rng_key=new_key,
+#         )
+
+#         step_data = extra["step_data"]
+
+#         if include_weights:
+#             for module, weight_name, weights in hk.data_structures.traverse(new_params):
+#                 name = module + "/" + weight_name
+#                 step_data[name] = weights
+
+#         if include_prior_kl:
+#             orig_feats = RootFeatures(
+#                 frames=_slice_frames(batch, 0, history_length),
+#                 actions=_slice_actions(batch, 0, history_length),
+#                 to_play=batch.to_play,
+#             )
+
+#             next_player = jnp.logical_not(batch.to_play).astype(jnp.int32)
+#             new_feats = RootFeatures(
+#                 frames=_slice_frames(batch, 1, history_length),
+#                 actions=_slice_actions(batch, 1, history_length),
+#                 to_play=next_player,
+#             )
+
+#             prior_kl = _compute_prior_kl(
+#                 model=model,
+#                 orig_params=orig_params,
+#                 orig_state=orig_state,
+#                 orig_feats=orig_feats,
+#                 new_state=new_state,
+#                 new_params=new_params,
+#                 new_feats=new_feats,
+#             )
+#             step_data["info/prior_kl"] = prior_kl
+
+#         step_data["info/update_size"] = sum(
+#             jnp.sum(jnp.abs(p)) for p in jax.tree_leaves(updates)
+#         )
+#         return new_training_state, step_data
+#     return sgd_step_fn
 
 
-def make_training_suite(
-    seed: int,
-    model: NNModel,
-    weight_decay: float,
-    lr: float,
-    num_unroll_steps: int,
-    history_length: int,
-    target_update_period: int = 1,
-    consistency_loss_coef: float = 1.0,
-    value_loss_coef: float = 1.0,
-) -> Tuple[NNModel, TrainingState, Callable]:
-    random_key = jax.random.PRNGKey(seed)
-    random_key, new_key = jax.random.split(random_key)
-    params, state = model.init_params_and_state(new_key)
-    loss_fn = MuZeroLossWithScalarTransform(
-        history_length=history_length,
-        num_unroll_steps=num_unroll_steps,
-        scalar_transform=model.spec.scalar_transform,
-        weight_decay=weight_decay,
-        dim_action=model.spec.dim_action,
-        consistency_loss_coef=consistency_loss_coef,
-        value_loss_coef=value_loss_coef
-    )
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(5),
-        optax.adam(learning_rate=lr),
-    )
-    training_state = TrainingState(
-        params=params,
-        target_params=params,
-        state=state,
-        target_state=state,
-        opt_state=optimizer.init(params),
-        steps=0,
-        rng_key=random_key,
-    )
-    sgd_step_fn = make_sgd_step_fn(
-        model=model,
-        loss_fn=loss_fn,
-        optimizer=optimizer,
-        history_length=history_length,
-        num_unroll_steps=num_unroll_steps,
-        dim_action=model.spec.dim_action,
-        target_update_period=target_update_period,
-    )
-    return model.with_jit(), training_state, sgd_step_fn
+# def make_training_suite(
+#     seed: int,
+#     model: NNModel,
+#     weight_decay: float,
+#     lr: float,
+#     num_unroll_steps: int,
+#     history_length: int,
+#     target_update_period: int = 1,
+#     consistency_loss_coef: float = 1.0,
+#     value_loss_coef: float = 1.0,
+# ) -> Tuple[NNModel, TrainingState, Callable]:
+#     random_key = jax.random.PRNGKey(seed)
+#     random_key, new_key = jax.random.split(random_key)
+#     params, state = model.init_params_and_state(new_key)
+#     loss_fn = LossFn(
+#         history_length=history_length,
+#         num_unroll_steps=num_unroll_steps,
+#         scalar_transform=model.spec.scalar_transform,
+#         weight_decay=weight_decay,
+#         dim_action=model.spec.dim_action,
+#         consistency_loss_coef=consistency_loss_coef,
+#         value_loss_coef=value_loss_coef,
+#     )
+#     optimizer = optax.chain(
+#         optax.clip_by_global_norm(5),
+#         optax.adam(learning_rate=lr),
+#     )
+#     training_state = TrainingState(
+#         params=params,
+#         target_params=params,
+#         state=state,
+#         target_state=state,
+#         opt_state=optimizer.init(params),
+#         steps=0,
+#         rng_key=random_key,
+#     )
+#     sgd_step_fn = make_sgd_step_fn(
+#         model=model,
+#         loss_fn=loss_fn,
+#         optimizer=optimizer,
+#         history_length=history_length,
+#         num_unroll_steps=num_unroll_steps,
+#         dim_action=model.spec.dim_action,
+#         target_update_period=target_update_period,
+#     )
+#     return model.with_jit(), training_state, sgd_step_fn
 
 
 # TODO: use this trainer instead
 class Trainer(struct.PyTreeNode):
-    model: NNModel
     optimizer: optax.GradientTransformation
     loss_fn: LossFn
-    sgd_step_fn: Callable
+    sgd: SGD
 
     @staticmethod
     def new(
-        seed: int,
         model: NNModel,
-        weight_decay: float,
-        lr: float,
         num_unroll_steps: int,
-        history_length: int,
         target_update_period: int = 1,
+        # loss fn
+        weight_decay: float = 1e-4,
         consistency_loss_coef: float = 1.0,
+        value_loss_coef: float = 1.0,
+        # optimizer
+        lr: float = 1e-3,
+        clip_gradient: float = 5.0,
+        # logging
+        log_prior_kl: bool = True,
+        log_weights: bool = False,
     ):
-        random_key = jax.random.PRNGKey(seed)
-        random_key, new_key = jax.random.split(random_key)
-        params, state = model.init_params_and_state(new_key)
-        loss_fn = MuZeroLossWithScalarTransform(
-            history_length=history_length,
+        loss_fn = LossFn(
+            model=model,
             num_unroll_steps=num_unroll_steps,
-            scalar_transform=model.spec.scalar_transform,
             weight_decay=weight_decay,
-            dim_action=model.spec.dim_action,
             consistency_loss_coef=consistency_loss_coef,
+            value_loss_coef=value_loss_coef,
+            # use_importance_sampling: bool = True
         )
         optimizer = optax.chain(
-            optax.clip_by_global_norm(5),
+            optax.clip_by_global_norm(clip_gradient),
             optax.adam(learning_rate=lr),
         )
-        training_state = TrainingState(
+        sgd = SGD(
+            loss_fn=loss_fn,
+            optimizer=optimizer,
+            num_unroll_steps=num_unroll_steps,
+            target_update_period=target_update_period,
+            log_prior_kl=log_prior_kl,
+            log_weights=log_weights,
+        )
+        return Trainer(
+            optimizer=optimizer,
+            loss_fn=loss_fn,
+            sgd=sgd,
+        )
+
+    def init(self, random_key: chex.PRNGKey) -> TrainingState:
+        params, state = self.loss_fn.model.init_params_and_state(random_key)
+        return TrainingState(
             params=params,
             target_params=params,
             state=state,
             target_state=state,
-            opt_state=optimizer.init(params),
+            opt_state=self.optimizer.init(params),
             steps=0,
             rng_key=random_key,
         )
-        sgd_step_fn = make_sgd_step_fn(
-            model=model,
-            loss_fn=loss_fn,
-            optimizer=optimizer,
-            history_length=history_length,
-            num_unroll_steps=num_unroll_steps,
-            dim_action=model.spec.dim_action,
-            target_update_period=target_update_period,
-        )
-        return model.with_jit(), training_state, sgd_step_fn
 
 
 def make_target_from_traj(

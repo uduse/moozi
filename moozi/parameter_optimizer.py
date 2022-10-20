@@ -21,19 +21,17 @@ import moozi as mz
 from moozi.core import TrainingState, TrainTarget
 from moozi.logging import LogDatum
 from moozi.nn.nn import NNArchitecture, NNModel, NNSpec
-from moozi.nn.training import make_training_suite
+from moozi.nn.training import Trainer
 
 
 class ParameterServer:
     def __init__(
         self,
-        training_suite_factory,
+        trainer: Trainer,
         load_from: Union[PathLike, str, None] = None,
     ):
-        self.model: NNModel
-        self.training_state: TrainingState
-        self.sgd_step_fn: Callable
-        self.model, self.training_state, self.sgd_step_fn = training_suite_factory()
+        self.trainer = trainer
+        self.training_state = trainer.init(jax.random.PRNGKey(0))
         self._tb_logger = mz.logging.JAXBoardLoggerV2(
             name="param_server", time_delta=30
         )

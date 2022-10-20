@@ -176,8 +176,13 @@ class NNArchitecture(hk.Module):
         chex.assert_equal_shape([projection, hidden_state])
         return projection
 
+# TODO: use this class
+class NNState(struct.PyTreeNode):
+    params: hk.Params
+    state: hk.State
 
-# TODO: also add action histories as bias planes
+
+# TODO: make this struct.PyTreeNode
 @dataclass
 class NNModel:
     """

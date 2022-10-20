@@ -64,7 +64,7 @@ class TestingWorker:
 
     def run(self, epoch: int = 0) -> None:
         if self.vis:
-            self.gii.env_feed = self.gii.env.init()
+            self.gii.action = self.gii.env.init()
             for i in range(self.num_steps):
                 self.gii.tick()
                 search_tree = self.gii.planner_out.tree

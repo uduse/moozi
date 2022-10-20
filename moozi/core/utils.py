@@ -20,6 +20,18 @@ def make_one_hot_planes(categories, num_rows, num_cols, num_classes):
     chex.assert_shape(x, (num_rows, num_cols, num_classes * categories.size))
     return x
 
+def make_simple_bias_plane(categories, num_rows, num_cols, num_classes):
+    # [K] -> [H, W, K]
+    chex.assert_shape(categories, (None,))
+    x = jnp.asarray(categories, dtype=jnp.float32)
+    if num_classes >= 2:
+        x = x / num_classes - 1
+    x = x.reshape(-1)
+    x = x[jnp.newaxis, jnp.newaxis, :]
+    x = jnp.tile(x, (num_rows, num_cols, 1))
+    chex.assert_shape(x, (num_rows, num_cols, categories.size))
+    return x
+
 
 def make_frame_planes(frames):
     """Convert a batch of frames into stacked frames with channels last."""
@@ -43,7 +55,7 @@ def push_and_rotate_out_planes(planes, new_plane):
     return new_stacked_actions
 
 
-def push_and_rotate_out(history, new_item):
+def fifo_append(history, new_item):
     # for frames:
     # [K, H, W, C], [H, W, C] -> [K, H, W, C]
     # for actions:
@@ -53,6 +65,18 @@ def push_and_rotate_out(history, new_item):
     assert history.shape[1:] == new_item.shape
     new_history = jnp.append(history, jnp.expand_dims(new_item, axis=0), axis=0)
     new_history = new_history[1:, ...]
+    return new_history
+
+def fifo_prepend(history, new_item):
+    # for frames:
+    # [K, H, W, C], [H, W, C] -> [K, H, W, C]
+    # for actions:
+    # [K], [] -> [K]
+    # only the first dimension should be different
+    assert len(history.shape) == len(new_item.shape) + 1
+    assert history.shape[1:] == new_item.shape
+    new_history = jnp.insert(history, 0, jnp.expand_dims(new_item, axis=0), axis=0)
+    new_history = new_history[:-1, ...]
     return new_history
 
 

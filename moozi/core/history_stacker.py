@@ -2,7 +2,7 @@ import chex
 import jax
 import jax.numpy as jnp
 from flax import struct
-from moozi.core.utils import push_and_rotate_out
+from moozi.core.utils import fifo_append
 from moozi.core.env import GIIEnvSpec
 
 
@@ -48,8 +48,8 @@ class HistoryStacker(struct.PyTreeNode):
         assert frame.shape == (self.num_rows, self.num_cols, self.num_channels)
 
         def _update_state(state, frame, action):
-            frames = push_and_rotate_out(state.frames, frame)
-            actions = push_and_rotate_out(state.actions, action)
+            frames = fifo_append(state.frames, frame)
+            actions = fifo_append(state.actions, action)
             return HistoryStackerState(frames=frames, actions=actions)
 
         def _reset_and_update_state(state, frame, action):

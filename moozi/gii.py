@@ -73,8 +73,8 @@ class GII:
         if isinstance(env, GIIEnv):
             env = GIIVecEnv.from_single(env)
         self.env: GIIVecEnv = env
-        self.env_feed = self.env.init()
-        self.env_out: GIIEnvOut = self.env.step(self.env_feed)
+        self.action = self.env.init_action()
+        self.env_out: GIIEnvOut = self.env.step(self.action)
         self.planner_out: PlannerOut = None
 
         self.stacker = stacker
@@ -110,7 +110,7 @@ class GII:
 
     def tick(self) -> StepSample:
         # TODO: make this function more `pure`, probably use Ninjax?
-        env_out = self.env.step(self.env_feed)
+        env_out = self.env.step(self.action)
         if self.env.num_envs == 1:
             # multiplexing only supported for 1 env
             to_play = int(env_out.to_play)
@@ -125,7 +125,7 @@ class GII:
             state=state,
             planner=planner,
             env_out=env_out,
-            last_action=self.env_feed.action,
+            last_action=self.action,
             stacker=self.stacker,
             stacker_state=self.stacker_state,
             random_key=self._next_key(),
@@ -134,7 +134,7 @@ class GII:
         action = np.array(policy_out.planner_out.action)
 
         self.stacker_state = policy_out.stacker_state
-        self.env_feed = GIIEnvFeed(action=action, reset=env_out.is_last)
+        self.action = action
         self.env_out = env_out
         self.planner_out = policy_out.planner_out
 

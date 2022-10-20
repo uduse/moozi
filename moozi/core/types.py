@@ -63,7 +63,7 @@ class TrajectorySample(StepSample):
         return TrajectorySample(**asdict(stacked))
 
     def cast(self) -> "TrajectorySample":
-        return StepSample(
+        return TrajectorySample(
             frame=np.asarray(self.frame, dtype=np.float32),
             last_reward=np.asarray(self.last_reward, dtype=np.float32),
             is_first=np.asarray(self.is_first, dtype=np.bool8),
@@ -74,6 +74,13 @@ class TrajectorySample(StepSample):
             action_probs=np.asarray(self.action_probs, dtype=np.float32),
             action=np.asarray(self.action, dtype=np.int32),
         )
+
+
+class FragmentSample(StepSample):
+    @staticmethod
+    def from_step_samples(step_samples: List[StepSample]) -> "FragmentSample":
+        stacked = stack_sequence_fields_pytree(step_samples)
+        return FragmentSample(**asdict(stacked))
 
 
 class TrainTarget(NamedTuple):

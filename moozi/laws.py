@@ -34,7 +34,7 @@ from moozi.core.utils import (
     make_frame_planes,
     make_one_hot_planes,
     push_and_rotate_out_planes,
-    push_and_rotate_out,
+    fifo_append,
 )
 from moozi.core.env import _make_dm_env
 from moozi.core.link import link, unlink
@@ -885,8 +885,8 @@ def make_obs_processor(
 
     def apply(history_frames, history_actions, frame, action, is_first):
         def _make_obs(history_frames, history_actions, frame, action):
-            history_frames = push_and_rotate_out(history_frames, frame)
-            history_actions = push_and_rotate_out(history_actions, action)
+            history_frames = fifo_append(history_frames, frame)
+            history_actions = fifo_append(history_actions, action)
             stacked_frame_planes = make_frame_planes(history_frames)
             stacked_action_planes = make_one_hot_planes(
                 history_actions, num_rows, num_cols, dim_action

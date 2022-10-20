@@ -182,6 +182,16 @@ class BreakthroughVisualizer(Visualizer):
         return img.resize((self.spec.image_width, self.spec.image_height))
 
 
+class SingleChannelAtariVisualizer(Visualizer):
+    def make_image(self, frame: np.ndarray) -> Image:
+        frame = np.asarray(frame).squeeze().astype(np.uint8)
+        img = Image.fromarray(frame, mode="L")
+        return img.resize(
+            (self.spec.image_width, self.spec.image_height),
+            resample=Image.Resampling.NEAREST,
+        )
+
+
 class MinAtarVisualizer(Visualizer):
     def __init__(self, spec: VisualizerSpec):
         super().__init__(spec)

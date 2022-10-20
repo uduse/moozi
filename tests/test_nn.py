@@ -25,10 +25,11 @@ from moozi.nn import (
 )
 from moozi.nn.mlp import MLPSpec
 from moozi.nn.naive import NaiveArchitecture
+from moozi.nn.training import Trainer
 
 
 @pytest.fixture(
-    params=["OpenSpiel:catch", "MinAtar:Breakout-v1"],
+    params=["OpenSpiel:catch", "MinAtar:Breakout-v4"],
     ids=["catch", "breakout"],
 )
 def env(request):
@@ -86,7 +87,9 @@ def test_model_basic_inferences(
         model = model.with_jit()
 
     frames = np.repeat(env_out.frame[np.newaxis, ...], repeats=history_length, axis=0)
-    actions = np.repeat(np.array(feed.action)[np.newaxis, ...], repeats=history_length, axis=0)
+    actions = np.repeat(
+        np.array(feed.action)[np.newaxis, ...], repeats=history_length, axis=0
+    )
     root_feats = RootFeatures(
         frames=frames,
         actions=actions,
@@ -111,6 +114,17 @@ def test_model_basic_inferences(
             hidden_state=out.hidden_state,
             action=add_batch_dim(np.array(0)),
         )
-        out, _ = model.trans_inference(
-            params, state, trans_feats, is_training
-        )
+        out, _ = model.trans_inference(params, state, trans_feats, is_training)
+
+
+def test_trainer(model):
+    Trainer.new(
+        model,
+        num_unroll_steps=5,
+        target_update_period=1.0,
+        weight_decay=2.0,
+        consistency_loss_coef=3.0,
+        value_loss_coef=4.0,
+        lr=5.0,
+        clip_gradient=6.0,
+    )

@@ -80,9 +80,9 @@ entries: List[ProjectionEntry] = []
 step_index = 0
 game_index = 0
 for i in tqdm(range(3000)):
-    last_action = int(gii.env_feed.action)
+    last_action = int(gii.action.action)
     gii.tick()
-    next_action = int(gii.env_feed.action)
+    next_action = int(gii.action.action)
     search_tree = gii.planner_out.tree
     hidden_state = np.array(gii.planner_out.tree.embeddings[0][0, 0]).ravel()
     frame = fetch_device_array(gii.env_out.frame[0])

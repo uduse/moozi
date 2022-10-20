@@ -1,6 +1,8 @@
 from typing import List
+import jax
 from .utils import unstack_sequence_fields_pytree
 from .types import StepSample, TrajectorySample
+from moozi.utils import WallTimer
 
 
 class TrajectoryCollector:
@@ -8,9 +10,10 @@ class TrajectoryCollector:
         self.batch_size = batch_size
         self.buffer: List[List[StepSample]] = [[] for _ in range(batch_size)]
         self.trajs: List[TrajectorySample] = []
+        self._unstacker = jax.jit(unstack_sequence_fields_pytree, backend='cpu', static_argnames=['batch_size'])
 
     def add_step_sample(self, step_sample: StepSample) -> "TrajectoryCollector":
-        step_sample_flat = unstack_sequence_fields_pytree(step_sample, self.batch_size)
+        step_sample_flat = self._unstacker(step_sample, self.batch_size)
         for new_sample, step_samples in zip(step_sample_flat, self.buffer):
             step_samples.append(new_sample)
             if new_sample.is_last:

@@ -13,7 +13,11 @@ from moozi.nn import (
     TransitionFeatures,
     NNArchitecture,
 )
-from moozi.core.utils import make_frame_planes, make_one_hot_planes
+from moozi.core.utils import (
+    make_frame_planes,
+    make_one_hot_planes,
+    make_simple_bias_plane,
+)
 
 
 @dataclass
@@ -122,23 +126,31 @@ class ResNetV2Architecture(NNArchitecture):
 
         x_frames = jax.vmap(make_frame_planes)(feats.frames)
         # downsample
-        obs_resolution = (self.spec.frame_rows, self.spec.frame_cols)
         repr_resolution = (self.spec.repr_rows, self.spec.repr_cols)
-        while obs_resolution != repr_resolution:
+        legal_repr_resolutions = []
+        curr_resolution = x_frames.shape[1:3]
+        while curr_resolution != repr_resolution:
             x_frames = hk.Conv2D(
                 self.spec.repr_channels, (2, 2), stride=1, padding="VALID"
             )(x_frames)
-            x_frames = ResBlockV2()(x_frames)
+            x_frames = ResTower(2)(x_frames)
             x_frames = hk.AvgPool(
                 window_shape=(3, 3, 1), strides=(2, 2, 1), padding="SAME"
             )(x_frames)
+            curr_resolution = x_frames.shape[1:3]
+            legal_repr_resolutions.append(curr_resolution)
+            if curr_resolution == (0, 0):
+                raise ValueError(
+                    "Downsampling resolution mismatch. Legal representaiton resolutions are: "
+                    + str(legal_repr_resolutions)
+                )
         chex.assert_shape(
             x_frames, (None, self.spec.repr_rows, self.spec.repr_cols, None)
         )
 
         action_planes_maker = jax.vmap(
             partial(
-                make_one_hot_planes,
+                make_simple_bias_plane,
                 num_rows=self.spec.repr_rows,
                 num_cols=self.spec.repr_cols,
                 num_classes=self.spec.dim_action,
@@ -148,7 +160,7 @@ class ResNetV2Architecture(NNArchitecture):
 
         player_planes_maker = jax.vmap(
             partial(
-                make_one_hot_planes,
+                make_simple_bias_plane,
                 num_rows=self.spec.repr_rows,
                 num_cols=self.spec.repr_cols,
                 num_classes=self.spec.num_players,
@@ -279,15 +291,15 @@ class ResNetV2Architecture(NNArchitecture):
         return projected
 
 
-def normalize_hidden_state(hidden_state, kind='unit'):
-    if kind == 'unit':
+def normalize_hidden_state(hidden_state, kind="unit"):
+    if kind == "unit":
         batch_min = jnp.min(hidden_state, axis=(1, 2, 3), keepdims=True)
         batch_max = jnp.max(hidden_state, axis=(1, 2, 3), keepdims=True)
         hidden_state = (hidden_state - batch_min) / (
             batch_max - batch_min + jnp.array(1e-12)
         )
         return hidden_state
-    elif kind == 'normal':
+    elif kind == "normal":
         batch_mean = jnp.mean(hidden_state, axis=(1, 2, 3), keepdims=True)
         batch_std = jnp.std(hidden_state, axis=(1, 2, 3), keepdims=True)
         hidden_state = (hidden_state - batch_mean) / (batch_std + 1e-4)

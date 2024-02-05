@@ -4,9 +4,6 @@
 The *MooZi* core learning algorithm is based on [*MuZero*](https://www.deepmind.com/blog/muzero-mastering-go-chess-shogi-and-atari-without-rules) with a few extensions.
 *MooZi* uses [JAX eco-system](https://www.deepmind.com/blog/using-jax-to-accelerate-our-research) and [Ray](https://github.com/ray-project/ray) for the best performance.
 
-## Full-documentation Coming Soon, Sign up for Alpha Release!
-[Sign up here](https://forms.gle/syGn3Ddr2fJFcFZQ8)
-
 ## Supported Games
 *MooZi* current supports all [MinAtar](https://github.com/kenjyoung/MinAtar) games and some two-players games from [OpenSpiel](https://github.com/deepmind/open_spiel).
 
